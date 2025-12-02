@@ -1,0 +1,33 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    strategy:
+      matrix:
+        compiler_version: ['default']
+        #os: ['windows-latest', 'macOS-latest', 'ubuntu-latest']
+        os: ['ubuntu-latest']
+        #config: ['Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel']
+        config: ['Release']
+    name: Build on ${{ matrix.os }} in ${{ matrix.config }} with ${{ matrix.compiler_version }}
+    runs-on: ${{ matrix.os }}
+    steps:
+    - name: Checkout repository.
+      uses: actions/checkout@v4
+    - name: Build and test in ${{ matrix.config }}.
+      shell: bash
+      run: |
+        CMAKE_GENERATOR_PLATFORM_ARG=""
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          CMAKE_GENERATOR_PLATFORM_ARG="-DCMAKE_GENERATOR_PLATFORM=x64"
+        fi
+        cmake -S. -Bbuild/${{ matrix.config }} -DCMAKE_BUILD_TYPE=${{ matrix.config }} ${CMAKE_GENERATOR_PLATFORM_ARG}
+        cmake --build build/${{ matrix.config }} --config ${{ matrix.config }} --parallel 4 --target test
+        rm -rf build/${{ matrix.config }}
