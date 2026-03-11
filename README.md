@@ -1,4 +1,3 @@
-
 # ZeroSLAM #
 
 SLAM without dependencies.
