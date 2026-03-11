@@ -218,5 +218,124 @@ int main(int argc, char* argv[]) {
         REQUIRE(is_value_approx(image_point[1], image_point_expected[1]));
     }
 
+    {
+        const double parameters[4] = { 525, 525, 320, 240 };
+        camera::pinhole pinhole(&parameters[0], 4);
+        
+        const double step = 1e-6;
+        
+        const double test_points[5][3] = {
+            { 1.0, 2.0, 5.0 },
+            { -1.0, 1.0, 3.0 },
+            { 0.5, -0.5, 2.0 },
+            { 2.0, 2.0, 10.0 },
+            { -2.0, -1.0, 4.0 }
+        };
+        
+        for (size_t t = 0; t < 5; ++t) {
+            const double* point = test_points[t];
+            
+            double projected[2] = { 0.0, 0.0 };
+            double jacobian_analytical[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            
+            REQUIRE(pinhole.project(point, projected, jacobian_analytical, nullptr));
+            
+            double jacobian_numerical[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            for (size_t i = 0; i < 3; ++i) {
+                double point_plus[3] = { point[0], point[1], point[2] };
+                point_plus[i] += step;
+                double projected_plus[2] = { 0.0, 0.0 };
+                REQUIRE(pinhole.project(point_plus, projected_plus));
+                
+                double point_minus[3] = { point[0], point[1], point[2] };
+                point_minus[i] -= step;
+                double projected_minus[2] = { 0.0, 0.0 };
+                REQUIRE(pinhole.project(point_minus, projected_minus));
+                
+                jacobian_numerical[0 * 3 + i] = (projected_plus[0] - projected_minus[0]) / (2.0 * step);
+                jacobian_numerical[1 * 3 + i] = (projected_plus[1] - projected_minus[1]) / (2.0 * step);
+            }
+            
+            for (size_t r = 0; r < 2; ++r) {
+                for (size_t c = 0; c < 3; ++c) {
+                    const double analytical = jacobian_analytical[r * 3 + c];
+                    const double numerical = jacobian_numerical[r * 3 + c];
+                    const double relative_error = (numerical != 0.0) ? std::abs((analytical - numerical) / numerical) : std::abs(analytical - numerical);
+                    REQUIRE(relative_error < 1e-5);
+                }
+            }
+        }
+        
+        for (size_t t = 0; t < 5; ++t) {
+            const double* point = test_points[t];
+            
+            double projected[2] = { 0.0, 0.0 };
+            double jacobian_analytical[8] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            
+            REQUIRE(pinhole.project(point, projected, nullptr, jacobian_analytical));
+            
+            double jacobian_numerical[8] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            for (size_t i = 0; i < 4; ++i) {
+                double params_plus[4] = { parameters[0], parameters[1], parameters[2], parameters[3] };
+                params_plus[i] += step;
+                camera::pinhole pinhole_plus(params_plus, 4);
+                double projected_plus[2] = { 0.0, 0.0 };
+                REQUIRE(pinhole_plus.project(point, projected_plus));
+                
+                double params_minus[4] = { parameters[0], parameters[1], parameters[2], parameters[3] };
+                params_minus[i] -= step;
+                camera::pinhole pinhole_minus(params_minus, 4);
+                double projected_minus[2] = { 0.0, 0.0 };
+                REQUIRE(pinhole_minus.project(point, projected_minus));
+                
+                jacobian_numerical[0 * 4 + i] = (projected_plus[0] - projected_minus[0]) / (2.0 * step);
+                jacobian_numerical[1 * 4 + i] = (projected_plus[1] - projected_minus[1]) / (2.0 * step);
+            }
+            
+            for (size_t r = 0; r < 2; ++r) {
+                for (size_t c = 0; c < 4; ++c) {
+                    const double analytical = jacobian_analytical[r * 4 + c];
+                    const double numerical = jacobian_numerical[r * 4 + c];
+                    const double relative_error = (std::abs(numerical) > 1e-10) ? std::abs((analytical - numerical) / numerical) : std::abs(analytical - numerical);
+                    REQUIRE(relative_error < 1e-5);
+                }
+            }
+        }
+        
+        {
+            const double image_point[2] = { 320, 240 };
+            double ray[3] = { 0.0, 0.0, 0.0 };
+            double jacobian_analytical[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            
+            REQUIRE(pinhole.unproject(image_point, ray, jacobian_analytical));
+            
+            double jacobian_numerical[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            for (size_t i = 0; i < 2; ++i) {
+                double img_plus[2] = { image_point[0], image_point[1] };
+                img_plus[i] += step;
+                double ray_plus[3] = { 0.0, 0.0, 0.0 };
+                REQUIRE(pinhole.unproject(img_plus, ray_plus));
+                
+                double img_minus[2] = { image_point[0], image_point[1] };
+                img_minus[i] -= step;
+                double ray_minus[3] = { 0.0, 0.0, 0.0 };
+                REQUIRE(pinhole.unproject(img_minus, ray_minus));
+                
+                jacobian_numerical[0 * 2 + i] = (ray_plus[0] - ray_minus[0]) / (2.0 * step);
+                jacobian_numerical[1 * 2 + i] = (ray_plus[1] - ray_minus[1]) / (2.0 * step);
+                jacobian_numerical[2 * 2 + i] = (ray_plus[2] - ray_minus[2]) / (2.0 * step);
+            }
+            
+            for (size_t r = 0; r < 3; ++r) {
+                for (size_t c = 0; c < 2; ++c) {
+                    const double analytical = jacobian_analytical[r * 2 + c];
+                    const double numerical = jacobian_numerical[r * 2 + c];
+                    const double relative_error = (std::abs(numerical) > 1e-10) ? std::abs((analytical - numerical) / numerical) : std::abs(analytical - numerical);
+                    REQUIRE(relative_error < 1e-5);
+                }
+            }
+        }
+    }
+
     return EXIT_SUCCESS;
 }
