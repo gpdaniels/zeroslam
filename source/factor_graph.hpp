@@ -74,6 +74,12 @@ namespace factor_graph {
     public:
         virtual ~vertex_base() = default;
 
+    public:
+        vertex_base(const vertex_base&) = default;
+        vertex_base(vertex_base&&) = default;
+        vertex_base& operator=(const vertex_base&) = default;
+        vertex_base& operator=(vertex_base&&) = default;
+
     protected:
         explicit vertex_base(int parameter_dimension_value) {
             this->parameters = matrix::matrix<double, 0, 0>::zero(parameter_dimension_value, 1);
@@ -159,6 +165,12 @@ namespace factor_graph {
 
     public:
         virtual ~edge_base() = default;
+
+    public:
+        edge_base(const edge_base&) = default;
+        edge_base(edge_base&&) = default;
+        edge_base& operator=(const edge_base&) = default;
+        edge_base& operator=(edge_base&&) = default;
 
     protected:
         // Construct an edge with residual dimension and number of vertices.
@@ -479,8 +491,9 @@ namespace factor_graph {
             }
 
             if ((this->edges.size() == 0) || ((this->vertices_general.size() == 0) && (this->vertices_marginalised.size() == 0))) {
-                if (this->verbose)
+                if (this->verbose) {
                     std::fprintf(stderr, "Cannot solve problem without edges or vertices\n");
+                }
                 return 0;
             }
 
@@ -508,8 +521,9 @@ namespace factor_graph {
             this->damping_lambda = tau * max_diagonal;
 
             // Log initial state.
-            if (this->verbose)
+            if (this->verbose) {
                 std::fprintf(stderr, "[INIT] iter: XXX, attempt XXX, chi = % 7.7f, rho = XXXX.XXXXXXX, base lambda = % 8.7f\n", this->chi_squared, this->damping_lambda);
+            }
 
             // Levenberg-Marquardt optimisation loop.
             const int max_failures = 10;
@@ -548,15 +562,17 @@ namespace factor_graph {
                         this->chi_squared = tempChi;
                         good_step = true;
                         ++success_count;
-                        if (this->verbose)
+                        if (this->verbose) {
                             std::fprintf(stderr, "[GOOD] iter: % 3d, attempt % 3d, chi2 = % 7.7f, rho = % 7.7f, next lambda = % 8.7f\n", iter, failure_count, tempChi, rho, this->damping_lambda);
+                        }
                     }
                     else {
                         this->damping_lambda *= this->damping_factor;
                         this->damping_factor *= 2.0;
                         good_step = false;
-                        if (this->verbose)
+                        if (this->verbose) {
                             std::fprintf(stderr, "[ BAD] iter: % 3d, attempt % 3d, chi2 = % 7.7f, rho = % 7.7f, next lambda = % 8.7f\n", iter, failure_count, tempChi, rho, this->damping_lambda);
+                        }
                     }
                     if (!math::isfinite(this->damping_lambda)) {
                         break;

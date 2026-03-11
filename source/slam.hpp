@@ -84,21 +84,23 @@ private:
 
 public:
     void process_frame(const matrix::matrix<double, 3, 3>& intrinsics, const image::image& image_grey) {
-        camera::pinhole camera_intrinsics(matrix::matrix<double, 1, 4>({ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }).data(), 4);
-        frame::frame frame(camera_intrinsics, image_grey);
+        {
+            camera::pinhole camera_intrinsics(matrix::matrix<double, 1, 4>({ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }).data(), 4);
+            frame::frame frame(camera_intrinsics, image_grey);
 
-        std::printf("Detected Features: ");
-        for (size_t i = 0; i < frame.keypoint_pyramid.size(); ++i) {
-            std::printf("%zu ", frame.keypoint_pyramid[i].size());
-        }
-        std::printf("features (at each pyramid level).\n");
+            std::printf("Detected Features: ");
+            for (size_t i = 0; i < frame.keypoint_pyramid.size(); ++i) {
+                std::printf("%zu ", frame.keypoint_pyramid[i].size());
+            }
+            std::printf("features (at each pyramid level).\n");
 
-        // Add the frame to the reconstruction.
-        this->reconstruction.add_frame(frame);
+            // Add the frame to the reconstruction.
+            this->reconstruction.add_frame(frame);
 
-        // Nothing to do for the first frame.
-        if (frame.id == 0) {
-            return;
+            // Nothing to do for the first frame.
+            if (frame.id == 0) {
+                return;
+            }
         }
 
         // Get the most recent pair of frames.
@@ -205,7 +207,7 @@ public:
 
             // Set the initial pose of the new frame.
             frame_current.rotation = rotation * frame_previous.rotation;
-            frame_current.translation = frame_previous.translation + (frame_previous.rotation * translation);
+            frame_current.translation = (rotation * frame_previous.translation) + translation;
 
             std::printf("Inliers: %zu inliers in pose estimation.\n", inliers);
             std::printf("Initial pose:\n");
