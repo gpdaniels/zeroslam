@@ -29,7 +29,7 @@ namespace lie {
         type rotation_quaternion[4];
 
     public:
-        so3();
+        constexpr so3();
         constexpr so3(const so3& other);
         constexpr so3(so3&& other);
         constexpr so3& operator=(const so3& other);
@@ -40,22 +40,22 @@ namespace lie {
             type initial_rotation_quaternion_y,
             type initial_rotation_quaternion_z
         );
-        so3(const type (&initial_rotation_quaternion_values)[4]);
-        so3(const matrix::matrix<type, 3, 3>& initial_rotation_matrix);
-        matrix::matrix<type, 4, 1> get_quaternion() const;
-        matrix::matrix<type, 3, 3> get_matrix() const;
-        static so3 identity();
-        static so3 rotation(const type& x, const type& y, const type& z);
-        so3 inverse() const;
-        static matrix::matrix<type, 3, 3> generator(size_t parameter_index);
-        static matrix::matrix<type, 3, 1> generator_field(size_t parameter_index, const matrix::matrix<type, 3, 1>& point);
-        static so3 exp(const matrix::matrix<type, 3, 1>& omega);
-        matrix::matrix<type, 3, 1> log() const;
+        constexpr so3(const type (&initial_rotation_quaternion_values)[4]);
+        constexpr so3(const matrix::matrix<type, 3, 3>& initial_rotation_matrix);
+        constexpr matrix::matrix<type, 4, 1> get_quaternion() const;
+        constexpr matrix::matrix<type, 3, 3> get_matrix() const;
+        static constexpr so3 identity();
+        static constexpr so3 rotation(const type& x, const type& y, const type& z);
+        constexpr so3 inverse() const;
+        static constexpr matrix::matrix<type, 3, 3> generator(size_t parameter_index);
+        static constexpr matrix::matrix<type, 3, 1> generator_field(size_t parameter_index, const matrix::matrix<type, 3, 1>& point);
+        static constexpr so3 exp(const matrix::matrix<type, 3, 1>& omega);
+        constexpr matrix::matrix<type, 3, 1> log() const;
         constexpr bool operator==(const so3& rhs) const;
         constexpr bool operator!=(const so3& rhs) const;
         constexpr so3 operator-() const;
         constexpr so3 operator*(const so3& rhs) const;
-        matrix::matrix<type, 3, 1> operator*(const matrix::matrix<type, 3, 1>& point) const;
+        constexpr matrix::matrix<type, 3, 1> operator*(const matrix::matrix<type, 3, 1>& point) const;
     };
 
     template <typename type>
@@ -65,23 +65,23 @@ namespace lie {
         matrix::matrix<type, 3, 1> translation_vector;
 
     public:
-        se3();
+        constexpr se3();
         constexpr se3(const so3<type>& initial_rotation_so3, const matrix::matrix<type, 3, 1>& initial_translation_vector);
-        se3(const type (&initial_rotation_quaternion_values)[4], const type (&initial_translation_vector)[3]);
+        constexpr se3(const type (&initial_rotation_quaternion_values)[4], const type (&initial_translation_vector)[3]);
         constexpr const so3<type>& rotation() const;
         constexpr so3<type>& rotation();
         constexpr const matrix::matrix<type, 3, 1>& translation() const;
         constexpr matrix::matrix<type, 3, 1>& translation();
         static se3 identity();
-        se3 inverse() const;
+        constexpr se3 inverse() const;
         static matrix::matrix<type, 4, 4> generator(size_t parameter_index);
         static matrix::matrix<type, 4, 1> generator_field(size_t parameter_index, const matrix::matrix<type, 4, 1>& point);
         static se3 exp(const matrix::matrix<type, 6, 1>& omega_upsilon);
-        matrix::matrix<type, 6, 1> log() const;
+        constexpr matrix::matrix<type, 6, 1> log() const;
         constexpr bool operator==(const se3& rhs) const;
         constexpr bool operator!=(const se3& rhs) const;
-        se3 operator*(const se3& rhs) const;
-        matrix::matrix<type, 3, 1> operator*(const matrix::matrix<type, 3, 1>& point) const;
+        constexpr se3 operator*(const se3& rhs) const;
+        constexpr matrix::matrix<type, 3, 1> operator*(const matrix::matrix<type, 3, 1>& point) const;
     };
 
     template <typename type>
@@ -91,29 +91,29 @@ namespace lie {
         type scale_scalar;
 
     public:
-        sim3();
+        constexpr sim3();
         constexpr sim3(const se3<type>& initial_transformation_se3, type initial_scale_scalar);
-        explicit sim3(const type (&initial_rotation_quaternion_values)[4], const type (&initial_translation_vector)[3], const type initial_scale_scalar);
+        constexpr sim3(const type (&initial_rotation_quaternion_values)[4], const type (&initial_translation_vector)[3], const type initial_scale_scalar);
         static sim3 identity();
         constexpr const se3<type>& transformation() const;
         constexpr se3<type>& transformation();
         constexpr const type& scale() const;
         constexpr type& scale();
-        sim3 inverse() const;
+        constexpr sim3 inverse() const;
         static matrix::matrix<type, 4, 4> generator(size_t parameter_index);
         static matrix::matrix<type, 4, 1> generator_field(size_t parameter_index, const matrix::matrix<type, 4, 1>& point);
         static sim3 exp(const matrix::matrix<type, 7, 1>& omega_upsilon_sigma);
-        matrix::matrix<type, 7, 1> log() const;
+        constexpr matrix::matrix<type, 7, 1> log() const;
         constexpr bool operator==(const sim3& rhs) const;
         constexpr bool operator!=(const sim3& rhs) const;
-        sim3 operator*(const sim3& rhs) const;
-        matrix::matrix<type, 3, 1> operator*(const matrix::matrix<type, 3, 1>& point) const;
+        constexpr sim3 operator*(const sim3& rhs) const;
+        constexpr matrix::matrix<type, 3, 1> operator*(const matrix::matrix<type, 3, 1>& point) const;
     };
 }
 
 namespace lie {
     template <typename type>
-    so3<type>::so3() = default;
+    constexpr so3<type>::so3() = default;
     template <typename type>
     constexpr so3<type>::so3(const so3& other) = default;
     template <typename type>
@@ -139,7 +139,7 @@ namespace lie {
     }
 
     template <typename type>
-    so3<type>::so3(
+    constexpr so3<type>::so3(
         const type (&initial_rotation_quaternion_values)[4]
     )
         : rotation_quaternion{
@@ -151,7 +151,7 @@ namespace lie {
     }
 
     template <typename type>
-    so3<type>::so3(const matrix::matrix<type, 3, 3>& initial_rotation_matrix) {
+    constexpr so3<type>::so3(const matrix::matrix<type, 3, 3>& initial_rotation_matrix) {
         const type rotation_trace = initial_rotation_matrix[0][0] + initial_rotation_matrix[1][1] + initial_rotation_matrix[2][2];
         if (rotation_trace > 0) {
             const type square_root_trace_plus_one = math::sqrt(rotation_trace + 1);
@@ -174,12 +174,12 @@ namespace lie {
     }
 
     template <typename type>
-    matrix::matrix<type, 4, 1> so3<type>::get_quaternion() const {
+    constexpr matrix::matrix<type, 4, 1> so3<type>::get_quaternion() const {
         return matrix::matrix<type, 4, 1>(this->rotation_quaternion);
     }
 
     template <typename type>
-    matrix::matrix<type, 3, 3> so3<type>::get_matrix() const {
+    constexpr matrix::matrix<type, 3, 3> so3<type>::get_matrix() const {
         const type two_x = 2.0 * this->rotation_quaternion[1];
         const type two_y = 2.0 * this->rotation_quaternion[2];
         const type two_z = 2.0 * this->rotation_quaternion[3];
@@ -198,17 +198,17 @@ namespace lie {
     }
 
     template <typename type>
-    so3<type> so3<type>::identity() {
+    constexpr so3<type> so3<type>::identity() {
         return { 1.0, 0.0, 0.0, 0.0 };
     }
 
     template <typename type>
-    so3<type> so3<type>::rotation(const type& x, const type& y, const type& z) {
+    constexpr so3<type> so3<type>::rotation(const type& x, const type& y, const type& z) {
         return so3<type>::exp({ { x, y, z } });
     }
 
     template <typename type>
-    so3<type> so3<type>::inverse() const {
+    constexpr so3<type> so3<type>::inverse() const {
         const type inverse_length_squared = 1.0 / (math::sqr(this->rotation_quaternion[0]) + math::sqr(this->rotation_quaternion[1]) + math::sqr(this->rotation_quaternion[2]) + math::sqr(this->rotation_quaternion[3]));
         return {
             +this->rotation_quaternion[0] * inverse_length_squared,
@@ -219,7 +219,7 @@ namespace lie {
     }
 
     template <typename type>
-    matrix::matrix<type, 3, 3> so3<type>::generator(size_t parameter_index) {
+    constexpr matrix::matrix<type, 3, 3> so3<type>::generator(size_t parameter_index) {
         ASSERT(parameter_index < 3, "The so3 algebra only has three parameters.");
         matrix::matrix<type, 3, 3> result = matrix::matrix<type, 3, 3>::zero();
         result[(parameter_index + 1) % 3][(parameter_index + 2) % 3] = -1;
@@ -228,7 +228,7 @@ namespace lie {
     }
 
     template <typename type>
-    matrix::matrix<type, 3, 1> so3<type>::generator_field(size_t parameter_index, const matrix::matrix<type, 3, 1>& point) {
+    constexpr matrix::matrix<type, 3, 1> so3<type>::generator_field(size_t parameter_index, const matrix::matrix<type, 3, 1>& point) {
         ASSERT(parameter_index < 3, "The so3 algebra only has three parameters.");
         matrix::matrix<type, 3, 1> result;
         result[parameter_index] = 0;
@@ -238,7 +238,7 @@ namespace lie {
     }
 
     template <typename type>
-    so3<type> so3<type>::exp(const matrix::matrix<type, 3, 1>& omega) {
+    constexpr so3<type> so3<type>::exp(const matrix::matrix<type, 3, 1>& omega) {
         const type theta_squared = omega.get_length_squared();
         type real = 0;
         type imaginary_scale = 0;
@@ -258,7 +258,7 @@ namespace lie {
     }
 
     template <typename type>
-    matrix::matrix<type, 3, 1> so3<type>::log() const {
+    constexpr matrix::matrix<type, 3, 1> so3<type>::log() const {
         const type real = this->rotation_quaternion[0];
         const matrix::matrix<type, 3, 1> imaginary = { { this->rotation_quaternion[1], this->rotation_quaternion[2], this->rotation_quaternion[3] } };
         const type imaginary_length_squared = imaginary.get_length_squared();
@@ -311,7 +311,7 @@ namespace lie {
     }
 
     template <typename type>
-    matrix::matrix<type, 3, 1> so3<type>::operator*(const matrix::matrix<type, 3, 1>& point) const {
+    constexpr matrix::matrix<type, 3, 1> so3<type>::operator*(const matrix::matrix<type, 3, 1>& point) const {
         so3 point_quaternion = {
             0,
             point[0],
@@ -329,7 +329,7 @@ namespace lie {
     }
 
     template <typename type>
-    se3<type>::se3() = default;
+    constexpr se3<type>::se3() = default;
 
     template <typename type>
     constexpr se3<type>::se3(const so3<type>& initial_rotation_so3, const matrix::matrix<type, 3, 1>& initial_translation_vector)
@@ -338,7 +338,7 @@ namespace lie {
     }
 
     template <typename type>
-    se3<type>::se3(const type (&initial_rotation_quaternion_values)[4], const type (&initial_translation_vector)[3])
+    constexpr se3<type>::se3(const type (&initial_rotation_quaternion_values)[4], const type (&initial_translation_vector)[3])
         : rotation_so3(initial_rotation_quaternion_values)
         , translation_vector(initial_translation_vector) {
     }
@@ -369,7 +369,7 @@ namespace lie {
     }
 
     template <typename type>
-    se3<type> se3<type>::inverse() const {
+    constexpr se3<type> se3<type>::inverse() const {
         const so3 rotation_so3_inverse = this->rotation_so3.inverse();
         return { rotation_so3_inverse, -(rotation_so3_inverse * this->translation_vector) };
     }
@@ -429,7 +429,7 @@ namespace lie {
     }
 
     template <typename type>
-    matrix::matrix<type, 6, 1> se3<type>::log() const {
+    constexpr matrix::matrix<type, 6, 1> se3<type>::log() const {
         const matrix::matrix<type, 3, 1> omega = this->rotation_so3.log();
         const type theta_squared = omega.get_length_squared();
         const type theta = math::sqrt(theta_squared);
@@ -459,7 +459,7 @@ namespace lie {
     }
 
     template <typename type>
-    se3<type> se3<type>::operator*(const se3& rhs) const {
+    constexpr se3<type> se3<type>::operator*(const se3& rhs) const {
         return {
             this->rotation_so3 * rhs.rotation_so3,
             (this->rotation_so3 * rhs.translation_vector) + this->translation_vector
@@ -467,12 +467,12 @@ namespace lie {
     }
 
     template <typename type>
-    matrix::matrix<type, 3, 1> se3<type>::operator*(const matrix::matrix<type, 3, 1>& point) const {
+    constexpr matrix::matrix<type, 3, 1> se3<type>::operator*(const matrix::matrix<type, 3, 1>& point) const {
         return (this->rotation_so3 * point) + this->translation_vector;
     }
 
     template <typename type>
-    sim3<type>::sim3() = default;
+    constexpr sim3<type>::sim3() = default;
 
     template <typename type>
     constexpr sim3<type>::sim3(const se3<type>& initial_transformation_se3, type initial_scale_scalar)
@@ -481,7 +481,7 @@ namespace lie {
     }
 
     template <typename type>
-    sim3<type>::sim3(const type (&initial_rotation_quaternion_values)[4], const type (&initial_translation_vector)[3], const type initial_scale_scalar)
+    constexpr sim3<type>::sim3(const type (&initial_rotation_quaternion_values)[4], const type (&initial_translation_vector)[3], const type initial_scale_scalar)
         : transformation_se3(initial_rotation_quaternion_values, initial_translation_vector)
         , scale_scalar(initial_scale_scalar) {
     }
@@ -512,7 +512,7 @@ namespace lie {
     }
 
     template <typename type>
-    sim3<type> sim3<type>::inverse() const {
+    constexpr sim3<type> sim3<type>::inverse() const {
         const type scale_inverse = 1 / this->scale_scalar;
         se3<type> transformation_inverse = this->transformation_se3.inverse();
         transformation_inverse.translation() = transformation_inverse.translation() * scale_inverse;
@@ -594,7 +594,7 @@ namespace lie {
     }
 
     template <typename type>
-    matrix::matrix<type, 7, 1> sim3<type>::log() const {
+    constexpr matrix::matrix<type, 7, 1> sim3<type>::log() const {
         const matrix::matrix<type, 3, 1> omega = this->transformation_se3.rotation().log();
         const type theta = math::sqrt(omega.get_length_squared());
         const type sigma = math::log(this->scale_scalar);
@@ -648,14 +648,14 @@ namespace lie {
     }
 
     template <typename type>
-    sim3<type> sim3<type>::operator*(const sim3& rhs) const {
+    constexpr sim3<type> sim3<type>::operator*(const sim3& rhs) const {
         return { { this->transformation_se3.rotation() * rhs.transformation_se3.rotation(),
                    (this->transformation_se3.rotation() * rhs.transformation_se3.translation() * this->scale_scalar) + this->transformation_se3.translation() },
                  this->scale_scalar * rhs.scale_scalar };
     }
 
     template <typename type>
-    matrix::matrix<type, 3, 1> sim3<type>::operator*(const matrix::matrix<type, 3, 1>& point) const {
+    constexpr matrix::matrix<type, 3, 1> sim3<type>::operator*(const matrix::matrix<type, 3, 1>& point) const {
         return this->transformation_se3.rotation() * point * this->scale_scalar + this->transformation_se3.translation();
     }
 }
