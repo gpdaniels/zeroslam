@@ -127,11 +127,11 @@ int main(int argc, char* argv[]) {
         const float inlier_ratio = 0.4f;
         const std::size_t iterations_minimum = 0;
         const std::size_t iterations_maximum = 100;
-        const float residual_thresdhold = 0.1f;
+        const float residual_threshold = 0.1f;
 
         consensus::random<2> random;
         line_estimator estimator;
-        consensus::inlier_support inlier_support(residual_thresdhold);
+        consensus::inlier_support inlier_support(residual_threshold);
 
         consensus::consensus<consensus::random<2>, line_estimator, consensus::inlier_support> consensus(
             random,

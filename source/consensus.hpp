@@ -465,11 +465,11 @@ namespace consensus {
     class inlier_support final
         : public evaluator_base {
     private:
-        const float thresdhold;
+        const float threshold;
 
     public:
-        inlier_support(const float residual_thresdhold)
-            : thresdhold(residual_thresdhold) {
+        inlier_support(const float residual_threshold)
+            : threshold(residual_threshold) {
         }
 
     public:
@@ -481,7 +481,7 @@ namespace consensus {
         ) override final {
             inliers_size = 0;
             for (size_t i = 0; i < residuals_size; ++i) {
-                if (residuals[i] < this->thresdhold) {
+                if (residuals[i] < this->threshold) {
                     inliers[inliers_size++] = i;
                 }
             }
@@ -500,11 +500,11 @@ namespace consensus {
         const float inlier_ratio = 0.8f;
         const size_t iterations_minimum = 5;
         const size_t iterations_maximum = 300;
-        const float residual_thresdhold = 0.05f;
+        const float residual_threshold = 0.05f;
 
         random<5> random;
         essential<double> estimator;
-        inlier_support inlier_support(residual_thresdhold);
+        inlier_support inlier_support(residual_threshold);
 
         consensus<decltype(random), decltype(estimator), decltype(inlier_support)> consensus(
             random,
