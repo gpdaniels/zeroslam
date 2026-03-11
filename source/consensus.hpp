@@ -449,13 +449,12 @@ namespace consensus {
                 matrix_multiply(&model.essential[0][0], 3, 3, &lhs_point[0], 1, 3, &essential_lhs[0]);
                 matrix_multiply(&essential_transpose[0][0], 3, 3, &rhs_point[0], 1, 3, &essential_rhs[0]);
 
-                const scalar_type el_dot_er = essential_lhs[0] * essential_rhs[0] + essential_lhs[1] * essential_rhs[1] + essential_lhs[2] * essential_rhs[2];
+                const scalar_type prxelx_pryely_przelz = rhs_point[0] * essential_lhs[0] + rhs_point[1] * essential_lhs[1] + rhs_point[2] * essential_lhs[2];
                 const scalar_type elx2 = (essential_lhs[0] * essential_lhs[0]);
                 const scalar_type ely2 = (essential_lhs[1] * essential_lhs[1]);
                 const scalar_type erx2 = (essential_rhs[0] * essential_rhs[0]);
                 const scalar_type ery2 = (essential_rhs[1] * essential_rhs[1]);
-
-                residuals[i] = (el_dot_er * el_dot_er) / (elx2 + ely2 + erx2 + ery2);
+                residuals[i] = (prxelx_pryely_przelz * prxelx_pryely_przelz) / (elx2 + ely2 + erx2 + ery2);
             }
         }
     };
@@ -500,7 +499,7 @@ namespace consensus {
         const float inlier_ratio = 0.8f;
         const size_t iterations_minimum = 5;
         const size_t iterations_maximum = 300;
-        const float residual_threshold = 0.05f;
+        const float residual_threshold = 1.0e-5f;
 
         random<5> random;
         essential<double> estimator;
