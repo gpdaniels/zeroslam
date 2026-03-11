@@ -925,20 +925,18 @@ namespace factor_graph {
 
         // Update on the manifold using left-multiplicative increment.
         virtual void plus(const matrix::matrix<double, 0, 0>& delta) override final {
-            // Apply translational increment.
-            this->parameters[0][0] += delta[0][0];
-            this->parameters[1][0] += delta[1][0];
-            this->parameters[2][0] += delta[2][0];
-            // Current orientation stored as quaternion in parameters (w, x, y, z) with layout in storage as [qx, qy, qz, qw].
-            const lie::so3<double> current(this->parameters[6][0], this->parameters[3][0], this->parameters[4][0], this->parameters[5][0]);
-            // Exponential map of the rotation increment.
-            const lie::so3<double> update = lie::so3<double>::exp({ { delta[3][0], delta[4][0], delta[5][0] } });
-            const lie::so3<double> next = current * update;
-            // Store quaternion components back into parameters in the original layout.
-            this->parameters[3][0] = next.get_quaternion()[1]; // x.
-            this->parameters[4][0] = next.get_quaternion()[2]; // y.
-            this->parameters[5][0] = next.get_quaternion()[3]; // z.
-            this->parameters[6][0] = next.get_quaternion()[0]; // w.
+            const lie::so3<double> current_rotation(this->parameters[6][0], this->parameters[3][0], this->parameters[4][0], this->parameters[5][0]);
+            const matrix::matrix<double, 3, 1> current_translation = { { this->parameters[0][0], this->parameters[1][0], this->parameters[2][0] } };
+            const lie::se3<double> current_pose(current_rotation, current_translation);
+            const lie::se3<double> update = lie::se3<double>::exp({ { delta[0][0], delta[1][0], delta[2][0], delta[3][0], delta[4][0], delta[5][0] } });
+            const lie::se3<double> next_pose = update * current_pose;
+            this->parameters[0][0] = next_pose.translation()[0]; // tx.
+            this->parameters[1][0] = next_pose.translation()[1]; // ty.
+            this->parameters[2][0] = next_pose.translation()[2]; // tz.
+            this->parameters[3][0] = next_pose.rotation().get_quaternion()[1]; // qx.
+            this->parameters[4][0] = next_pose.rotation().get_quaternion()[2]; // qy.
+            this->parameters[5][0] = next_pose.rotation().get_quaternion()[3]; // qz.
+            this->parameters[6][0] = next_pose.rotation().get_quaternion()[0]; // qw.
         }
     };
 
@@ -952,15 +950,16 @@ namespace factor_graph {
 }
 
 namespace factor_graph {
+    template <typename camera_type>
     class edge_reprojection final
         : public edge_base {
     private:
-        matrix::matrix<double, 3, 3> intrinsics;
+        camera_type camera;
 
     public:
-        edge_reprojection(const matrix::matrix<double, 3, 3>& camera_intrinsics)
+        edge_reprojection(const camera_type& camera_model)
             : edge_base(2, 2)
-            , intrinsics(camera_intrinsics) {
+            , camera(camera_model) {
         }
 
         // Compute reprojection residual given a pose and a 3D landmark.
@@ -974,13 +973,17 @@ namespace factor_graph {
             // Transform landmark into camera frame.
             const matrix::matrix<double, 3, 1> landmark_camera = pose * landmark_world;
             // Project into image plane using intrinsic matrix.
-            const matrix::matrix<double, 3, 1> projected = this->intrinsics * landmark_camera;
-            // Compute reprojection residual (observation - projection).
-            this->residual[0][0] = this->get_observation()[0][0] - (projected[0] / projected[2]);
-            this->residual[1][0] = this->get_observation()[1][0] - (projected[1] / projected[2]);
+            matrix::matrix<double, 2, 1> projected = {{ 0.0, 0.0 }};
+            if (!this->camera.project(landmark_camera.data(), projected.data())) {
+                this->residual[0][0] = 0.0;
+                this->residual[1][0] = 0.0;
+                return;
+            }
+            this->residual[0][0] = this->get_observation()[0][0] - projected[0];
+            this->residual[1][0] = this->get_observation()[1][0] - projected[1];
         }
 
-        // Analytical jacobians for pose and landmark are provided when possible.
+        // Analytical jacobians for pose and landmark using camera model.
         virtual void compute_jacobians() override final {
             const matrix::matrix<double, 0, 0>& pose_params = this->get_vertex(0)->get_parameters();
             const lie::se3 pose(lie::so3<double>(pose_params[6][0], pose_params[3][0], pose_params[4][0], pose_params[5][0]), { { pose_params[0][0], pose_params[1][0], pose_params[2][0] } });
@@ -988,51 +991,35 @@ namespace factor_graph {
             const matrix::matrix<double, 3, 1> landmark_world({ xyz_params[0][0], xyz_params[1][0], xyz_params[2][0] });
             const matrix::matrix<double, 3, 1> landmark_camera = pose * landmark_world;
 
-            const double fx = this->intrinsics[0][0];
-            const double fy = this->intrinsics[1][1];
-
-            const double X = landmark_camera[0];
-            const double Y = landmark_camera[1];
-            const double Z = landmark_camera[2];
-
-            if (Z <= 0) {
-                // If point is behind the camera set jacobians to zero.
+            double projected[2];
+            matrix::matrix<double, 2, 3> jacobian_camera;
+            if (!this->camera.project(landmark_camera.data(), projected, jacobian_camera.data())) {
                 this->jacobians[0] = matrix::matrix<double, 0, 0>::zero(2, 6);
                 this->jacobians[1] = matrix::matrix<double, 0, 0>::zero(2, 3);
                 return;
             }
 
-            const double Z_inv = 1.0 / Z;
-            const double Z_inv2 = Z_inv * Z_inv;
+            const double X = landmark_camera[0];
+            const double Y = landmark_camera[1];
+            const double Z = landmark_camera[2];
 
-            this->jacobians[0] = matrix::matrix<double, 0, 0>::zero(2, 6);
+            // Point Jacobian wrt Pose increment (Left SE3 update: T' = exp(delta) * T)
+            // d(exp(delta) * P) / d(omega, upsilon) = [-P^, I]
+            matrix::matrix<double, 3, 6> jacobian_point_pose;
+            jacobian_point_pose[0][0] = 0;   jacobian_point_pose[0][1] = Z;  jacobian_point_pose[0][2] = -Y;
+            jacobian_point_pose[1][0] = -Z;  jacobian_point_pose[1][1] = 0;  jacobian_point_pose[1][2] = X;
+            jacobian_point_pose[2][0] = Y;   jacobian_point_pose[2][1] = -X; jacobian_point_pose[2][2] = 0;
+            jacobian_point_pose[0][3] = 1;   jacobian_point_pose[0][4] = 0;  jacobian_point_pose[0][5] = 0;
+            jacobian_point_pose[1][3] = 0;   jacobian_point_pose[1][4] = 1;  jacobian_point_pose[1][5] = 0;
+            jacobian_point_pose[2][3] = 0;   jacobian_point_pose[2][4] = 0;  jacobian_point_pose[2][5] = 1;
 
-            // Analytical derivatives of projection with respect to se3 tangent (approximate block).
-            this->jacobians[0][0][0] = -fx * Z_inv;
-            this->jacobians[0][0][1] = 0;
-            this->jacobians[0][0][2] = fx * X * Z_inv2;
-            this->jacobians[0][0][3] = fx * X * Y * Z_inv2;
-            this->jacobians[0][0][4] = -fx * (1 + (X * X * Z_inv2));
-            this->jacobians[0][0][5] = fx * Y * Z_inv;
+            // Residual Jacobian wrt Pose: d(obs - proj)/d_delta = -jacobian_camera * jacobian_point_pose
+            const matrix::matrix<double, 2, 6> jacobian_pose_res = -(jacobian_camera * jacobian_point_pose);
+            this->jacobians[0] = matrix::matrix<double, 0, 0>(2, 6, jacobian_pose_res.data());
 
-            this->jacobians[0][1][0] = 0;
-            this->jacobians[0][1][1] = -fy * Z_inv;
-            this->jacobians[0][1][2] = fy * Y * Z_inv2;
-            this->jacobians[0][1][3] = fy * (1 + (Y * Y * Z_inv2));
-            this->jacobians[0][1][4] = -fy * X * Y * Z_inv2;
-            this->jacobians[0][1][5] = -fy * X * Z_inv;
-
-            // Jacobian with respect to landmark in world coordinates.
-            matrix::matrix<double, 2, 3> tmp;
-            tmp[0][0] = -fx * Z_inv;
-            tmp[0][1] = 0;
-            tmp[0][2] = fx * X * Z_inv2;
-            tmp[1][0] = 0;
-            tmp[1][1] = -fy * Z_inv;
-            tmp[1][2] = fy * Y * Z_inv2;
-
-            // Multiply by rotation matrix to get derivative wrt world coordinates.
-            this->jacobians[1] = matrix::matrix<double, 0, 0>(2, 3, (tmp * pose.rotation().get_matrix()).data());
+            // Landmark Jacobian: d(obs - proj)/d_point_world = -jacobian_camera * d(P_camera)/d(P_world) = -jacobian_camera * R
+            const matrix::matrix<double, 2, 3> jacobian_landmark_res = -(jacobian_camera * pose.rotation().get_matrix());
+            this->jacobians[1] = matrix::matrix<double, 0, 0>(2, 3, jacobian_landmark_res.data());
         }
     };
 }

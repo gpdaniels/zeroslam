@@ -141,12 +141,8 @@ int main(int argc, char* argv[]) {
                 matrix::matrix<double, 3, 1> world_point = camera * landmark;
                 matrix::matrix<double, 2, 1> point;
                 REQUIRE(camera_model.project(world_point.data(), point.data()));
-                matrix::matrix<double, 3, 3> K = matrix::matrix<double, 3, 3>::identity();
-                K[0][0] = camera_parameters[0];
-                K[1][1] = camera_parameters[1];
-                K[0][2] = camera_parameters[2];
-                K[1][2] = camera_parameters[3];
-                std::unique_ptr<factor_graph::edge_base> m = std::make_unique<factor_graph::edge_reprojection>(K);
+                camera::pinhole edge_camera(camera_parameters, 4);
+                std::unique_ptr<factor_graph::edge_base> m = std::make_unique<factor_graph::edge_reprojection<camera::pinhole>>(edge_camera);
                 m->set_observation(matrix::matrix<double, 0, 0>(2, 1, matrix::matrix<double, 2, 1>{ { point[0] + (static_cast<double>((int)(rng.get_random_raw() % 10) - 5) * 0.0001), point[1] + (static_cast<double>((int)(rng.get_random_raw() % 10) - 5) * 0.0001) } }.data()));
                 m->add_vertex(camera_vertexes[camera_id].get());
                 m->add_vertex(landmark_vertexes[landmark_id].get());

@@ -110,12 +110,8 @@ namespace map {
                     }
                     // Now add the edge.
                     const frame::frame& frame = frames.at(frame_id);
-                    matrix::matrix<double, 3, 3> K = matrix::matrix<double, 3, 3>::identity();
-                    K[0][0] = camera_parameters[0];
-                    K[1][1] = camera_parameters[1];
-                    K[0][2] = camera_parameters[2];
-                    K[1][2] = camera_parameters[3];
-                    factor_graph::edge_base* m = new factor_graph::edge_reprojection(K);
+                    camera::pinhole camera_model(camera_parameters, 4);
+                    factor_graph::edge_base* m = new factor_graph::edge_reprojection<camera::pinhole>(camera_model);
                     m->set_observation(matrix::matrix<double, 0, 0>(2, 1, matrix::matrix<double, 2, 1>{ { static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].x), static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].y) } }.data()));
                     m->add_vertex(camera_vertexes[frame_id]);
                     m->add_vertex(landmark_vertexes[landmark_id]);
