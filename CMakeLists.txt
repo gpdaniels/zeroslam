@@ -104,13 +104,30 @@ IF(FALSE)
     SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=undefined")
 ENDIF()
 ###############################################################################
+# LIBRARIES
+###############################################################################
+SET(THREADS_PREFER_PTHREAD_FLAG ON)
+FIND_PACKAGE(Threads REQUIRED)
+###############################################################################
 # MAIN
 ###############################################################################
 FILE(GLOB_RECURSE SOURCE_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/source/*")
 ADD_EXECUTABLE(${PROJECT_NAME} ${SOURCE_FILES})
 TARGET_INCLUDE_DIRECTORIES(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/source/")
-SET(THREADS_PREFER_PTHREAD_FLAG ON)
-FIND_PACKAGE(Threads REQUIRED)
+TARGET_LINK_LIBRARIES(${PROJECT_NAME} PRIVATE Threads::Threads)
+###############################################################################
+# TOOLING
+###############################################################################
+FILE(GLOB TOOL_DIRS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tools/*")
+FOREACH(TOOL_DIR ${TOOL_DIRS})
+    FILE(RELATIVE_PATH TOOL_DIR_NAME "${CMAKE_SOURCE_DIR}/tools/" ${TOOL_DIR})
+    FILE(GLOB_RECURSE TOOL_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tools/${TOOL_DIR_NAME}/*")
+    ADD_EXECUTABLE(${TOOL_DIR_NAME} EXCLUDE_FROM_ALL ${TOOL_FILES})
+    TARGET_INCLUDE_DIRECTORIES(${TOOL_DIR_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/tools/${TOOL_DIR_NAME}/")
+    TARGET_INCLUDE_DIRECTORIES(${TOOL_DIR_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/source/")
+    TARGET_LINK_LIBRARIES(${TOOL_DIR_NAME} PRIVATE Threads::Threads)
+    SET_TARGET_PROPERTIES(${TOOL_DIR_NAME} PROPERTIES FOLDER tools)
+ENDFOREACH()
 ###############################################################################
 # TESTING
 ###############################################################################
@@ -123,6 +140,7 @@ FOREACH(TEST_FILE ${TEST_FILES})
     SET(TEST_TARGET_NAME "test_${TEST_TARGET_NAME}")
     ADD_EXECUTABLE(${TEST_TARGET_NAME} EXCLUDE_FROM_ALL ${TEST_FILE} "${CMAKE_SOURCE_DIR}/source/${SOURCE_FILE_NAME}.hpp")
     TARGET_INCLUDE_DIRECTORIES(${TEST_TARGET_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/source/")
+    TARGET_LINK_LIBRARIES(${TEST_TARGET_NAME} PRIVATE Threads::Threads)
     SET_TARGET_PROPERTIES(${TEST_TARGET_NAME} PROPERTIES FOLDER tests)
     ADD_TEST(NAME test_${TEST_TARGET_NAME} COMMAND $<TARGET_FILE:${TEST_TARGET_NAME}>)
     ADD_TEST(NAME build_${TEST_TARGET_NAME} COMMAND "${CMAKE_COMMAND}" "--build" "${CMAKE_BINARY_DIR}" "--config" "$<CONFIG>" "--target" "${TEST_TARGET_NAME}")

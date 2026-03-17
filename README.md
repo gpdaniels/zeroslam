@@ -48,7 +48,6 @@ This can be done easily with ffmpeg, e.g. for the file `video.mp4`:
 cd build
 mkdir -p data
 ffmpeg -i video.mp4 -start_number 0 -frames:v 10 'data/%03d.pgm'
-
 ```
 
 Next run the system on the data. The usage of the program is `zeroslam [video] [fx] [fy] [cx] [cy]`
@@ -58,6 +57,30 @@ cd build
 ```
 
 The program will output a trajectory file in TUM format and a ply pointcloud file.
+
+## Evaluating a trajectory ##
+
+The tools directory contains a tool called `trajectory_alignment`.
+This tool aligns trajectories in the TUM format and returns the error after scaling and alignment.
+
+Usage:
+```
+# Build the tool.
+cd build
+cmake --build . --parallel 4 --target trajectory_alignment
+
+# Evaluate a trajectory with a ground truth.
+./runtime/Release/trajectory_alignment trajectory_gt.txt trajectory_eval_1.txt
+
+# Evaluate two trajectories against a ground truth.
+./runtime/Release/trajectory_alignment trajectory_gt.txt trajectory_eval_1.txt trajectory_eval_2.txt
+
+# Ensure the first pose is aligned.
+./runtime/Release/trajectory_alignment trajectory_gt.txt trajectory_eval_1.txt --first
+
+# Plot the trajectories from each of the x, y, or z, planes.
+./runtime/Release/trajectory_alignment trajectory_gt.txt trajectory_eval_1.txt --plot xyz
+```
 
 ## License ##
 
