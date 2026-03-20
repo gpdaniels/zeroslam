@@ -20,7 +20,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -32,6 +34,14 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace {
     using size_t = decltype(sizeof(0));
+}
+
+namespace {
+    std::atomic<bool> shutdown_requested{false};
+    void signal_handler(int) {
+        std::signal(SIGINT, SIG_DFL);
+        shutdown_requested = true;
+    }
 }
 
 inline unsigned char* pgm_load(const char* path, std::size_t& rows, std::size_t& cols) {
@@ -382,6 +392,7 @@ int main(int argc, char* argv[]) {
                                                  { 0.0, 0.0, 1.0 } } };
 
     std::printf("Loading slam system...\n");
+    std::signal(SIGINT, signal_handler);
     slam slam;
 
     std::printf("Converting images...\n");
@@ -399,6 +410,10 @@ int main(int argc, char* argv[]) {
 
     std::printf("Processing frames...\n");
     for (size_t i = 0; i < frames; ++i) {
+        if (shutdown_requested) {
+            std::printf("Interrupt received, stopping...\n");
+            break;
+        }
         std::printf("\n");
         std::printf("Starting frame %zu/%zu\n", i + 1, frames);
         std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
