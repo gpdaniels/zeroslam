@@ -32,6 +32,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <cstdlib>
 #include <vector>
+#include <unordered_set>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -72,12 +73,17 @@ private:
 
     static void symmetry_test(const std::vector<feature::match>& lhs, const std::vector<feature::match>& rhs, std::vector<feature::match>& matches) {
         matches.clear();
-        for (std::vector<feature::match>::const_iterator lhs_match = lhs.begin(); lhs_match != lhs.end(); ++lhs_match) {
-            for (std::vector<feature::match>::const_iterator rhs_match = rhs.begin(); rhs_match != rhs.end(); ++rhs_match) {
-                if ((lhs_match->lhs_index == rhs_match->rhs_index) && (lhs_match->rhs_index == rhs_match->lhs_index)) {
-                    matches.push_back(feature::match{ lhs_match->lhs_index, lhs_match->rhs_index, lhs_match->score });
-                    break;
-                }
+        matches.reserve(std::min(lhs.size(), rhs.size()));
+        std::unordered_set<size_t> rhs_index_set;
+        rhs_index_set.reserve(rhs.size());
+        for (size_t i = 0; i < rhs.size(); ++i) {
+            const size_t key = (rhs[i].lhs_index << 32) | rhs[i].rhs_index;
+            rhs_index_set.insert(key);
+        }
+        for (const auto& lhs_match : lhs) {
+            const size_t key = (lhs_match.rhs_index << 32) | lhs_match.lhs_index;
+            if (rhs_index_set.find(key) != rhs_index_set.end()) {
+                matches.push_back(feature::match{ lhs_match.lhs_index, lhs_match.rhs_index, lhs_match.score });
             }
         }
     }
