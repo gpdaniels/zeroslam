@@ -163,6 +163,16 @@ public:
         std::printf("Matched: %zu features to previous frame.\n", matches.size());
         std::printf("  (Starting Matches: %zu & %zu -> After Ratio: %zu & %zu -> After Symmetry: %zu)\n", found_cp, found_pc, matches_cp.size(), matches_pc.size(), matches.size());
 
+        // Cache observations from the previous frame that are in this one.
+        std::unordered_map<int, int> frame_previous_points; // key is kp_index and data is landmark_id.
+        for (const auto& [landmark_id, landmark_observations] : this->reconstruction.observations) {
+            for (const auto& [frame_id, kp_index] : landmark_observations) {
+                if (frame_id == frame_previous.id) {
+                    frame_previous_points[kp_index] = landmark_id;
+                }
+            }
+        }
+
         // Pose estimation of new frame.
         if (frame_current.id < 2) {
             consensus::model_essential<double> model;
@@ -238,17 +248,58 @@ public:
             );
         }
         else {
-            // Set the initial pose of the new frame from the previous frame.
-            frame_current.rotation = frame_previous.rotation;
-            frame_current.translation = frame_previous.translation;
-        }
-        // Cache observations from the previous frame that are in this one.
-        std::unordered_map<int, int> frame_previous_points; // key is kp_index and data is landmark_id.
-        for (const auto& [landmark_id, landmark_observations] : this->reconstruction.observations) {
-            for (const auto& [frame_id, kp_index] : landmark_observations) {
-                if (frame_id == frame_previous.id) {
-                    frame_previous_points[kp_index] = landmark_id;
+            std::vector<consensus::correspondence_2d_3d<double>> pnp_correspondencies;
+            for (size_t i = 0; i < match_index_previous.size(); ++i) {
+                auto found_point = frame_previous_points.find(match_index_previous[i]);
+                if (found_point != frame_previous_points.end()) {
+                    consensus::correspondence_2d_3d<double> corr;
+                    const double lhs_point[2] = {
+                        static_cast<double>(frame_current.keypoint_pyramid[0][match_index_current[i]].x),
+                        static_cast<double>(frame_current.keypoint_pyramid[0][match_index_current[i]].y)
+                    };
+                    double lhs_ray[3];
+                    if (!frame_current.camera.unproject(&lhs_point[0], &lhs_ray[0])) {
+                        continue;
+                    }
+                    corr.lhs.x = lhs_ray[0] / lhs_ray[2];
+                    corr.lhs.y = lhs_ray[1] / lhs_ray[2];
+
+                    const auto& landmark = this->reconstruction.landmarks.at(found_point->second);
+                    corr.rhs.x = landmark.location[0];
+                    corr.rhs.y = landmark.location[1];
+                    corr.rhs.z = landmark.location[2];
+
+                    pnp_correspondencies.push_back(corr);
                 }
+            }
+
+            bool pnp_success = false;
+            if (pnp_correspondencies.size() >= 3) {
+                consensus::model_p3p<double> model;
+                std::vector<float> pnp_residuals(pnp_correspondencies.size());
+                std::vector<size_t> pnp_inliers(pnp_correspondencies.size());
+                size_t inliers_size = 0;
+
+                if (consensus::solve_ransac_p3p(pnp_correspondencies.data(), pnp_correspondencies.size(), pnp_residuals.data(), pnp_inliers.data(), inliers_size, model)) {
+                    frame_current.rotation = matrix::matrix<double, 3, 3>({
+                        { model.rotation[0][0], model.rotation[0][1], model.rotation[0][2] },
+                        { model.rotation[1][0], model.rotation[1][1], model.rotation[1][2] },
+                        { model.rotation[2][0], model.rotation[2][1], model.rotation[2][2] }
+                    });
+                    frame_current.translation = matrix::matrix<double, 3, 1>({
+                        { model.translation[0] },
+                        { model.translation[1] },
+                        { model.translation[2] }
+                    });
+                    pnp_success = true;
+                    std::printf("Inliers: %zu inliers in PnP pose estimation out of %zu correspondencies.\n", inliers_size, pnp_correspondencies.size());
+                }
+            }
+
+            if (!pnp_success) {
+                // Set the initial pose of the new frame from the previous frame.
+                frame_current.rotation = frame_previous.rotation;
+                frame_current.translation = frame_previous.translation;
             }
         }
         // Find matches that are already in the map as landmarks.

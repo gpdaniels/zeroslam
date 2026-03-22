@@ -343,11 +343,26 @@ namespace consensus {
     };
 
     template <typename scalar_type>
+    class xyz {
+    public:
+        scalar_type x, y, z;
+    };
+
+    template <typename scalar_type>
     class correspondence_2d_2d {
     public:
         xy<scalar_type> lhs, rhs;
     };
 
+    template <typename scalar_type>
+    class correspondence_2d_3d {
+    public:
+        xy<scalar_type> lhs;
+        xyz<scalar_type> rhs;
+    };
+}
+
+namespace consensus {
     template <typename scalar_type>
     struct model_essential {
         scalar_type essential[3][3];
@@ -461,6 +476,120 @@ namespace consensus {
 }
 
 namespace consensus {
+    template <typename scalar_type>
+    struct model_p3p {
+        scalar_type rotation[3][3];
+        scalar_type translation[3];
+    };
+
+    template <typename scalar_type>
+    class p3p final
+        : public estimator_base<correspondence_2d_3d<scalar_type>, 3, model_p3p<scalar_type>, 4> {
+    public:
+        virtual size_t generate_models(
+            const typename p3p::data_type* const __restrict data,
+            size_t data_size,
+            typename p3p::model_type* const __restrict models
+        ) override final {
+            if (data_size < 3) {
+                return 0;
+            }
+            
+            // Construct bearing vectors and normalize them for the solver
+            scalar_type lhs_normalized[3][3];
+            for (int i = 0; i < 3; ++i) {
+                const scalar_type x = data[i].lhs.x;
+                const scalar_type y = data[i].lhs.y;
+                const scalar_type z = 1.0;
+                const scalar_type norm = math::sqrt(x * x + y * y + z * z);
+                lhs_normalized[i][0] = x / norm;
+                lhs_normalized[i][1] = y / norm;
+                lhs_normalized[i][2] = z / norm;
+            }
+            
+            const scalar_type rhs[3][3] = {
+                { data[0].rhs.x, data[0].rhs.y, data[0].rhs.z },
+                { data[1].rhs.x, data[1].rhs.y, data[1].rhs.z },
+                { data[2].rhs.x, data[2].rhs.y, data[2].rhs.z },
+            };
+            
+            scalar_type rotations[4][9];
+            scalar_type translations[4][3];
+            size_t generated_models_count = pose_estimation::perspective_3_point(lhs_normalized, rhs, rotations, translations);
+            for (size_t i = 0; i < generated_models_count; ++i) {
+                for (size_t y = 0; y < 3; ++y) {
+                    for (size_t x = 0; x < 3; ++x) {
+                        models[i].rotation[y][x] = rotations[i][y * 3 + x];
+                    }
+                    models[i].translation[y] = translations[i][y];
+                }
+            }
+            return generated_models_count;
+        }
+
+        virtual void compute_residuals(
+            const typename p3p::data_type* const __restrict data,
+            size_t data_size,
+            const typename p3p::model_type& model,
+            float* const __restrict residuals
+        ) override final {
+            constexpr static const auto matrix_multiply = [](const scalar_type* lhs, int lhs_width, int lhs_height, const scalar_type* rhs, int rhs_width, int rhs_height, scalar_type* result) {
+                static_cast<void>(rhs_height);
+                for (int lhs_y = 0; lhs_y < lhs_height; ++lhs_y) {
+                    for (int rhs_x = 0; rhs_x < rhs_width; ++rhs_x) {
+                        scalar_type sum = 0;
+                        for (int lhs_x_rhs_y = 0; lhs_x_rhs_y < lhs_width; ++lhs_x_rhs_y) {
+                            sum += lhs[lhs_y * lhs_width + lhs_x_rhs_y] * rhs[lhs_x_rhs_y * rhs_width + rhs_x];
+                        }
+                        result[lhs_y * rhs_width + rhs_x] = sum;
+                    }
+                }
+            };
+
+            // Reprojection Error.
+            for (size_t i = 0; i < data_size; ++i) {
+                const scalar_type x = data[i].lhs.x;
+                const scalar_type y = data[i].lhs.y;
+                const scalar_type z = 1.0;
+                const scalar_type lhs_point_norm = math::sqrt(x * x + y * y + z * z);
+                const scalar_type lhs_point_normalized[3] = {
+                    x / lhs_point_norm,
+                    y / lhs_point_norm,
+                    z / lhs_point_norm
+                };
+
+                const scalar_type rhs_point[3] = {
+                    data[i].rhs.x,
+                    data[i].rhs.y,
+                    data[i].rhs.z
+                };
+
+                scalar_type rhs_point_transformed[3];
+                matrix_multiply(&model.rotation[0][0], 3, 3, &rhs_point[0], 1, 3, &rhs_point_transformed[0]);
+                rhs_point_transformed[0] += model.translation[0];
+                rhs_point_transformed[1] += model.translation[1];
+                rhs_point_transformed[2] += model.translation[2];
+
+                const scalar_type rhs_point_transformed_norm = math::sqrt(rhs_point_transformed[0] * rhs_point_transformed[0] + rhs_point_transformed[1] * rhs_point_transformed[1] + rhs_point_transformed[2] * rhs_point_transformed[2]);
+                const scalar_type rhs_point_transformed_normalized[3] = {
+                    rhs_point_transformed[0] / rhs_point_transformed_norm,
+                    rhs_point_transformed[1] / rhs_point_transformed_norm,
+                    rhs_point_transformed[2] / rhs_point_transformed_norm
+                };
+
+                const scalar_type dot = rhs_point_transformed_normalized[0] * lhs_point_normalized[0] + rhs_point_transformed_normalized[1] * lhs_point_normalized[1] + rhs_point_transformed_normalized[2] * lhs_point_normalized[2];
+                if (math::isnan(dot)) {
+                    residuals[i] = math::inf();
+                }
+                else {
+                    residuals[i] = math::acos(math::max(-1.0, math::min(1.0, static_cast<double>(dot))));
+                }
+            }
+        }
+    };
+}
+
+namespace consensus {
     class inlier_support final
         : public evaluator_base {
     private:
@@ -503,6 +632,30 @@ namespace consensus {
 
         random<5> random;
         essential<double> estimator;
+        inlier_support inlier_support(residual_threshold);
+
+        consensus<decltype(random), decltype(estimator), decltype(inlier_support)> consensus(
+            random,
+            estimator,
+            inlier_support,
+            inlier_ratio,
+            probability_failure,
+            iterations_minimum,
+            iterations_maximum
+        );
+
+        return consensus.estimate(correspondences, data_size, residuals, inliers, inliers_size, model);
+    }
+
+    static inline bool solve_ransac_p3p(const correspondence_2d_3d<double>* correspondences, size_t data_size, float* residuals, size_t* inliers, size_t& inliers_size, model_p3p<double>& model) {
+        const float probability_failure = 0.99f;
+        const float inlier_ratio = 0.8f;
+        const size_t iterations_minimum = 5;
+        const size_t iterations_maximum = 300;
+        const float residual_threshold = 1.0e-3f;
+
+        random<3> random;
+        p3p<double> estimator;
         inlier_support inlier_support(residual_threshold);
 
         consensus<decltype(random), decltype(estimator), decltype(inlier_support)> consensus(

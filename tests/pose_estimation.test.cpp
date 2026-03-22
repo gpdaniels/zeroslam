@@ -411,5 +411,252 @@ int main(int argc, char* argv[]) {
         REQUIRE(dot > 0.98);
     }
 
+    // 5) Test P3P: basic pose recovery.
+    {
+        // Known camera pose.
+        const double alpha = 0.25;
+        const double beta = -0.17;
+        const double gamma = 0.1;
+        const double rotation_x[3][3] = {
+            { 1, 0, 0 },
+            { 0, std::cos(alpha), -std::sin(alpha) },
+            { 0, std::sin(alpha), std::cos(alpha) }
+        };
+        const double rotation_y[3][3] = {
+            { std::cos(beta), 0, std::sin(beta) },
+            { 0, 1, 0 },
+            { -std::sin(beta), 0, std::cos(beta) }
+        };
+        const double rotation_z[3][3] = {
+            { std::cos(gamma), -std::sin(gamma), 0 },
+            { std::sin(gamma), std::cos(gamma), 0 },
+            { 0, 0, 1 }
+        };
+        double temp_r[9];
+        matrix_multiply(&rotation_z[0][0], &rotation_y[0][0], temp_r);
+        double gt_rotation[9];
+        matrix_multiply(temp_r, &rotation_x[0][0], gt_rotation);
+        const double gt_translation[3] = { 0.5, -0.3, 1.0 };
+
+        // Three non-collinear world points.
+        const double world_points[3][3] = {
+            { 0.1,  0.2, 3.0 },
+            { -0.5, 0.4, 4.2 },
+            { 0.7, -0.3, 5.1 }
+        };
+
+        // Project world points to bearing vectors: x = R*X + t, then normalise.
+        double bearing_vectors[3][3];
+        for (int i = 0; i < 3; ++i) {
+            double p[3];
+            matrix_vector_multiply(gt_rotation, &world_points[i][0], p);
+            p[0] += gt_translation[0];
+            p[1] += gt_translation[1];
+            p[2] += gt_translation[2];
+            const double norm = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+            bearing_vectors[i][0] = p[0] / norm;
+            bearing_vectors[i][1] = p[1] / norm;
+            bearing_vectors[i][2] = p[2] / norm;
+        }
+
+        double p3p_rotations[4][9];
+        double p3p_translations[4][3];
+        int n_solutions = pose_estimation::perspective_3_point(bearing_vectors, world_points, p3p_rotations, p3p_translations);
+
+        REQUIRE(n_solutions >= 1);
+        REQUIRE(n_solutions <= 4);
+
+        // Find matching solution by checking if it matches the ground truth pose.
+        // P3P can return multiple solutions with zero reprojection error for the 3 points,
+        // so we must check if the ground truth is among them.
+        bool found_match = false;
+        for (int s = 0; s < n_solutions && !found_match; ++s) {
+            // Check rotation matches ground truth
+            bool r_match = true;
+            for (int k = 0; k < 9; ++k) {
+                if (!is_value_approx(gt_rotation[k], p3p_rotations[s][k], 1e-4)) {
+                    r_match = false;
+                    break;
+                }
+            }
+            
+            // Check translation matches ground truth
+            bool t_match = true;
+            for (int k = 0; k < 3; ++k) {
+                if (!is_value_approx(gt_translation[k], p3p_translations[s][k], 1e-4)) {
+                    t_match = false;
+                    break;
+                }
+            }
+            
+            if (r_match && t_match) {
+                // Verify reprojection error is also small for this valid solution
+                double total_error = 0.0;
+                for (int i = 0; i < 3; ++i) {
+                    double proj[3];
+                    matrix_vector_multiply(&p3p_rotations[s][0], &world_points[i][0], proj);
+                    proj[0] += p3p_translations[s][0];
+                    proj[1] += p3p_translations[s][1];
+                    proj[2] += p3p_translations[s][2];
+                    const double proj_norm = std::sqrt(proj[0] * proj[0] + proj[1] * proj[1] + proj[2] * proj[2]);
+                    proj[0] /= proj_norm;
+                    proj[1] /= proj_norm;
+                    proj[2] /= proj_norm;
+                    double dx = proj[0] - bearing_vectors[i][0];
+                    double dy = proj[1] - bearing_vectors[i][1];
+                    double dz = proj[2] - bearing_vectors[i][2];
+                    total_error += dx * dx + dy * dy + dz * dz;
+                }
+                REQUIRE(total_error < 1e-10);
+                // Verify the rotation is valid.
+                REQUIRE(is_rotation_matrix(&p3p_rotations[s][0], 1e-4));
+                found_match = true;
+            }
+        }
+        REQUIRE(found_match);
+    }
+
+    // 6) Test P3P: distance consistency.
+    {
+        // Camera at a known pose.
+        const double gt_rotation[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+        const double gt_translation[3] = { 0.0, 0.0, 0.5 };
+
+        const double world_points[3][3] = {
+            { -1.0,  0.0, 5.0 },
+            {  1.0,  0.0, 5.0 },
+            {  0.0,  1.0, 5.0 }
+        };
+
+        double bearing_vectors[3][3];
+        for (int i = 0; i < 3; ++i) {
+            double p[3];
+            matrix_vector_multiply(gt_rotation, &world_points[i][0], p);
+            p[0] += gt_translation[0];
+            p[1] += gt_translation[1];
+            p[2] += gt_translation[2];
+            const double norm = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+            bearing_vectors[i][0] = p[0] / norm;
+            bearing_vectors[i][1] = p[1] / norm;
+            bearing_vectors[i][2] = p[2] / norm;
+        }
+
+        double p3p_rotations[4][9];
+        double p3p_translations[4][3];
+        int n_solutions = pose_estimation::perspective_3_point(bearing_vectors, world_points, p3p_rotations, p3p_translations);
+
+        REQUIRE(n_solutions >= 1);
+
+        // For each solution, verify distance consistency:
+        // ||d_i * x_i - d_j * x_j||^2 should equal ||X_i - X_j||^2.
+        for (int s = 0; s < n_solutions; ++s) {
+            // Compute camera-space points: R*X + t
+            double cam_pts[3][3];
+            for (int i = 0; i < 3; ++i) {
+                matrix_vector_multiply(&p3p_rotations[s][0], &world_points[i][0], &cam_pts[i][0]);
+                cam_pts[i][0] += p3p_translations[s][0];
+                cam_pts[i][1] += p3p_translations[s][1];
+                cam_pts[i][2] += p3p_translations[s][2];
+            }
+            // Check pairwise distances.
+            for (int i = 0; i < 3; ++i) {
+                for (int j = i + 1; j < 3; ++j) {
+                    double d_world = 0.0, d_cam = 0.0;
+                    for (int k = 0; k < 3; ++k) {
+                        double dw = world_points[i][k] - world_points[j][k];
+                        double dc = cam_pts[i][k] - cam_pts[j][k];
+                        d_world += dw * dw;
+                        d_cam += dc * dc;
+                    }
+                    REQUIRE(is_value_approx(d_world, d_cam, 1e-6));
+                }
+            }
+        }
+    }
+
+    // 7) Test P3P: different camera pose with larger rotation.
+    {
+        const double angle = 0.7;
+        const double gt_rotation[9] = {
+            std::cos(angle), 0.0, std::sin(angle),
+            0.0, 1.0, 0.0,
+            -std::sin(angle), 0.0, std::cos(angle)
+        };
+        const double gt_translation[3] = { 1.0, -0.5, 2.0 };
+
+        const double world_points[3][3] = {
+            { 0.3,  0.5, 4.0 },
+            { -0.8, -0.2, 3.5 },
+            { 0.0,  0.7, 6.0 }
+        };
+
+        double bearing_vectors[3][3];
+        for (int i = 0; i < 3; ++i) {
+            double p[3];
+            matrix_vector_multiply(gt_rotation, &world_points[i][0], p);
+            p[0] += gt_translation[0];
+            p[1] += gt_translation[1];
+            p[2] += gt_translation[2];
+            const double norm = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+            bearing_vectors[i][0] = p[0] / norm;
+            bearing_vectors[i][1] = p[1] / norm;
+            bearing_vectors[i][2] = p[2] / norm;
+        }
+
+        double p3p_rotations[4][9];
+        double p3p_translations[4][3];
+        int n_solutions = pose_estimation::perspective_3_point(bearing_vectors, world_points, p3p_rotations, p3p_translations);
+
+        REQUIRE(n_solutions >= 1);
+        REQUIRE(n_solutions <= 4);
+
+        // Find matching solution by checking if it matches the ground truth pose.
+        // P3P can return multiple solutions with zero reprojection error for the 3 points,
+        // so we must check if the ground truth is among them.
+        bool found_match = false;
+        for (int s = 0; s < n_solutions && !found_match; ++s) {
+            // Check rotation matches ground truth
+            bool r_match = true;
+            for (int k = 0; k < 9; ++k) {
+                if (!is_value_approx(gt_rotation[k], p3p_rotations[s][k], 1e-4)) {
+                    r_match = false;
+                    break;
+                }
+            }
+            
+            // Check translation matches ground truth
+            bool t_match = true;
+            for (int k = 0; k < 3; ++k) {
+                if (!is_value_approx(gt_translation[k], p3p_translations[s][k], 1e-4)) {
+                    t_match = false;
+                    break;
+                }
+            }
+            
+            if (r_match && t_match) {
+                // Verify reprojection error is also small for this valid solution
+                double total_error = 0.0;
+                for (int i = 0; i < 3; ++i) {
+                    double proj[3];
+                    matrix_vector_multiply(&p3p_rotations[s][0], &world_points[i][0], proj);
+                    proj[0] += p3p_translations[s][0];
+                    proj[1] += p3p_translations[s][1];
+                    proj[2] += p3p_translations[s][2];
+                    const double proj_norm = std::sqrt(proj[0] * proj[0] + proj[1] * proj[1] + proj[2] * proj[2]);
+                    proj[0] /= proj_norm;
+                    proj[1] /= proj_norm;
+                    proj[2] /= proj_norm;
+                    double dx = proj[0] - bearing_vectors[i][0];
+                    double dy = proj[1] - bearing_vectors[i][1];
+                    double dz = proj[2] - bearing_vectors[i][2];
+                    total_error += dx * dx + dy * dy + dz * dz;
+                }
+                REQUIRE(total_error < 1e-10);
+                found_match = true;
+            }
+        }
+        REQUIRE(found_match);
+    }
+
     return EXIT_SUCCESS;
 }
