@@ -100,7 +100,7 @@ namespace frame {
                 kps.resize(static_cast<size_t>(prune_edge_count));
 
                 // Score features.
-                for (size_t i = 0; i < static_cast<size_t>(feature_count); ++i) {
+                for (size_t i = 0; i < kps.size(); ++i) {
                     const unsigned char* feature = image_grey.get_data() + static_cast<size_t>(kps[i].y) * image_grey.get_cols() + static_cast<size_t>(kps[i].x);
                     const float response = feature::score(feature, image_grey.get_cols());
                     kps[i].response = response;
