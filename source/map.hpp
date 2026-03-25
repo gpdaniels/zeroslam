@@ -27,6 +27,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -72,10 +73,60 @@ namespace map {
             factor_graph::loss_function_base* lossfunction = new factor_graph::loss_huber(math::sqrt(5.991));
             factor_graph::factor_graph ba(false);
             // Add frames.
-            int non_fixed_poses = 0;
             const int local_window_below = frame::frame::id_generator - 1 - local_window;
             const int local_window_fixed_below = local_window_below + 1;
-            for (const auto& [frame_id, frame] : this->frames) {
+            // Determine relevant frames and landmarks.
+            std::unordered_set<int> relevant_frame_ids;
+            std::unordered_set<int> active_landmark_ids;
+            if (local_window > 0) {
+                // Find non-fixed (active) frames.
+                std::unordered_set<int> active_frame_ids;
+                for (const auto& [frame_id, frame] : this->frames) {
+                    const bool fixed = ((frame_id == 0) || (frame_id == 1 && this->frames.size() > 2) || (frame_id < local_window_fixed_below));
+                    if (!fixed) {
+                        active_frame_ids.insert(frame_id);
+                    }
+                }
+
+                // Find landmarks seen by active frames and identify all frames that see them within a fixed horizon.
+                const int current_frame_id = frame::frame::id_generator - 1;
+                const int fixed_horizon_limit = 2 * local_window;
+                const int horizon_threshold = current_frame_id - fixed_horizon_limit;
+
+                for (const auto& [landmark_id, landmark_obs] : this->observations) {
+                    bool seen_by_active = false;
+                    for (const auto& obs : landmark_obs) {
+                        if (active_frame_ids.count(obs.first)) {
+                            seen_by_active = true;
+                            break;
+                        }
+                    }
+                    if (seen_by_active) {
+                        active_landmark_ids.insert(static_cast<int>(landmark_id));
+                        for (const auto& obs : landmark_obs) {
+                            if (obs.first >= horizon_threshold) {
+                                relevant_frame_ids.insert(obs.first);
+                            }
+                        }
+                    }
+                }
+                // Also ensure active frames are in relevant_frame_ids.
+                relevant_frame_ids.insert(active_frame_ids.begin(), active_frame_ids.end());
+            }
+            else {
+                // Global BA or window not specified: include everything.
+                for (const auto& [frame_id, _] : this->frames) {
+                    relevant_frame_ids.insert(frame_id);
+                }
+                for (const auto& [landmark_id, _] : this->landmarks) {
+                    active_landmark_ids.insert(static_cast<int>(landmark_id));
+                }
+            }
+
+            // Add frames.
+            int non_fixed_poses = 0;
+            for (const auto& frame_id : relevant_frame_ids) {
+                const auto& frame = this->frames.at(frame_id);
                 const lie::se3<double> v_se3(frame.rotation, frame.translation);
                 const bool fixed = ((frame_id == 0) || (frame_id == 1 && this->frames.size() > 2) || ((local_window > 0) && (frame_id < local_window_fixed_below)));
                 factor_graph::vertex_base* c = new factor_graph::vertex_pose();
@@ -88,12 +139,13 @@ namespace map {
             // Add landmarks.
             int non_fixed_landmarks = 0;
             int non_fixed_edges = 0;
-            for (const auto& [landmark_id, landmark] : this->landmarks) {
+            for (const auto& landmark_id : active_landmark_ids) {
                 // Only add the landmark if it is in a frame. Initially assume it is not.
                 bool landmark_added = false;
                 // Add edges.
-                for (const auto& [frame_id, kp_index] : this->observations[landmark_id]) {
+                for (const auto& [frame_id, kp_index] : this->observations.at(landmark_id)) {
                     // Only add the edge if it will do something.
+                    if (camera_vertexes.count(frame_id) == 0) continue;
                     if (camera_vertexes.at(frame_id)->is_fixed() && fix_landmarks) {
                         continue;
                     }
@@ -117,7 +169,7 @@ namespace map {
                     m->add_vertex(landmark_vertexes[landmark_id]);
                     m->set_loss_function(lossfunction);
                     ba.add_edge(m);
-                    observation_edges[observation_edges.size()] = m;
+                    observation_edges[static_cast<int>(observation_edges.size())] = m;
                     ++non_fixed_edges;
                 }
             }

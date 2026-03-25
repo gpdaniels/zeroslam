@@ -470,7 +470,7 @@ public:
         this->reconstruction.optimise(1, true, 50);
         this->reconstruction.cull();
         // Optimise the whole map.
-        this->reconstruction.optimise(0, false, 50);
+        this->reconstruction.optimise(10, false, 50);
         this->reconstruction.cull();
         // Print the map status and pose.
         std::printf("Map status: %zu frames, %zu landmarks.\n", this->reconstruction.frames.size(), this->reconstruction.landmarks.size());
