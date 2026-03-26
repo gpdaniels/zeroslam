@@ -61,7 +61,7 @@ The program will output a trajectory file in TUM format and a ply pointcloud fil
 
 ## License ##
 
-Copyright (C) 2025 Geoffrey Daniels. https://gpdaniels.com/
+Copyright (C) 2026 Geoffrey Daniels. https://gpdaniels.com/
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
