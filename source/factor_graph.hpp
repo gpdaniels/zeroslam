@@ -485,7 +485,7 @@ namespace factor_graph {
 
     public:
         // Solve the factor graph using Levenberg-Marquardt with Schur complement.
-        int solve(int iterations = 10) {
+        int solve(int iterations = 10, bool use_relative_convergence = false) {
             if (this->verbose) {
                 std::fflush(stdout);
             }
@@ -527,7 +527,12 @@ namespace factor_graph {
 
             // Levenberg-Marquardt optimisation loop.
             const int max_failures = 10;
-            const double stop_threshold = 1e-10 * this->chi_squared;
+            // Legacy stop threshold: fixed once, from the chi2 the whole solve() call started with, and never updated thereafter.
+            const double legacy_stop_threshold = 1e-10 * this->chi_squared;
+            // Relative convergence tolerance: stop once an outer iteration improves chi2 by less than this fraction of the chi2 it started from.
+            const double relative_tolerance = 1e-6;
+            // Floor to avoid comparing against a vanishing (or already-zero) chi2.
+            const double chi_squared_floor = 1e-12;
             int success_count = 0;
             for (int iter = 0; iter < iterations; ++iter) {
                 double last_chi_squared = this->chi_squared;
@@ -599,6 +604,7 @@ namespace factor_graph {
                     }
                 }
                 // Early exit criteria for optimisation.
+                const double stop_threshold = use_relative_convergence ? (relative_tolerance * std::max(last_chi_squared, chi_squared_floor)) : legacy_stop_threshold;
                 if ((failure_count >= max_failures) || ((last_chi_squared - this->chi_squared) < stop_threshold) || (!math::isfinite(this->damping_lambda))) {
                     break;
                 }

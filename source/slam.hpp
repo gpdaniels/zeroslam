@@ -468,8 +468,8 @@ public:
         // Optimise the pose of the new frame again.
         this->reconstruction.optimise(1, true, 50);
         this->reconstruction.cull();
-        // Optimise the whole map.
-        this->reconstruction.optimise(10, false, 50);
+        // Optimise the whole map, using the relative criterion.
+        this->reconstruction.optimise(10, false, 50, true);
         this->reconstruction.cull();
         // Print the map status and pose.
         std::printf("Map status: %zu frames, %zu landmarks.\n", this->reconstruction.frames.size(), this->reconstruction.landmarks.size());

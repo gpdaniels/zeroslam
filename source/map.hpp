@@ -62,7 +62,7 @@ namespace map {
             this->observations[landmark.id].push_back({ frame.id, kp_index });
         }
 
-        void optimise(int local_window, bool fix_landmarks, int rounds) {
+        void optimise(int local_window, bool fix_landmarks, int rounds, bool use_relative_convergence = false) {
             std::unordered_map<int, factor_graph::vertex_base*> camera_vertexes;
             std::unordered_map<int, factor_graph::vertex_base*> landmark_vertexes;
             std::unordered_map<int, factor_graph::edge_base*> observation_edges;
@@ -230,7 +230,7 @@ namespace map {
 
             // Run the optimisation.
             double initial_chi = ba.get_current_chi();
-            int number_of_accepted_rounds = ba.solve(rounds);
+            int number_of_accepted_rounds = ba.solve(rounds, use_relative_convergence);
             std::printf("Optimised: %f to %f error [frames: %d landmarks: %d edges: %d] [%d/%d valid rounds]\n", initial_chi, ba.get_current_chi(), non_fixed_poses, non_fixed_landmarks, non_fixed_edges, number_of_accepted_rounds, rounds);
             // Apply optimised vertices to frames and landmarks.
             for (const auto& [frame_id, vertex] : camera_vertexes) {

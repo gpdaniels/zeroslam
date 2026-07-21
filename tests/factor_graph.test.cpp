@@ -155,7 +155,8 @@ int main(int argc, char* argv[]) {
         }
 
         double initialChi2 = factor_graph.get_current_chi();
-        REQUIRE(factor_graph.solve(50));
+        // Exercise the relative-convergence criterion here.
+        REQUIRE(factor_graph.solve(50, true));
 
         std::fprintf(stdout, "LANDMARK: ORIGINAL --> NOISY --> OPTIMISED\n");
         double error_noisy = 0;
