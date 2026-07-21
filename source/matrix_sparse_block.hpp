@@ -159,10 +159,11 @@ namespace matrix {
             ASSERT(this->cols() == rhs.rows(), "LHS cols must equal RHS rows.");
             sparse_block<block_rows, block_rows> result(this->rows(), rhs.cols());
             result.sparse_blocks.reserve(this->sparse_blocks.size());
+            const size_t rhs_block_cols = rhs.cols() / sparse_block::block_rows;
             // For each block in the lhs matrix.
             for (auto lhs_iterator = this->sparse_blocks.cbegin(); lhs_iterator != this->sparse_blocks.cend(); ++lhs_iterator) {
-                // Scan each column of the rhs matrix.
-                for (size_t rhs_col = 0; rhs_col < rhs.cols(); ++rhs_col) {
+                // Scan each block column of the rhs matrix.
+                for (size_t rhs_col = 0; rhs_col < rhs_block_cols; ++rhs_col) {
                     // If there if a block in the rhs matrix with rhs_row == lhs_col.
                     auto rhs_iterator = rhs.sparse_blocks.find({ lhs_iterator->first.second, rhs_col });
                     if (rhs_iterator != rhs.sparse_blocks.end()) {
