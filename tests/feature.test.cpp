@@ -23,6 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -311,6 +312,119 @@ int main(int argc, char* argv[]) {
         for (unsigned int i = 0; i < 9; ++i) {
             REQUIRE(is_value_approx(features[i].response, (9 - i)));
         }
+    }
+
+    {
+        // Edge cases: zero, one, and two elements (both already ordered and requiring a swap).
+        constexpr static const auto by_response_descending = [](const feature::point& lhs, const feature::point& rhs) {
+            return lhs.response > rhs.response;
+        };
+
+        feature::point features_empty[1] = {};
+        feature::sort(&features_empty[0], 0, by_response_descending);
+
+        feature::point features_single[1] = { { 0, 0, 42, 0 } };
+        feature::sort(&features_single[0], 1, by_response_descending);
+        REQUIRE(is_value_approx(features_single[0].response, 42));
+
+        feature::point features_pair_sorted[2] = { { 0, 0, 2, 0 }, { 0, 0, 1, 0 } };
+        feature::sort(&features_pair_sorted[0], 2, by_response_descending);
+        REQUIRE(is_value_approx(features_pair_sorted[0].response, 2));
+        REQUIRE(is_value_approx(features_pair_sorted[1].response, 1));
+
+        feature::point features_pair_unsorted[2] = { { 0, 0, 1, 0 }, { 0, 0, 2, 0 } };
+        feature::sort(&features_pair_unsorted[0], 2, by_response_descending);
+        REQUIRE(is_value_approx(features_pair_unsorted[0].response, 2));
+        REQUIRE(is_value_approx(features_pair_unsorted[1].response, 1));
+    }
+
+    {
+        // Worst-case inputs for a naive first-element-pivot quicksort: already-sorted and reverse-sorted arrays.
+        // A comparator wrapper counts comparisons, which is asserted to stay within a small constant factor of
+        // n*log2(n); an O(n^2) algorithm would blow through this budget by orders of magnitude, which is a more
+        // robust regression check than a wall-clock timing assertion would be under CI load.
+        constexpr static const size_t count = 8192;
+        constexpr static const auto log2_ceil = [](size_t n) -> double {
+            double result = 1;
+            while (n > 1) {
+                n >>= 1;
+                ++result;
+            }
+            return result;
+        };
+        const double comparison_budget = static_cast<double>(count) * log2_ceil(count) * 20.0;
+
+        std::vector<feature::point> features_reverse_sorted(count);
+        for (size_t i = 0; i < count; ++i) {
+            features_reverse_sorted[i] = { 0, 0, static_cast<float>(i), 0 };
+        }
+        size_t comparisons_reverse_sorted = 0;
+        feature::sort(features_reverse_sorted.data(), features_reverse_sorted.size(), [&comparisons_reverse_sorted](const feature::point& lhs, const feature::point& rhs) {
+            ++comparisons_reverse_sorted;
+            return lhs.response > rhs.response;
+        });
+        for (size_t i = 0; i < count; ++i) {
+            REQUIRE(is_value_approx(features_reverse_sorted[i].response, static_cast<double>(count - 1 - i)));
+        }
+        REQUIRE(static_cast<double>(comparisons_reverse_sorted) < comparison_budget);
+
+        std::vector<feature::point> features_already_sorted(count);
+        for (size_t i = 0; i < count; ++i) {
+            features_already_sorted[i] = { 0, 0, static_cast<float>(count - 1 - i), 0 };
+        }
+        size_t comparisons_already_sorted = 0;
+        feature::sort(features_already_sorted.data(), features_already_sorted.size(), [&comparisons_already_sorted](const feature::point& lhs, const feature::point& rhs) {
+            ++comparisons_already_sorted;
+            return lhs.response > rhs.response;
+        });
+        for (size_t i = 0; i < count; ++i) {
+            REQUIRE(is_value_approx(features_already_sorted[i].response, static_cast<double>(count - 1 - i)));
+        }
+        REQUIRE(static_cast<double>(comparisons_already_sorted) < comparison_budget);
+    }
+
+    {
+        // Many-duplicate-value input: FAST corner responses are small integers, so ties are common in practice,
+        // and a two-way quicksort partition always routes elements equal to the pivot to the same side, which is
+        // the actual failure mode that made the original first-element-pivot quicksort quadratic in production.
+        constexpr static const size_t count = 8192;
+        constexpr static const auto log2_ceil = [](size_t n) -> double {
+            double result = 1;
+            while (n > 1) {
+                n >>= 1;
+                ++result;
+            }
+            return result;
+        };
+        const double comparison_budget = static_cast<double>(count) * log2_ceil(count) * 20.0;
+
+        std::vector<feature::point> features_few_distinct(count);
+        for (size_t i = 0; i < count; ++i) {
+            features_few_distinct[i] = { 0, 0, static_cast<float>(i % 5), 0 };
+        }
+        size_t comparisons_few_distinct = 0;
+        feature::sort(features_few_distinct.data(), features_few_distinct.size(), [&comparisons_few_distinct](const feature::point& lhs, const feature::point& rhs) {
+            ++comparisons_few_distinct;
+            return lhs.response > rhs.response;
+        });
+        for (size_t i = 1; i < count; ++i) {
+            REQUIRE(features_few_distinct[i - 1].response >= features_few_distinct[i].response);
+        }
+        REQUIRE(static_cast<double>(comparisons_few_distinct) < comparison_budget);
+
+        std::vector<feature::point> features_all_equal(count);
+        for (size_t i = 0; i < count; ++i) {
+            features_all_equal[i] = { static_cast<float>(i), 0, 7, 0 };
+        }
+        size_t comparisons_all_equal = 0;
+        feature::sort(features_all_equal.data(), features_all_equal.size(), [&comparisons_all_equal](const feature::point& lhs, const feature::point& rhs) {
+            ++comparisons_all_equal;
+            return lhs.response > rhs.response;
+        });
+        for (size_t i = 1; i < count; ++i) {
+            REQUIRE(features_all_equal[i - 1].response >= features_all_equal[i].response);
+        }
+        REQUIRE(static_cast<double>(comparisons_all_equal) < comparison_budget);
     }
 
     {

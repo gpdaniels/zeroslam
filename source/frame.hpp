@@ -128,9 +128,15 @@ namespace frame {
                 kps = std::move(features_suppressed);
 
                 // Distribute features.
-                // Note: This distribution function assumes points are sorted by response.
+                // Note: The distribution function assumes points are sorted by response, so sort first.
                 feature::sort(kps.data(), kps.size(), [](const feature::point& lhs, const feature::point& rhs) {
-                    return lhs.response > rhs.response;
+                    if (lhs.response != rhs.response) {
+                        return lhs.response > rhs.response;
+                    }
+                    if (lhs.y != rhs.y) {
+                        return lhs.y > rhs.y;
+                    }
+                    return lhs.x > rhs.x;
                 });
                 std::vector<feature::point> features_distributed(2000);
                 const int distributed_count = distribute(kps.data(), static_cast<int>(kps.size()), image_grey.get_cols(), image_grey.get_rows(), 500, static_cast<int>(features_distributed.size()), features_distributed.data());

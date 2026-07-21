@@ -338,34 +338,145 @@ namespace feature {
     }
 
     template <typename comparitor_function_type>
-    static inline void sort(
-        point* __restrict features,
+    static inline void sort_insertion(
+        point* __restrict const features,
         const size_t features_count,
-        const comparitor_function_type comparitor_function
+        const comparitor_function_type& comparitor_function
+        ) {
+        for (size_t i = 1; i < features_count; ++i) {
+            const point value = features[i];
+            size_t j = i;
+            while ((j > 0) && comparitor_function(value, features[j - 1])) {
+                features[j] = features[j - 1];
+                --j;
+            }
+            features[j] = value;
+        }
+    }
+
+    template <typename comparitor_function_type>
+    static inline void sort_heap(
+        point* __restrict const features,
+        const size_t features_count,
+        const comparitor_function_type& comparitor_function
     ) {
+        constexpr static const auto sift_down = [](
+            point* __restrict const features,
+            size_t index,
+            const size_t heap_size,
+            const comparitor_function_type& comparitor_function
+        ) {
+            while (true) {
+                size_t largest = index;
+                const size_t left = 2 * index + 1;
+                const size_t right = 2 * index + 2;
+                if ((left < heap_size) && comparitor_function(features[largest], features[left])) {
+                    largest = left;
+                }
+                if ((right < heap_size) && comparitor_function(features[largest], features[right])) {
+                    largest = right;
+                }
+                if (largest == index) {
+                    break;
+                }
+                const point temp = features[index];
+                features[index] = features[largest];
+                features[largest] = temp;
+                index = largest;
+            }
+        };
+        if (features_count < 2) {
+            return;
+        }
+        for (size_t i = features_count / 2; i-- > 0; ) {
+            sift_down(features, i, features_count, comparitor_function);
+        }
+        for (size_t i = features_count - 1; i > 0; --i) {
+            const point temp = features[0];
+            features[0] = features[i];
+            features[i] = temp;
+            sift_down(features, 0, i, comparitor_function);
+        }
+    }
+
+    template <typename comparitor_function_type>
+    static inline void sort_quick(
+        point* __restrict features,
+        size_t features_count,
+        const comparitor_function_type& comparitor_function,
+        int depth_limit
+    ) {
+        constexpr static const size_t insertion_sort_threshold = 16;
         constexpr static const auto swap = [](point& lhs, point& rhs) {
             point lhs_copy = lhs;
             lhs = rhs;
             rhs = lhs_copy;
         };
+        while (features_count > 1) {
+            if (features_count <= insertion_sort_threshold) {
+                sort_insertion(features, features_count, comparitor_function);
+                return;
+            }
+            if (depth_limit <= 0) {
+                sort_heap(features, features_count, comparitor_function);
+                return;
+            }
+            --depth_limit;
+            const size_t mid = features_count / 2;
+            const size_t last = features_count - 1;
+            if (comparitor_function(features[mid], features[0])) {
+                swap(features[0], features[mid]);
+            }
+            if (comparitor_function(features[last], features[mid])) {
+                swap(features[mid], features[last]);
+            }
+            if (comparitor_function(features[mid], features[0])) {
+                swap(features[0], features[mid]);
+            }
+            swap(features[0], features[mid]);
+
+            size_t index_left = 1;
+            size_t index_right = features_count;
+            while (index_left < index_right) {
+                if (comparitor_function(features[index_left], features[0])) {
+                    ++index_left;
+                }
+                else {
+                    --index_right;
+                    swap(features[index_left], features[index_right]);
+                }
+            }
+            --index_left;
+            swap(features[index_left], features[0]);
+            const size_t left_count = index_left + 1;
+            const size_t right_count = features_count - index_right;
+            if (left_count < right_count) {
+                sort_quick(features, left_count, comparitor_function, depth_limit);
+                features += index_right;
+                features_count = right_count;
+            }
+            else {
+                sort_quick(&features[index_right], right_count, comparitor_function, depth_limit);
+                features_count = left_count;
+            }
+        }
+    }
+
+    template <typename comparitor_function_type>
+    static inline void sort(
+        point* __restrict features,
+        const size_t features_count,
+        const comparitor_function_type comparitor_function
+    ) {
         if (features_count < 2) {
             return;
         }
-        size_t index_left = 1;
-        size_t index_right = features_count;
-        while (index_left < index_right) {
-            if (comparitor_function(features[index_left], features[0])) {
-                ++index_left;
-            }
-            else {
-                --index_right;
-                swap(features[index_left], features[index_right]);
-            }
+        int depth_limit = 0;
+        for (size_t n = features_count; n > 1; n >>= 1) {
+            ++depth_limit;
         }
-        --index_left;
-        swap(features[index_left], features[0]);
-        sort(&features[0], index_left + 1, comparitor_function);
-        sort(&features[index_right], features_count - index_right, comparitor_function);
+        depth_limit *= 2;
+        sort_quick(features, features_count, comparitor_function, depth_limit);
     }
 
     static inline int distribute(
