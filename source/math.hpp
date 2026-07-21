@@ -213,13 +213,21 @@ namespace math {
             return nan();
         if ((value == 0) || isinf(value))
             return value;
-        double estimate = value;
+#if __has_builtin(__builtin_sqrt)
+        return __builtin_sqrt(value);
+#else
+        unsigned long long int bits = 0;
+        __builtin_memcpy(&bits, &value, sizeof(bits));
+        bits = (bits >> 1) + 0x1FF7A3BEA91D9B1BULL;
+        double estimate = 0;
+        __builtin_memcpy(&estimate, &bits, sizeof(estimate));
         double previous = 0;
         while (estimate != previous) {
             previous = estimate;
             estimate = 0.5 * (estimate + value / estimate);
         }
         return estimate;
+#endif
     }
 
     template <typename type>
@@ -364,7 +372,28 @@ namespace math {
                                                                               : (angle > (pi() * 0.5)) ? pi() - angle
                                                                                                        : angle;
         const double remapped2 = remapped * remapped;
-        return sign * remapped * (1.0 + remapped2 * (-0.1666666 + remapped2 * (0.0083119 + remapped2 * (-0.00018488140289))));
+        double polynomial = 1.0 / 51090942171709440000.0;
+        polynomial *= remapped2;
+        polynomial -= 1.0 / 121645100408832000.0;
+        polynomial *= remapped2;
+        polynomial += 1.0 / 355687428096000.0;
+        polynomial *= remapped2;
+        polynomial -= 1.0 / 1307674368000.0;
+        polynomial *= remapped2;
+        polynomial += 1.0 / 6227020800.0;
+        polynomial *= remapped2;
+        polynomial -= 1.0 / 39916800.0;
+        polynomial *= remapped2;
+        polynomial += 1.0 / 362880.0;
+        polynomial *= remapped2;
+        polynomial -= 1.0 / 5040.0;
+        polynomial *= remapped2;
+        polynomial += 1.0 / 120.0;
+        polynomial *= remapped2;
+        polynomial -= 1.0 / 6.0;
+        polynomial *= remapped2;
+        polynomial += 1.0;
+        return sign * remapped * polynomial;
     }
 
     constexpr static inline double cos(double value) {
@@ -379,7 +408,28 @@ namespace math {
                                                                               : (angle > (pi() * 0.5)) ? pi() - angle
                                                                                                        : angle;
         const double remapped2 = remapped * remapped;
-        return sign * 1.0 * (1.0 + remapped2 * (-0.5000000 + remapped2 * (0.0415896 + remapped2 * (-0.00129810625032))));
+        double polynomial = 1.0 / 2432902008176640000.0;
+        polynomial *= remapped2;
+        polynomial -= 1.0 / 6402373705728000.0;
+        polynomial *= remapped2;
+        polynomial += 1.0 / 20922789888000.0;
+        polynomial *= remapped2;
+        polynomial -= 1.0 / 87178291200.0;
+        polynomial *= remapped2;
+        polynomial += 1.0 / 479001600.0;
+        polynomial *= remapped2;
+        polynomial -= 1.0 / 3628800.0;
+        polynomial *= remapped2;
+        polynomial += 1.0 / 40320.0;
+        polynomial *= remapped2;
+        polynomial -= 1.0 / 720.0;
+        polynomial *= remapped2;
+        polynomial += 1.0 / 24.0;
+        polynomial *= remapped2;
+        polynomial -= 1.0 / 2.0;
+        polynomial *= remapped2;
+        polynomial += 1.0;
+        return sign * polynomial;
     }
 
     constexpr static inline double asin(double value) {
@@ -398,6 +448,19 @@ namespace math {
         angle += 1.5707288;
         angle *= sqrt(1.0 - value_as_absolute);
         angle = (pi() * 0.5) - angle;
+        if (value_as_absolute < 1.0) {
+            if (value_as_absolute <= 0.70710678118654752) {
+                for (int iteration = 0; iteration < 4; ++iteration) {
+                    angle -= (sin(angle) - value_as_absolute) / cos(angle);
+                }
+            }
+            else {
+                const double cosine_target = sqrt((1.0 - value_as_absolute) * (1.0 + value_as_absolute));
+                for (int iteration = 0; iteration < 4; ++iteration) {
+                    angle += (cos(angle) - cosine_target) / sin(angle);
+                }
+            }
+        }
         return sign * angle;
     }
 
@@ -416,6 +479,19 @@ namespace math {
         angle *= value_as_absolute;
         angle += 1.5707288;
         angle *= sqrt(1.0 - value_as_absolute);
+        if (value_as_absolute < 1.0) {
+            if (value_as_absolute <= 0.70710678118654752) {
+                for (int iteration = 0; iteration < 4; ++iteration) {
+                    angle += (cos(angle) - value_as_absolute) / sin(angle);
+                }
+            }
+            else {
+                const double sine_target = sqrt((1.0 - value_as_absolute) * (1.0 + value_as_absolute));
+                for (int iteration = 0; iteration < 4; ++iteration) {
+                    angle -= (sin(angle) - sine_target) / cos(angle);
+                }
+            }
+        }
         return (value < 0.0) ? (pi() + sign * angle) : (sign * angle);
     }
 

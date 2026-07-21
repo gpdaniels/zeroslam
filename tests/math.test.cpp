@@ -206,14 +206,14 @@ int main(int argc, char* argv[]) {
         for (const double value : test_values) {
             const double lhs = math::sqrt(value);
             const double rhs = std::sqrt(value);
-            REQUIRE(is_value_approx(lhs, rhs));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-12));
         }
 
         for (int i = -10; i <= 10000; ++i) {
             const double value = static_cast<double>(i) / 10.0;
             const double lhs = math::sqrt(value);
             const double rhs = std::sqrt(value);
-            REQUIRE(is_value_approx(lhs, rhs));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-12));
         }
     }
 
@@ -257,14 +257,14 @@ int main(int argc, char* argv[]) {
                 continue;
             const double lhs = math::sin(value);
             const double rhs = std::sin(value);
-            REQUIRE(is_value_approx(lhs, rhs, 1e-4));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-12));
         }
 
         for (int i = -100000; i <= 100000; ++i) {
             const double value = static_cast<double>(i) / 100.0;
             const double lhs = math::sin(value);
             const double rhs = std::sin(value);
-            REQUIRE(is_value_approx(lhs, rhs, 1e-4));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-12));
         }
     }
 
@@ -274,14 +274,14 @@ int main(int argc, char* argv[]) {
                 continue;
             const double lhs = math::cos(value);
             const double rhs = std::cos(value);
-            REQUIRE(is_value_approx(lhs, rhs, 1e-4));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-12));
         }
 
         for (int i = -100000; i <= 100000; ++i) {
             const double value = static_cast<double>(i) / 100.0;
             const double lhs = math::cos(value);
             const double rhs = std::cos(value);
-            REQUIRE(is_value_approx(lhs, rhs, 1e-4));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-12));
         }
     }
 
@@ -289,7 +289,7 @@ int main(int argc, char* argv[]) {
         for (const double value : test_values) {
             const double lhs = math::asin(value);
             const double rhs = std::asin(value);
-            REQUIRE(is_value_approx(lhs, rhs, 1e-4));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-13));
         }
     }
 
@@ -297,7 +297,7 @@ int main(int argc, char* argv[]) {
         for (const double value : test_values) {
             const double lhs = math::acos(value);
             const double rhs = std::acos(value);
-            REQUIRE(is_value_approx(lhs, rhs, 1e-4));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-13));
         }
     }
 
