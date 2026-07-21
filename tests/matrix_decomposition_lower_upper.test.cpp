@@ -159,6 +159,36 @@ int main(int argc, char* argv[]) {
     }
 
     {
+        using test_type = double;
+        constexpr static const int width = 5;
+        constexpr static const int height = 3;
+
+        const test_type matrix[height][width] = {
+            { 1.0, 2.0, 3.0, 4.0, 5.0 },
+            { 6.0, 7.0, 8.0, 9.0, 10.0 },
+            { 2.0, 1.0, 4.0, 3.0, 6.0 }
+        };
+
+        test_type L1[height][height];
+        test_type U1[height][width];
+        test_type P1[height][height];
+        int swaps;
+        REQUIRE(matrix::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
+
+        test_type PA[height][width];
+        matrix_multiply(&P1[0][0], height, height, &matrix[0][0], width, height, &PA[0][0]);
+
+        test_type LU[height][width];
+        matrix_multiply(&L1[0][0], height, height, &U1[0][0], width, height, &LU[0][0]);
+
+        for (int i = 0; i < height; ++i) {
+            for (int j = 0; j < width; ++j) {
+                REQUIRE(is_value_approx(PA[i][j], LU[i][j], 1e-9));
+            }
+        }
+    }
+
+    {
         const float A[4][4] = {
             { -0.0f, 1.0f, 1.0f, -0.0f },
             { 2.0f, 2.0f, -2.0f, 3.0f },
@@ -209,6 +239,84 @@ int main(int argc, char* argv[]) {
 
         REQUIRE(is_value_approx(result3[0], 0.0f, 1e-6f));
         REQUIRE(is_value_approx(result3[1], 4.0f, 1e-6f));
+    }
+
+    {
+        constexpr static const auto permute_via_multiply = [](const float* p, const float* a, int width, int height, float* result) {
+            for (int y = 0; y < height; ++y) {
+                for (int x = 0; x < width; ++x) {
+                    float sum = 0;
+                    for (int k = 0; k < height; ++k) {
+                        sum += p[y * height + k] * a[k * width + x];
+                    }
+                    result[y * width + x] = sum;
+                }
+            }
+        };
+        constexpr static const auto permute_via_row_swap = [](const float* p, const float* a, int width, int height, float* result) {
+            for (int y = 0; y < height; ++y) {
+                // Each row of a permutation matrix has exactly one element equal to one.
+                for (int x = 0; x < height; ++x) {
+                    if (p[y * height + x] == 1.0f) {
+                        for (int c = 0; c < width; ++c) {
+                            result[y * width + c] = a[x * width + c];
+                        }
+                        break;
+                    }
+                }
+            }
+        };
+
+        // A permutation matrix built by swapping rows 0 and 2 of the identity.
+        const float p[3][3] = {
+            { 0.0f, 0.0f, 1.0f },
+            { 0.0f, 1.0f, 0.0f },
+            { 1.0f, 0.0f, 0.0f }
+        };
+
+        // Case 1: an ordinary matrix with no exact zero elements.
+        {
+            const float a[3][3] = {
+                { 1.5f, -2.25f, 3.125f },
+                { -4.0f, 5.0f, -6.5f },
+                { 7.0f, -8.0f, 9.0f }
+            };
+            float via_multiply[3][3];
+            float via_row_swap[3][3];
+            permute_via_multiply(&p[0][0], &a[0][0], 3, 3, &via_multiply[0][0]);
+            permute_via_row_swap(&p[0][0], &a[0][0], 3, 3, &via_row_swap[0][0]);
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j < 3; ++j) {
+                    REQUIRE(is_value_equal(via_multiply[i][j], via_row_swap[i][j]));
+                }
+            }
+        }
+
+        // Case 2: a matrix containing a signed negative zero being permuted into a new row.
+        {
+            const float a[3][3] = {
+                { -0.0f, 1.0f, 2.0f },
+                { 3.0f, 4.0f, 5.0f },
+                { 6.0f, 7.0f, 8.0f }
+            };
+            float via_multiply[3][3];
+            float via_row_swap[3][3];
+            permute_via_multiply(&p[0][0], &a[0][0], 3, 3, &via_multiply[0][0]);
+            permute_via_row_swap(&p[0][0], &a[0][0], 3, 3, &via_row_swap[0][0]);
+            // Row 2 of the permuted result comes from row 0 of a, i.e. the row containing -0.0.
+            REQUIRE(std::signbit(via_row_swap[2][0]));  // Row swap preserves the sign of -0.0.
+            REQUIRE(!std::signbit(via_multiply[2][0])); // Dense multiply loses it: (+0) + 1*(-0.0) == +0.
+            REQUIRE(via_row_swap[2][0] == via_multiply[2][0]); // Numerically equal despite the sign difference.
+            // All other (non-zero) elements are unaffected and remain bit-identical.
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j < 3; ++j) {
+                    if (i == 2 && j == 0) {
+                        continue;
+                    }
+                    REQUIRE(is_value_equal(via_multiply[i][j], via_row_swap[i][j]));
+                }
+            }
+        }
     }
 
     return EXIT_SUCCESS;

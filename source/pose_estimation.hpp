@@ -252,6 +252,14 @@ namespace pose_estimation {
                 constraint_matrix_lhs[y][x] = constraint_matrix[y][x];
             }
         }
+        type matrix_l[10][10];
+        type matrix_u[10][10];
+        type matrix_p[10][10];
+        if (!matrix::decompose_lower_upper<type>(&constraint_matrix_lhs[0][0], 10, 10, &matrix_l[0][0], &matrix_u[0][0], &matrix_p[0][0])) {
+            // The constraint matrix is singular (e.g. duplicated correspondences), so there are no valid solutions.
+            return 0;
+        }
+
         type eliminated_matrix[10][10];
         for (int x = 0; x < 10; ++x) {
             type constraint_matrix_rhs_column[10][1];
@@ -259,7 +267,7 @@ namespace pose_estimation {
                 constraint_matrix_rhs_column[y][0] = constraint_matrix[y][x + 10];
             }
             type eliminated_matrix_column[10][1];
-            if (!matrix::solve_lower_upper<type>(&constraint_matrix_lhs[0][0], &constraint_matrix_rhs_column[0][0], 10, 10, &eliminated_matrix_column[0][0])) {
+            if (!matrix::solve_lower_upper<type>(&matrix_l[0][0], &matrix_u[0][0], &matrix_p[0][0], &constraint_matrix_rhs_column[0][0], 10, 10, &eliminated_matrix_column[0][0])) {
                 // The constraint matrix is singular (e.g. duplicated correspondences), so there are no valid solutions.
                 return 0;
             }

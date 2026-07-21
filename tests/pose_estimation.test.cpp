@@ -319,6 +319,82 @@ int main(int argc, char* argv[]) {
         REQUIRE(found_match);
     }
 
+    // 3b) Test essential_5_point: the coefficient matrix is now factorized once and reused for all ten right hand side columns.
+    {
+        constexpr static const int num_samples = 8;
+        for (int sample = 0; sample < num_samples; ++sample) {
+            const double alpha = 0.1 + 0.05 * sample;
+            const double beta = -0.05 - 0.02 * sample;
+            const double gamma = 0.01 * sample;
+            const double rotation_x[3][3] = {
+                { 1, 0, 0 },
+                { 0, std::cos(alpha), -std::sin(alpha) },
+                { 0, std::sin(alpha), std::cos(alpha) }
+            };
+            const double rotation_y[3][3] = {
+                { std::cos(beta), 0, std::sin(beta) },
+                { 0, 1, 0 },
+                { -std::sin(beta), 0, std::cos(beta) }
+            };
+            const double rotation_z[3][3] = {
+                { std::cos(gamma), -std::sin(gamma), 0 },
+                { std::sin(gamma), std::cos(gamma), 0 },
+                { 0, 0, 1 }
+            };
+            double temp[9];
+            matrix_multiply(&rotation_z[0][0], &rotation_y[0][0], temp);
+            double rotation[9];
+            matrix_multiply(temp, &rotation_x[0][0], rotation);
+            const double translation[3] = { 0.4 + 0.05 * sample, -0.2 - 0.03 * sample, 1.0 + 0.1 * sample };
+            const double identity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+            const double zero[3] = { 0, 0, 0 };
+            const double world_points[5][3] = {
+                { 0.1 + 0.02 * sample, 0.2, 3.0 },
+                { -0.5, 0.4 - 0.01 * sample, 4.2 },
+                { 0.7, -0.3 + 0.02 * sample, 5.1 },
+                { -0.2 - 0.01 * sample, -0.1, 2.7 },
+                { 0.05 * sample, 0.0, 6.0 }
+            };
+
+            double lhs_points[10];
+            double rhs_points[10];
+            for (int i = 0; i < 5; ++i) {
+                project_point(identity, zero, &world_points[i][0], &lhs_points[2 * i]);
+                project_point(rotation, translation, &world_points[i][0], &rhs_points[2 * i]);
+            }
+
+            double essentials[10 * 9] = {};
+            const int solutions = pose_estimation::essential_5_point<double>(lhs_points, rhs_points, essentials);
+            REQUIRE(solutions >= 1);
+            REQUIRE(solutions <= 10);
+
+            for (int s = 0; s < solutions; ++s) {
+                const double* e = &essentials[s * 9];
+                for (int i = 0; i < 5; ++i) {
+                    const double lx = lhs_points[2 * i + 0];
+                    const double ly = lhs_points[2 * i + 1];
+                    const double rx = rhs_points[2 * i + 0];
+                    const double ry = rhs_points[2 * i + 1];
+                    // Epipolar constraint: [rx ry 1] * E * [lx ly 1]^T == 0.
+                    const double ex0 = e[0] * lx + e[1] * ly + e[2];
+                    const double ex1 = e[3] * lx + e[4] * ly + e[5];
+                    const double ex2 = e[6] * lx + e[7] * ly + e[8];
+                    const double constraint = rx * ex0 + ry * ex1 + ex2;
+                    REQUIRE(std::abs(constraint) < 1e-8);
+                }
+            }
+
+            // Repeating the exact same call must give the exact same result (the factorize-once
+            // decomposition is a pure function of its input, so this must hold bit-for-bit).
+            double essentials_repeat[10 * 9] = {};
+            const int solutions_repeat = pose_estimation::essential_5_point<double>(lhs_points, rhs_points, essentials_repeat);
+            REQUIRE(solutions_repeat == solutions);
+            for (int i = 0; i < solutions * 9; ++i) {
+                REQUIRE(essentials[i] == essentials_repeat[i]);
+            }
+        }
+    }
+
     // 4) Test recover_pose: use the true essential (from previous construction), call recover_pose and check reprojection of triangulated points
     {
         const double alpha = 0.25;

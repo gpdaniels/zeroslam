@@ -72,30 +72,25 @@ namespace matrix {
             scale = math::max(scale, math::abs(matrix_l[i * cols + i]));
         }
         const type epsilon = scale * static_cast<type>(1e-7);
-        type* lower_solution = new type[rows];
         for (int index_row = 0; index_row < rows; ++index_row) {
-            lower_solution[index_row] = column_rhs[index_row];
+            column_solution[index_row] = column_rhs[index_row];
             for (int j = 0; j < index_row; ++j) {
-                lower_solution[index_row] -= matrix_l[index_row * cols + j] * lower_solution[j];
+                column_solution[index_row] -= matrix_l[index_row * cols + j] * column_solution[j];
             }
             if (!(math::abs(matrix_l[index_row * cols + index_row]) > epsilon)) {
-                delete[] lower_solution;
                 return false;
             }
-            lower_solution[index_row] /= matrix_l[index_row * cols + index_row];
+            column_solution[index_row] /= matrix_l[index_row * cols + index_row];
         }
         for (int i = rows; i-- > 0;) {
-            column_solution[i] = lower_solution[i];
             for (int j = i + 1; j < rows; ++j) {
                 column_solution[i] -= matrix_l[j * cols + i] * column_solution[j];
             }
             if (!(math::abs(matrix_l[i * cols + i]) > epsilon)) {
-                delete[] lower_solution;
                 return false;
             }
             column_solution[i] /= matrix_l[i * cols + i];
         }
-        delete[] lower_solution;
         return true;
     }
 }
