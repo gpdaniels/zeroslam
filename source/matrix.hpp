@@ -258,6 +258,8 @@ namespace matrix {
             : matrix_rows(other.matrix_rows)
             , matrix_cols(other.matrix_cols)
             , matrix_data(other.matrix_data) {
+            other.matrix_rows = 0;
+            other.matrix_cols = 0;
             other.matrix_data = nullptr;
         }
 
@@ -279,10 +281,14 @@ namespace matrix {
         constexpr const matrix& operator=(matrix&& other) {
             if (&other == this)
                 return *this;
+            const size_t temp_rows = this->matrix_rows;
+            const size_t temp_cols = this->matrix_cols;
+            type* temp_data = this->matrix_data;
             this->matrix_rows = other.matrix_rows;
             this->matrix_cols = other.matrix_cols;
-            type* temp_data = this->matrix_data;
             this->matrix_data = other.matrix_data;
+            other.matrix_rows = temp_rows;
+            other.matrix_cols = temp_cols;
             other.matrix_data = temp_data;
             return *this;
         }

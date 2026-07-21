@@ -19,10 +19,21 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ASSERT_HPP
 
 #ifndef NDEBUG
+
+#if defined(_MSC_VER)
+#pragma warning(push, 0)
+#endif
+
+#include <cstdio>
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
 #if defined(_MSC_VER)
 #define __builtin_trap() __debugbreak()
 #endif
-#define ASSERT(ASSERTION, MESSAGE) static_cast<void>((ASSERTION) || (__builtin_trap(), 0))
+#define ASSERT(ASSERTION, MESSAGE) static_cast<void>((ASSERTION) || (std::fprintf(stderr, "ASSERT[%s:%d]: '%s' failed: %s\n", __FILE__, __LINE__, #ASSERTION, MESSAGE), __builtin_trap(), 0))
 #else
 #define ASSERT(ASSERTION, MESSAGE) static_cast<void>(0)
 #endif

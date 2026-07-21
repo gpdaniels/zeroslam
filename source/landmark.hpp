@@ -46,25 +46,25 @@ namespace landmark {
 }
 
 namespace landmark {
-    point::point() {
+    inline point::point() {
         this->id = -1;
         this->location = matrix::matrix<double, 3, 1>::zero();
         this->colour = matrix::matrix<double, 3, 1>::zero();
     }
 
-    point::point(const matrix::matrix<double, 3, 1>& input_location, const matrix::matrix<double, 3, 1>& input_colour) {
+    inline point::point(const matrix::matrix<double, 3, 1>& input_location, const matrix::matrix<double, 3, 1>& input_colour) {
         this->id = point::id_generator++;
         this->location = input_location;
         this->colour = input_colour;
     }
 
-    line::line() {
+    inline line::line() {
         this->id = -1;
         this->locations[0] = matrix::matrix<double, 3, 1>::zero();
         this->locations[1] = matrix::matrix<double, 3, 1>::zero();
     }
 
-    line::line(const matrix::matrix<double, 3, 1>& input_location_1, const matrix::matrix<double, 3, 1>& input_location_2) {
+    inline line::line(const matrix::matrix<double, 3, 1>& input_location_1, const matrix::matrix<double, 3, 1>& input_location_2) {
         this->id = line::id_generator++;
         this->locations[0] = input_location_1;
         this->locations[1] = input_location_2;

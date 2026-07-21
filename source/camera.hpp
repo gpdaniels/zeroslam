@@ -58,17 +58,17 @@ namespace camera {
 #include "assert.hpp"
 
 namespace camera {
-    pinhole::pinhole()
+    inline pinhole::pinhole()
         : focal_lengths{ 1.0, 1.0 }
         , centre_points{ 0.5, 0.5 } {
     }
 
-    pinhole::pinhole(const double* const __restrict parameters, const size_t parameters_length) {
+    inline pinhole::pinhole(const double* const __restrict parameters, const size_t parameters_length) {
         ASSERT(parameters_length == pinhole::parameter_count, "Parameters length must match internal number of parameters.");
         this->set_parameters(parameters, parameters_length);
     }
 
-    void pinhole::set_parameters(const double* const __restrict parameters, const size_t parameters_length) {
+    inline void pinhole::set_parameters(const double* const __restrict parameters, const size_t parameters_length) {
         ASSERT(parameters_length == pinhole::parameter_count, "Parameters length must match internal number of parameters.");
         static_cast<void>(parameters_length);
         this->focal_lengths[0] = parameters[0];
@@ -79,7 +79,7 @@ namespace camera {
         ASSERT(this->focal_lengths[1] > 0.0, "Vertical focal length must be greater than zero.");
     }
 
-    void pinhole::get_parameters(double* const __restrict parameters, const size_t parameters_length) const {
+    inline void pinhole::get_parameters(double* const __restrict parameters, const size_t parameters_length) const {
         ASSERT(parameters_length == pinhole::parameter_count, "Parameters length must match internal number of parameters.");
         static_cast<void>(parameters_length);
         parameters[0] = this->focal_lengths[0];
@@ -88,7 +88,7 @@ namespace camera {
         parameters[3] = this->centre_points[1];
     }
 
-    bool pinhole::project(
+    inline bool pinhole::project(
         const double* const __restrict point_xyz,
         double* const __restrict point_xy,
         double* const __restrict jacobian_projection,
@@ -144,7 +144,7 @@ namespace camera {
         return true;
     }
 
-    bool pinhole::unproject(
+    inline bool pinhole::unproject(
         const double* const __restrict point_xy,
         double* const __restrict ray_xyz,
         double* const __restrict jacobian_unprojection
