@@ -76,11 +76,15 @@ namespace image {
         const image& operator=(const image& other) {
             if (&other == this)
                 return *this;
+            delete[] this->data;
             this->rows = other.rows;
             this->cols = other.cols;
-            this->data = new unsigned char[other.rows * other.cols];
-            for (size_t i = 0; i < this->rows * this->cols; ++i) {
-                this->data[i] = other.data[i];
+            this->data = nullptr;
+            if (other.data != nullptr) {
+                this->data = new unsigned char[other.rows * other.cols];
+                for (size_t i = 0; i < this->rows * this->cols; ++i) {
+                    this->data[i] = other.data[i];
+                }
             }
             return *this;
         }
@@ -88,10 +92,14 @@ namespace image {
         const image& operator=(image&& other) {
             if (&other == this)
                 return *this;
+            const size_t temp_rows = this->rows;
+            const size_t temp_cols = this->cols;
+            unsigned char* temp_data = this->data;
             this->rows = other.rows;
             this->cols = other.cols;
-            unsigned char* temp_data = this->data;
             this->data = other.data;
+            other.rows = temp_rows;
+            other.cols = temp_cols;
             other.data = temp_data;
             return *this;
         }

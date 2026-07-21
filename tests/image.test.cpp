@@ -112,6 +112,88 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+    {
+        // Copy-assignment of a bigger image onto a smaller non-empty image.
+        image::image smaller(5, 10);
+        for (size_t i = 0; i < smaller.get_rows() * smaller.get_cols(); ++i) {
+            smaller.get_data()[i] = 7;
+        }
+        image::image bigger(10, 20);
+        for (size_t i = 0; i < bigger.get_rows() * bigger.get_cols(); ++i) {
+            bigger.get_data()[i] = i;
+        }
+        smaller = bigger;
+        REQUIRE(smaller.get_rows() == 10);
+        REQUIRE(smaller.get_cols() == 20);
+        REQUIRE(smaller.get_data() != bigger.get_data());
+        for (size_t i = 0; i < smaller.get_rows() * smaller.get_cols(); ++i) {
+            REQUIRE(smaller.get_data()[i] == static_cast<unsigned char>(i));
+        }
+    }
+    {
+        // Copy-assignment of a smaller image onto a bigger non-empty image.
+        image::image bigger(10, 20);
+        for (size_t i = 0; i < bigger.get_rows() * bigger.get_cols(); ++i) {
+            bigger.get_data()[i] = 7;
+        }
+        image::image smaller(5, 10);
+        for (size_t i = 0; i < smaller.get_rows() * smaller.get_cols(); ++i) {
+            smaller.get_data()[i] = i;
+        }
+        bigger = smaller;
+        REQUIRE(bigger.get_rows() == 5);
+        REQUIRE(bigger.get_cols() == 10);
+        REQUIRE(bigger.get_data() != smaller.get_data());
+        for (size_t i = 0; i < bigger.get_rows() * bigger.get_cols(); ++i) {
+            REQUIRE(bigger.get_data()[i] == static_cast<unsigned char>(i));
+        }
+    }
+    {
+        // Copy-assignment from an empty image onto a non-empty image.
+        image::image image(10, 20);
+        image::image empty;
+        image = empty;
+        REQUIRE(image.get_rows() == 0);
+        REQUIRE(image.get_cols() == 0);
+        REQUIRE(image.get_data() == nullptr);
+    }
+    {
+        // Self-assignment.
+        image::image image(10, 20);
+        for (size_t i = 0; i < image.get_rows() * image.get_cols(); ++i) {
+            image.get_data()[i] = i;
+        }
+        image::image& self = image;
+        image = self;
+        REQUIRE(image.get_rows() == 10);
+        REQUIRE(image.get_cols() == 20);
+        for (size_t i = 0; i < image.get_rows() * image.get_cols(); ++i) {
+            REQUIRE(image.get_data()[i] == static_cast<unsigned char>(i));
+        }
+    }
+    {
+        // Move-assignment onto a differently-sized non-empty image.
+        image::image source(10, 20);
+        for (size_t i = 0; i < source.get_rows() * source.get_cols(); ++i) {
+            source.get_data()[i] = i;
+        }
+        unsigned char* source_data = source.get_data();
+        image::image target(5, 10);
+        target = static_cast<image::image&&>(source);
+        REQUIRE(target.get_rows() == 10);
+        REQUIRE(target.get_cols() == 20);
+        REQUIRE(target.get_data() == source_data);
+        for (size_t i = 0; i < target.get_rows() * target.get_cols(); ++i) {
+            REQUIRE(target.get_data()[i] == static_cast<unsigned char>(i));
+        }
+        // The moved-from image must remain consistent: its dimensions must match the buffer it holds.
+        REQUIRE(source.get_rows() == 5);
+        REQUIRE(source.get_cols() == 10);
+        REQUIRE(source.get_data() != nullptr);
+        for (size_t i = 0; i < source.get_rows() * source.get_cols(); ++i) {
+            source.get_data()[i] = 0;
+        }
+    }
 
     return EXIT_SUCCESS;
 }
