@@ -113,6 +113,44 @@ int main(int argc, char* argv[]) {
         }
     }
     {
+        // Upscaling reads source coordinates with negative offsets, these must be clamped in-bounds.
+        image::image image(8, 8);
+        for (size_t i = 0; i < image.get_rows(); ++i) {
+            for (size_t j = 0; j < image.get_cols(); ++j) {
+                image.get_data()[i * image.get_cols() + j] = i * image.get_cols() + j;
+            }
+        }
+        image::image resized(16, 16);
+        image::resize(image.get_data(), image.get_cols(), image.get_rows(), resized.get_cols(), resized.get_rows(), resized.get_data(), image::interpolate_linear);
+        // The corners of the upscaled image must match the corners of the source image.
+        REQUIRE(resized.get_data()[0 * resized.get_cols() + 0] == 0);
+        REQUIRE(resized.get_data()[0 * resized.get_cols() + 15] == 7);
+        REQUIRE(resized.get_data()[15 * resized.get_cols() + 0] == 56);
+        REQUIRE(resized.get_data()[15 * resized.get_cols() + 15] == 63);
+        // Every interpolated value must lie within the range of the source values.
+        for (size_t i = 0; i < resized.get_rows(); ++i) {
+            for (size_t j = 0; j < resized.get_cols(); ++j) {
+                REQUIRE(resized.get_data()[i * resized.get_cols() + j] <= 63);
+            }
+        }
+    }
+    {
+        // Downscaling regression, the interpolated values must not change.
+        unsigned char data[4][4] = {
+            { 0, 1, 2, 3 },
+            { 4, 5, 6, 7 },
+            { 8, 9, 10, 11 },
+            { 12, 13, 14, 15 }
+        };
+        image::image image(4, 4, &data[0][0]);
+        image::image resized(2, 2);
+        image::resize(image.get_data(), image.get_cols(), image.get_rows(), resized.get_cols(), resized.get_rows(), resized.get_data(), image::interpolate_linear);
+        REQUIRE(resized.get_data()[0 * resized.get_cols() + 0] == 3);
+        REQUIRE(resized.get_data()[0 * resized.get_cols() + 1] == 5);
+        REQUIRE(resized.get_data()[1 * resized.get_cols() + 0] == 11);
+        REQUIRE(resized.get_data()[1 * resized.get_cols() + 1] == 13);
+    }
+    {
         // Copy-assignment of a bigger image onto a smaller non-empty image.
         image::image smaller(5, 10);
         for (size_t i = 0; i < smaller.get_rows() * smaller.get_cols(); ++i) {

@@ -226,12 +226,12 @@ namespace image {
         float offset_x,
         float offset_y
     ) {
-        const int floor_x = math::floor(offset_x);
-        const int floor_y = math::floor(offset_y);
+        const int floor_x = math::max(0, math::min(static_cast<int>(math::floor(offset_x)), static_cast<int>(source_width) - 1));
+        const int floor_y = math::max(0, math::min(static_cast<int>(math::floor(offset_y)), static_cast<int>(source_height) - 1));
         const int ceil_x = math::min(floor_x + 1, static_cast<int>(source_width) - 1);
         const int ceil_y = math::min(floor_y + 1, static_cast<int>(source_height) - 1);
-        const float weight_x = offset_x - floor_x;
-        const float weight_y = offset_y - floor_y;
+        const float weight_x = math::max(0.0f, math::min(offset_x - static_cast<float>(floor_x), 1.0f));
+        const float weight_y = math::max(0.0f, math::min(offset_y - static_cast<float>(floor_y), 1.0f));
         return static_cast<unsigned char>(
             math::round(
                 static_cast<float>(data[floor_y * source_width + floor_x]) * (1.0f - weight_x) * (1.0f - weight_y) +
