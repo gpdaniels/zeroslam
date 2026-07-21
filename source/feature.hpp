@@ -453,6 +453,7 @@ namespace feature {
     ) {
         const int max_iterations = 10;
         const int window_size = 5;
+        const float max_offset = 4.0f;
         const float eps = 1e-6f;
 
         // Initialize offset.
@@ -511,7 +512,9 @@ namespace feature {
             offset_y = new_offset_y;
 
             if (diff_x * diff_x + diff_y * diff_y < eps) {
-                return true;
+                // Reject refinements that converge too far from the detected feature, these are unreliable extrapolations that can teleport the feature outside the safe image border.
+                // Note: The refined location must remain strictly interior to the measurement window, as gradient estimates at the window edge already sample pixels outside it.
+                return (math::abs(offset_x) <= max_offset) && (math::abs(offset_y) <= max_offset);
             }
         }
 
@@ -652,39 +655,34 @@ namespace feature {
             return static_cast<unsigned char>(math::min(math::max(int(math::round(value)), 0), 255));
         };
 
-        constexpr int patch_size = 31;
+        constexpr int patch_size = 41;
         constexpr int half_size = patch_size / 2;
 
-        // Image coordinates of the center point
-        const float center_x = math::floor(offset_x);
-        const float center_y = math::floor(offset_y);
+        // Split the offset into an integer part and a fractional part in [0, 1).
+        // Note: The floor ensures negative offsets are handled consistently, e.g. an offset of -0.3 becomes an integer part of -1 and a fraction of +0.7.
+        const int int_x = static_cast<int>(math::floor(static_cast<double>(offset_x)));
+        const int int_y = static_cast<int>(math::floor(static_cast<double>(offset_y)));
+        const float fx = offset_x - static_cast<float>(int_x);
+        const float fy = offset_y - static_cast<float>(int_y);
+
+        // The bilinear interpolation weights are constant across the patch.
+        const float w00 = (1 - fx) * (1 - fy);
+        const float w01 = fx * (1 - fy);
+        const float w10 = (1 - fx) * fy;
+        const float w11 = fx * fy;
+
+        // Pointer to the pixel at the integer part of the refined location, so the patch is centered on the refined subpixel location.
+        const unsigned char* __restrict const center = data + int_y * stride + int_x;
 
         for (int dy = -half_size; dy <= half_size; ++dy) {
             for (int dx = -half_size; dx <= half_size; ++dx) {
-                // Subpixel offset from center
-                const float src_x = static_cast<float>(dx) + (offset_x - center_x);
-                const float src_y = static_cast<float>(dy) + (offset_y - center_y);
-
-                // Integer part
-                const int ix = static_cast<int>(math::floor(src_x));
-                const int iy = static_cast<int>(math::floor(src_y));
-
-                // Fractional part
-                const float fx = src_x - static_cast<float>(ix);
-                const float fy = src_y - static_cast<float>(iy);
-
                 // Pointer to top-left pixel of the interpolation square
-                const unsigned char* base = data + iy * stride + ix;
+                const unsigned char* base = center + dy * stride + dx;
 
                 const float i00 = static_cast<float>(base[0]);
                 const float i01 = static_cast<float>(base[1]);
                 const float i10 = static_cast<float>(base[stride]);
                 const float i11 = static_cast<float>(base[stride + 1]);
-
-                const float w00 = (1 - fx) * (1 - fy);
-                const float w01 = fx * (1 - fy);
-                const float w10 = (1 - fx) * fy;
-                const float w11 = fx * fy;
 
                 const float val = i00 * w00 + i01 * w01 + i10 * w10 + i11 * w11;
 
@@ -721,7 +719,7 @@ namespace feature {
     static inline void describe(
         const unsigned char* __restrict const data,
         const int stride,
-        const float angle_degrees,
+        const float angle_radians,
         descriptor& descriptor
     ) {
         constexpr static const int pattern_size = 256;
@@ -983,9 +981,6 @@ namespace feature {
             { { 7, 0 }, { 12, -2 } },
             { { -1, -6 }, { 0, -11 } }
         };
-        constexpr static const float pi = 3.141592653589793f;
-        constexpr static const float degrees_to_radians = (pi / 180.0f);
-        const float angle_radians = angle_degrees * degrees_to_radians;
         const float angle_sin = static_cast<float>(math::sin(static_cast<double>(angle_radians)));
         const float angle_cos = static_cast<float>(math::cos(static_cast<double>(angle_radians)));
         for (int index = 0; index < pattern_size; index += 8) {

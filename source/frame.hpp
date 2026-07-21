@@ -93,9 +93,13 @@ namespace frame {
                 kps.resize(static_cast<size_t>(feature_count));
 
                 // Prune edge features.
+                // Note: The border must cover all sampling performed around a keypoint:
+                // - The rotated descriptor pattern reads up to round(13 * sqrt(2)) = 18 pixels from the feature.
+                // - The subpixel patch samples up to 20 (patch radius) + 4 (maximum accepted refinement offset) + 1 (bilinear interpolation) = 25 pixels from the feature.
+                constexpr static const int border = 25;
                 size_t prune_edge_count = kps.size();
                 prune(kps.data(), prune_edge_count, [&image_grey](const feature::point& feature) {
-                    return (feature.x < 16) || (feature.x > static_cast<int>(image_grey.get_cols()) - 16) || (feature.y < 16) || (feature.y > static_cast<int>(image_grey.get_rows()) - 16);
+                    return (feature.x < border) || (feature.x >= static_cast<int>(image_grey.get_cols()) - border) || (feature.y < border) || (feature.y >= static_cast<int>(image_grey.get_rows()) - border);
                 });
                 kps.resize(static_cast<size_t>(prune_edge_count));
 
@@ -149,10 +153,10 @@ namespace frame {
                     }
 
                     // If successful, calculate descriptors from a subpixel patch.
-                    unsigned char patch[31][31];
+                    unsigned char patch[41][41];
                     feature::patch_bilinear(feature, image_grey.get_cols(), offset_x, offset_y, &patch[0][0]);
-                    const float angle = feature::dominant_angle(&patch[15][15], 31);
-                    feature::describe(&patch[15][15], 31, angle, des[i]);
+                    const float angle = feature::dominant_angle(&patch[20][20], 41);
+                    feature::describe(&patch[20][20], 41, angle, des[i]);
                     kps[i].x += offset_x;
                     kps[i].y += offset_y;
                 }

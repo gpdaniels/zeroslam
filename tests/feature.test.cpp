@@ -409,6 +409,19 @@ int main(int argc, char* argv[]) {
                 REQUIRE(is_value_approx(offset_y, -y, 1e-2));
             }
         }
+        {
+            // Refinements that converge more than four pixels from the detected feature must be rejected by the acceptance gate.
+            // Note: The subpixel corner sits a fraction of a pixel inside the dark quadrant, so starting 4 pixels beyond the
+            // corner the refinement converges to an offset just over 4 pixels and is rejected, whereas starting 4 pixels
+            // before the corner it converges to an offset just under 4 pixels and is accepted.
+            float offset_x = 0;
+            float offset_y = 0;
+            REQUIRE(!feature::refine(&data[data_height / 2 + 4][data_width / 2 + 4], data_width, offset_x, offset_y));
+            REQUIRE(!feature::refine(&data[data_height / 2 + 6][data_width / 2 + 6], data_width, offset_x, offset_y));
+            REQUIRE(feature::refine(&data[data_height / 2 - 4][data_width / 2 - 4], data_width, offset_x, offset_y));
+            REQUIRE(is_value_approx(offset_x, +4.0, 1e-2));
+            REQUIRE(is_value_approx(offset_y, +4.0, 1e-2));
+        }
     }
 
     {
@@ -531,8 +544,92 @@ int main(int argc, char* argv[]) {
             0x86
         };
         feature::descriptor descriptor;
-        feature::describe(&data[data_height / 2][data_width / 2], data_width, 190.0f, descriptor);
+        feature::describe(&data[data_height / 2][data_width / 2], data_width, 190.0f * (3.141592653589793f / 180.0f), descriptor);
         REQUIRE(are_values_approx(&descriptor.data[0], &descriptor_expected.data[0], 256 / 8));
+    }
+
+    {
+        // Descriptors should be rotation invariant when the describe angle matches the rotation of the image.
+        constexpr static const int data_size = 64;
+        constexpr static const int data_center = data_size / 2;
+        unsigned char data[data_size][data_size];
+        unsigned char data_rotated[data_size][data_size];
+        for (int y = 0; y < data_size; ++y) {
+            for (int x = 0; x < data_size; ++x) {
+                // A bright corner covering one quadrant with a deterministic texture on top.
+                const unsigned char corner = static_cast<unsigned char>(((x >= data_center) && (y >= data_center)) * 128);
+                const unsigned char texture = static_cast<unsigned char>((x * 7 + y * 13) % 64);
+                data[y][x] = static_cast<unsigned char>(corner + texture);
+                data_rotated[y][x] = 0;
+            }
+        }
+        // Rotate the image by exactly 90 degrees about the center, such that data_rotated(R * offset) == data(offset).
+        for (int v = -data_center + 1; v < data_center; ++v) {
+            for (int u = -data_center + 1; u < data_center; ++u) {
+                data_rotated[data_center + v][data_center + u] = data[data_center - u][data_center + v];
+            }
+        }
+        constexpr static const float pi = 3.141592653589793f;
+        feature::descriptor descriptor_0a;
+        feature::descriptor descriptor_0b;
+        feature::descriptor descriptor_90;
+        feature::describe(&data[data_center][data_center], data_size, 0.0f, descriptor_0a);
+        feature::describe(&data[data_center][data_center], data_size, 0.0f, descriptor_0b);
+        feature::describe(&data_rotated[data_center][data_center], data_size, pi / 2.0f, descriptor_90);
+        REQUIRE(feature::distance<256>(&descriptor_0a.data[0], &descriptor_0b.data[0]) == 0);
+        REQUIRE(feature::distance<256>(&descriptor_0a.data[0], &descriptor_90.data[0]) <= 40);
+    }
+
+    {
+        // A feature at exactly the frame pruning border with a maximal accepted refinement offset must not read outside the image.
+        // Note: The image is heap allocated so that any out of bounds read is caught when running under the address sanitizer.
+        constexpr static const int border = 25;
+        constexpr static const int data_size = 64;
+        unsigned char* data = new unsigned char[data_size * data_size];
+        for (int y = 0; y < data_size; ++y) {
+            for (int x = 0; x < data_size; ++x) {
+                data[y * data_size + x] = static_cast<unsigned char>((x * 5 + y * 11) % 256);
+            }
+        }
+        const int positions[2] = { border, data_size - 1 - border };
+        const float offsets[3] = { -4.0f, 0.0f, +4.0f };
+        for (int py : positions) {
+            for (int px : positions) {
+                const unsigned char* feature = data + py * data_size + px;
+                for (float oy : offsets) {
+                    for (float ox : offsets) {
+                        unsigned char patch[41][41];
+                        feature::patch_bilinear(feature, data_size, ox, oy, &patch[0][0]);
+                        feature::descriptor descriptor;
+                        feature::describe(&patch[20][20], 41, feature::dominant_angle(&patch[20][20], 41), descriptor);
+                        // The patch must be centered on the refined location, for integer offsets it is an exact copy of the shifted image.
+                        for (int dy = -20; dy <= 20; ++dy) {
+                            for (int dx = -20; dx <= 20; ++dx) {
+                                REQUIRE(patch[20 + dy][20 + dx] == data[(py + static_cast<int>(oy) + dy) * data_size + (px + static_cast<int>(ox) + dx)]);
+                            }
+                        }
+                    }
+                }
+                // The unrefined path samples the image directly.
+                feature::descriptor descriptor;
+                feature::describe(feature, data_size, feature::dominant_angle(feature, data_size), descriptor);
+            }
+        }
+        {
+            // The patch must interpolate fractional offsets about the refined location, including negative fractional offsets.
+            const int py = data_size / 2;
+            const int px = data_size / 2;
+            const unsigned char* feature = data + py * data_size + px;
+            unsigned char patch[41][41];
+            feature::patch_bilinear(feature, data_size, -0.25f, +0.5f, &patch[0][0]);
+            const float expected =
+                0.25f * 0.5f * static_cast<float>(data[(py + 0) * data_size + (px - 1)]) +
+                0.75f * 0.5f * static_cast<float>(data[(py + 0) * data_size + (px + 0)]) +
+                0.25f * 0.5f * static_cast<float>(data[(py + 1) * data_size + (px - 1)]) +
+                0.75f * 0.5f * static_cast<float>(data[(py + 1) * data_size + (px + 0)]);
+            REQUIRE(patch[20][20] == static_cast<unsigned char>(math::round(expected)));
+        }
+        delete[] data;
     }
 
     {
