@@ -209,7 +209,12 @@ public:
             matrix::matrix<double, 3, 3> rotation;
             matrix::matrix<double, 3, 1> translation;
             std::vector<matrix::matrix<double, 3, 1>> match_point_triangulated_inlier(inliers);
-            pose_estimation::essential_matrix<double>::recover_pose(&model.essential[0][0], match_point_current_inlier.data()->data(), match_point_previous_inlier.data()->data(), inliers, rotation.data(), translation.data(), match_point_triangulated_inlier.data()->data());
+            size_t recover_pose_support = 0;
+            if (!pose_estimation::essential_matrix<double>::recover_pose(&model.essential[0][0], match_point_current_inlier.data()->data(), match_point_previous_inlier.data()->data(), inliers, rotation.data(), translation.data(), match_point_triangulated_inlier.data()->data(), &recover_pose_support)) {
+                std::fprintf(stderr, "Failed to calculate the initial pose transform.\n");
+                std::exit(1);
+            }
+            std::printf("Support: %zu of %zu inliers support the recovered pose.\n", recover_pose_support, inliers);
 
             // Recover pose returns pose 2 to pose 1 rather than pose 1 to pose 2, so invert it.
             rotation = matrix::transpose(rotation);

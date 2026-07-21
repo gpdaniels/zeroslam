@@ -259,7 +259,10 @@ namespace pose_estimation {
                 constraint_matrix_rhs_column[y][0] = constraint_matrix[y][x + 10];
             }
             type eliminated_matrix_column[10][1];
-            matrix::solve_lower_upper<type>(&constraint_matrix_lhs[0][0], &constraint_matrix_rhs_column[0][0], 10, 10, &eliminated_matrix_column[0][0]);
+            if (!matrix::solve_lower_upper<type>(&constraint_matrix_lhs[0][0], &constraint_matrix_rhs_column[0][0], 10, 10, &eliminated_matrix_column[0][0])) {
+                // The constraint matrix is singular (e.g. duplicated correspondences), so there are no valid solutions.
+                return 0;
+            }
             for (int y = 0; y < 10; ++y) {
                 eliminated_matrix[y][x] = eliminated_matrix_column[y][0];
             }
@@ -809,10 +812,27 @@ namespace pose_estimation {
                 }
             }
 
-            const type matrix_vt_row_v0_normalization = type(1.0) / math::sqrt(essential[0] * essential[0] + essential[1] * essential[1] + essential[2] * essential[2]);
-            matrix_vt[0] = essential[0] * matrix_vt_row_v0_normalization;
-            matrix_vt[1] = essential[1] * matrix_vt_row_v0_normalization;
-            matrix_vt[2] = essential[2] * matrix_vt_row_v0_normalization;
+            const type essential_row_0_norm_squared = essential[0] * essential[0] + essential[1] * essential[1] + essential[2] * essential[2];
+            const type essential_row_1_norm_squared = essential[3] * essential[3] + essential[4] * essential[4] + essential[5] * essential[5];
+            const type essential_row_2_norm_squared = essential[6] * essential[6] + essential[7] * essential[7] + essential[8] * essential[8];
+            const type essential_row_max_norm_squared = math::max(essential_row_0_norm_squared, math::max(essential_row_1_norm_squared, essential_row_2_norm_squared));
+
+            if (essential_row_0_norm_squared > type(1.0e-6) * essential_row_max_norm_squared) {
+                const type matrix_vt_row_v0_normalization = type(1.0) / math::sqrt(essential_row_0_norm_squared);
+                matrix_vt[0] = essential[0] * matrix_vt_row_v0_normalization;
+                matrix_vt[1] = essential[1] * matrix_vt_row_v0_normalization;
+                matrix_vt[2] = essential[2] * matrix_vt_row_v0_normalization;
+            } else if (essential_row_1_norm_squared >= essential_row_2_norm_squared) {
+                const type matrix_vt_row_v0_normalization = type(1.0) / math::sqrt(essential_row_1_norm_squared);
+                matrix_vt[0] = essential[3] * matrix_vt_row_v0_normalization;
+                matrix_vt[1] = essential[4] * matrix_vt_row_v0_normalization;
+                matrix_vt[2] = essential[5] * matrix_vt_row_v0_normalization;
+            } else {
+                const type matrix_vt_row_v0_normalization = type(1.0) / math::sqrt(essential_row_2_norm_squared);
+                matrix_vt[0] = essential[6] * matrix_vt_row_v0_normalization;
+                matrix_vt[1] = essential[7] * matrix_vt_row_v0_normalization;
+                matrix_vt[2] = essential[8] * matrix_vt_row_v0_normalization;
+            }
 
             matrix_vt[3] = matrix_vt[7] * matrix_vt[2] - matrix_vt[8] * matrix_vt[1];
             matrix_vt[4] = matrix_vt[8] * matrix_vt[0] - matrix_vt[6] * matrix_vt[2];
@@ -919,17 +939,23 @@ namespace pose_estimation {
         }
 
         // Note: Assuming all points are normalised.
-        static void recover_pose(
+        // Selects the candidate transformation with the most points passing the cheirality check (in front of both cameras).
+        // Returns true when the vote clearly identifies a single winner, which requires that:
+        // - The best candidate has at least one supporting point.
+        // - The runner-up candidate has at most 70% of the support of the best candidate.
+        //   (The four candidates split the points between them, so an unambiguous essential matrix produces
+        //   one dominant candidate; a runner-up with comparable support means the geometry is degenerate.)
+        // The best candidate's pose and triangulated points are written to the outputs even on failure.
+        static bool recover_pose(
             const type* const __restrict essential,
             const type* const __restrict lhs_points, // X, Y, X, Y, X, Y, ...
             const type* const __restrict rhs_points, // X, Y, X, Y, X, Y, ...
             const size_t point_count,
             type* const __restrict rotation,
             type* const __restrict translation,
-            type* const __restrict triangulated_points // X, Y, Z, X, Y, Z, X, Y, Z, ...
+            type* const __restrict triangulated_points, // X, Y, Z, X, Y, Z, X, Y, Z, ...
+            size_t* const __restrict support_count = nullptr // Optional: The number of points supporting the returned transformation.
         ) {
-            constexpr static const type distance_threshold = type(50);
-
             constexpr static const auto matrix_multiply_local = [](
                 const type* const __restrict lhs_matrix,
                 const int lhs_width,
@@ -1004,8 +1030,6 @@ namespace pose_estimation {
 
                         // Check the point is in front of the camera.
                         is_valid &= (triangulated_points_set[solution_index][point_index * 3 + 2] > type(0));
-                        // Check the point is not too far away.
-                        is_valid &= (triangulated_points_set[solution_index][point_index * 3 + 2] < distance_threshold);
 
                         if (!is_valid) {
                             continue;
@@ -1024,8 +1048,6 @@ namespace pose_estimation {
 
                         // Check the point is in front of the camera.
                         is_valid &= (reprojected_point[2] > type(0));
-                        // Check the point is not too far away.
-                        is_valid &= (reprojected_point[2] < distance_threshold);
 
                         // If it's still valid add one to the count.
                         if (is_valid) {
@@ -1043,6 +1065,20 @@ namespace pose_estimation {
                 }
             }
 
+            // Find the runner-up to judge how clear the winner is.
+            size_t runner_up_count = 0;
+            for (size_t solution_index = 0; solution_index < 4; ++solution_index) {
+                if (solution_index == best_solution_index) {
+                    continue;
+                }
+                if (triangulated_points_valid_counts[solution_index] > runner_up_count) {
+                    runner_up_count = triangulated_points_valid_counts[solution_index];
+                }
+            }
+
+            const size_t best_count = triangulated_points_valid_counts[best_solution_index];
+            const bool success = (best_count > 0) && (size_t(10) * runner_up_count <= size_t(7) * best_count);
+
             // Return best transformation and triangulated points.
             for (size_t row = 0; row < 3; ++row) {
                 for (size_t col = 0; col < 3; ++col) {
@@ -1055,11 +1091,16 @@ namespace pose_estimation {
                 triangulated_points[point_index * 3 + 1] = triangulated_points_set[best_solution_index][point_index * 3 + 1];
                 triangulated_points[point_index * 3 + 2] = triangulated_points_set[best_solution_index][point_index * 3 + 2];
             }
+            if (support_count != nullptr) {
+                *support_count = best_count;
+            }
 
             delete[] triangulated_points_set[0];
             delete[] triangulated_points_set[1];
             delete[] triangulated_points_set[2];
             delete[] triangulated_points_set[3];
+
+            return success;
         }
     };
 }
