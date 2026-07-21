@@ -23,7 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace matrix {
     template <typename type>
-    constexpr static inline void decompose_cholesky(
+    constexpr static inline bool decompose_cholesky(
         const type* __restrict matrix_a,
         const int cols,
         const int rows,
@@ -33,6 +33,11 @@ namespace matrix {
         for (int i = 0; i < cols * rows; ++i) {
             matrix_l[i] = 0;
         }
+        type scale = 0;
+        for (int i = 0; i < rows; ++i) {
+            scale = math::max(scale, math::abs(matrix_a[i * cols + i]));
+        }
+        const type epsilon = scale * static_cast<type>(1e-14);
         for (int i = 0; i < rows; ++i) {
             for (int k = 0; k < i; ++k) {
                 type value = matrix_a[i * cols + k];
@@ -45,8 +50,12 @@ namespace matrix {
             for (int j = 0; j < i; ++j) {
                 value -= matrix_l[i * cols + j] * matrix_l[i * cols + j];
             }
+            if (!(value > epsilon)) {
+                return false;
+            }
             matrix_l[i * cols + i] = math::sqrt(value);
         }
+        return true;
     }
 
     template <typename type>
@@ -58,13 +67,18 @@ namespace matrix {
         type* __restrict column_solution
     ) {
         ASSERT(cols == rows, "Matrix must be square.");
+        type scale = 0;
+        for (int i = 0; i < rows; ++i) {
+            scale = math::max(scale, math::abs(matrix_l[i * cols + i]));
+        }
+        const type epsilon = scale * static_cast<type>(1e-7);
         type* lower_solution = new type[rows];
         for (int index_row = 0; index_row < rows; ++index_row) {
             lower_solution[index_row] = column_rhs[index_row];
             for (int j = 0; j < index_row; ++j) {
                 lower_solution[index_row] -= matrix_l[index_row * cols + j] * lower_solution[j];
             }
-            if (math::abs(matrix_l[index_row * cols + index_row]) < 1e-6) {
+            if (!(math::abs(matrix_l[index_row * cols + index_row]) > epsilon)) {
                 delete[] lower_solution;
                 return false;
             }
@@ -75,7 +89,7 @@ namespace matrix {
             for (int j = i + 1; j < rows; ++j) {
                 column_solution[i] -= matrix_l[j * cols + i] * column_solution[j];
             }
-            if (math::abs(matrix_l[i * cols + i]) < 1e-6) {
+            if (!(math::abs(matrix_l[i * cols + i]) > epsilon)) {
                 delete[] lower_solution;
                 return false;
             }

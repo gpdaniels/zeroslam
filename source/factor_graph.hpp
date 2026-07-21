@@ -761,9 +761,8 @@ namespace factor_graph {
                 }
             }
             matrix::matrix<double, 0, 0> matrix_lower(this->count_general_params, this->count_general_params);
-            matrix::decompose_cholesky(hpp_schur_dense.data(), this->count_general_params, this->count_general_params, matrix_lower.data());
             matrix::matrix<double, 0, 0> delta_xpp = matrix::matrix<double, 0, 0>::zero(this->count_general_params, 1);
-            if (!matrix::solve_cholesky(matrix_lower.data(), b_pp_schur.data(), this->count_general_params, this->count_general_params, delta_xpp.data())) {
+            if (!matrix::decompose_cholesky(hpp_schur_dense.data(), this->count_general_params, this->count_general_params, matrix_lower.data()) || !matrix::solve_cholesky(matrix_lower.data(), b_pp_schur.data(), this->count_general_params, this->count_general_params, delta_xpp.data())) {
                 if (this->verbose) {
                     std::fprintf(stderr, "Cholesky solver failed!\n");
                 }

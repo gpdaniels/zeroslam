@@ -61,9 +61,7 @@ int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
 
-    // ...
-
-    /*TEST(cholesky, function, solve_cholesky)*/ {
+    {
         const double matrix[6][6] = {
             { 0.001616, -0.000103, -0.001936, -0.000328, 0.004693, -0.000626 },
             { -0.000103, 1.496701, -0.513660, -2.005226, 0.523680, 2.010268 },
@@ -97,8 +95,45 @@ int main(int argc, char* argv[]) {
             { 0, 0, 0, 0, 0, 0 },
             { 0, 0, 0, 0, 0, 0 }
         };
-        matrix::decompose_cholesky(&matrix[0][0], 6, 6, &decomposed[0][0]);
-        matrix::solve_cholesky(&decomposed[0][0], &rhs[0], 6, 6, &result[0]);
+        REQUIRE(matrix::decompose_cholesky(&matrix[0][0], 6, 6, &decomposed[0][0]));
+        for (int i = 0; i < 6; ++i) {
+            for (int j = 0; j < 6; ++j) {
+                double reconstructed = 0;
+                for (int k = 0; k < 6; ++k) {
+                    reconstructed += decomposed[i][k] * decomposed[j][k];
+                }
+                REQUIRE(is_value_approx(reconstructed, matrix[i][j], 1e-6));
+            }
+        }
+        REQUIRE(matrix::solve_cholesky(&decomposed[0][0], &rhs[0], 6, 6, &result[0]));
         REQUIRE(are_values_approx(result, expected, 6, 1e-4));
+    }
+
+    {
+        // This matrix is symmetric but indefinite, its eigenvalues are 3 and -1, so the decomposition must fail.
+        const double matrix[2][2] = {
+            { 1.0, 2.0 },
+            { 2.0, 1.0 }
+        };
+        double decomposed[2][2] = {
+            { 0, 0 },
+            { 0, 0 }
+        };
+        REQUIRE(!matrix::decompose_cholesky(&matrix[0][0], 2, 2, &decomposed[0][0]));
+        const double rhs[2] = { 1.0, 1.0 };
+        double result[2] = { 0, 0 };
+        REQUIRE(!matrix::solve_cholesky(&decomposed[0][0], &rhs[0], 2, 2, &result[0]));
+    }
+
+    {
+        // A decomposition containing NaN values must not be reported as solvable.
+        const double nan = std::nan("");
+        const double decomposed[2][2] = {
+            { nan, 0.0 },
+            { nan, nan }
+        };
+        const double rhs[2] = { 1.0, 1.0 };
+        double result[2] = { 0, 0 };
+        REQUIRE(!matrix::solve_cholesky(&decomposed[0][0], &rhs[0], 2, 2, &result[0]));
     }
 }

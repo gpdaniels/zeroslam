@@ -349,6 +349,25 @@ int main(int argc, char* argv[]) {
             matrix::matrix<double, 4, 4> result = invert(m);
             REQUIRE(are_values_approx(result.data(), matrix::matrix<double, 4, 4>::zero().data(), 4 * 4, 1e-6));
         }
+        // Small-scale but well-conditioned matrices must still be invertible.
+        {
+            matrix::matrix<double, 3, 3> m = { { { 1e-3, 0.0, 0.0 }, { 0.0, 1e-3, 0.0 }, { 0.0, 0.0, 1e-3 } } };
+            matrix::matrix<double, 3, 3> inverse = { { { 1e3, 0.0, 0.0 }, { 0.0, 1e3, 0.0 }, { 0.0, 0.0, 1e3 } } };
+            matrix::matrix<double, 3, 3> result = invert(m);
+            REQUIRE(are_values_approx(result.data(), inverse.data(), 3 * 3, 1e-6));
+        }
+        {
+            matrix::matrix<double, 4, 4> m = { { { 1e-3, 0.0, 0.0, 0.0 }, { 0.0, 1e-3, 0.0, 0.0 }, { 0.0, 0.0, 1e-3, 0.0 }, { 0.0, 0.0, 0.0, 1e-3 } } };
+            matrix::matrix<double, 4, 4> inverse = { { { 1e3, 0.0, 0.0, 0.0 }, { 0.0, 1e3, 0.0, 0.0 }, { 0.0, 0.0, 1e3, 0.0 }, { 0.0, 0.0, 0.0, 1e3 } } };
+            matrix::matrix<double, 4, 4> result = invert(m);
+            REQUIRE(are_values_approx(result.data(), inverse.data(), 4 * 4, 1e-6));
+        }
+        // A rank deficiency that only appears at the final pivot must still return the zero matrix, the last row is the sum of the first three.
+        {
+            matrix::matrix<double, 4, 4> m = { { { 2.0, 0.0, 0.0, 1.0 }, { 0.0, 2.0, 0.0, 1.0 }, { 0.0, 0.0, 2.0, 1.0 }, { 2.0, 2.0, 2.0, 3.0 } } };
+            matrix::matrix<double, 4, 4> result = invert(m);
+            REQUIRE(are_values_approx(result.data(), matrix::matrix<double, 4, 4>::zero().data(), 4 * 4, 1e-6));
+        }
     }
 
     {

@@ -628,6 +628,14 @@ namespace matrix {
         // Generic NxN inversion using Gauss-Jordan.
         matrix working(value);
         matrix augmented = matrix<type, size, size>::identity(value.rows(), value.cols());
+        // Pivots must be significant relative to the scale of the matrix elements, otherwise the matrix is treated as singular.
+        type scale = 0;
+        for (size_t i = 0; i < value.rows(); ++i) {
+            for (size_t j = 0; j < value.cols(); ++j) {
+                scale = math::max(scale, math::abs(value[i][j]));
+            }
+        }
+        const type epsilon = scale * static_cast<type>(1e-12);
         // Forward elimination, moving down the diagonal from top left to bottom right.
         for (size_t i = 0; i < value.cols() - 1; ++i) {
             // Select the pivot row, this is the row with the largest element in the current column below the current row.
@@ -640,8 +648,8 @@ namespace matrix {
                     pivot_scale = potential_pivot_scale;
                 }
             }
-            // If there is no valid pivot there is no valid inverse.
-            if (pivot_scale < 1e-9) {
+            // If there is no valid pivot there is no valid inverse, note this comparison is also false for NaN values.
+            if (!(pivot_scale > epsilon)) {
                 return matrix<type, size, size>::zero(size, size);
             }
             // Swap current row with the pivot one if the pivot row is not the current row.
@@ -665,6 +673,10 @@ namespace matrix {
                 // Set the column value to exactly zero just in case of float precision issues.
                 working[j][i] = 0;
             }
+        }
+        // Check the final pivot, which is not covered by the forward elimination loop, note this comparison is also false for NaN values.
+        if (!(math::abs(working[value.rows() - 1][value.cols() - 1]) > epsilon)) {
+            return matrix<type, size, size>::zero(size, size);
         }
         // Set matrix_data along the diagonal to one.
         for (size_t i = 0; i < value.cols(); ++i) {
@@ -696,7 +708,8 @@ namespace matrix {
     template <typename type>
     inline matrix<type, 1, 1> invert(const matrix<type, 1, 1>& value) {
         const type determinant = value[0];
-        if (math::abs(determinant) < 1e-6) {
+        const type scale = math::abs(value[0]);
+        if (!(math::abs(determinant) > scale * static_cast<type>(1e-12))) {
             return matrix<type, 1, 1>::zero();
         }
         const type determinant_inverse = 1.0 / determinant;
@@ -706,7 +719,13 @@ namespace matrix {
     template <typename type>
     inline matrix<type, 2, 2> invert(const matrix<type, 2, 2>& value) {
         const type determinant = (value[0][0] * value[1][1]) - (value[0][1] * value[1][0]);
-        if (math::abs(determinant) < 1e-6) {
+        type scale = 0;
+        for (size_t i = 0; i < 2; ++i) {
+            for (size_t j = 0; j < 2; ++j) {
+                scale = math::max(scale, math::abs(value[i][j]));
+            }
+        }
+        if (!(math::abs(determinant) > scale * scale * static_cast<type>(1e-12))) {
             return matrix<type, 2, 2>::zero();
         }
         const type determinant_inverse = 1.0 / determinant;
@@ -718,7 +737,13 @@ namespace matrix {
     inline matrix<type, 3, 3> invert(const matrix<type, 3, 3>& value) {
         const type determinant =
             +value[0][0] * (value[1][1] * value[2][2] - value[2][1] * value[1][2]) - value[0][1] * (value[1][0] * value[2][2] - value[1][2] * value[2][0]) + value[0][2] * (value[1][0] * value[2][1] - value[1][1] * value[2][0]);
-        if (math::abs(determinant) < 1e-6) {
+        type scale = 0;
+        for (size_t i = 0; i < 3; ++i) {
+            for (size_t j = 0; j < 3; ++j) {
+                scale = math::max(scale, math::abs(value[i][j]));
+            }
+        }
+        if (!(math::abs(determinant) > scale * scale * scale * static_cast<type>(1e-12))) {
             return matrix<type, 3, 3>::zero();
         }
         const type determinant_inverse = 1.0 / determinant;
