@@ -126,9 +126,6 @@ namespace consensus {
         estimator_type consensus_estimator;
         evaluator_type consensus_evaluator;
 
-        // Criteria for early exit: Reached a minimal model inlier ratio.
-        float criteria_inlier_ratio;
-
         // Criteria for early exit: The failure probability a given model, e.g. 0.01 means a 1% chance of incorrect result.
         float criteria_probability_failure;
 
@@ -145,7 +142,6 @@ namespace consensus {
             const sampler_type& sampler,
             const estimator_type& estimator,
             const evaluator_type& evaluator,
-            const float inlier_ratio,
             const float probability_failure,
             const size_t iterations_minimum,
             const size_t iterations_maximum
@@ -153,23 +149,22 @@ namespace consensus {
             : consensus_sampler(sampler)
             , consensus_estimator(estimator)
             , consensus_evaluator(evaluator)
-            , criteria_inlier_ratio(inlier_ratio)
             , criteria_probability_failure(probability_failure)
             , criteria_iterations_minimum(iterations_minimum)
-            , criteria_iterations_maximum(constrain_max_iterations(inlier_ratio, probability_failure, iterations_minimum, iterations_maximum)) {
+            , criteria_iterations_maximum(iterations_maximum) {
         }
 
     private:
         template <size_t raised_to_value>
-        static float constexpr power(const float value) {
+        static double constexpr power(const double value) {
             if constexpr (raised_to_value == 0) {
-                return 1;
+                return 1.0;
             }
             else if constexpr (raised_to_value == 1) {
                 return value;
             }
             else {
-                const float temp = power<raised_to_value / 2>(value);
+                const double temp = power<raised_to_value / 2>(value);
                 if constexpr ((raised_to_value % 2) == 0) {
                     return temp * temp;
                 }
@@ -185,38 +180,37 @@ namespace consensus {
             const size_t iterations_minimum,
             const size_t iterations_maximum
         ) {
+            // With no inliers there is no information to shrink the budget, and an always failing sample needs the full budget.
             if (inlier_ratio <= 0) {
                 return iterations_maximum;
             }
+            // With all points inliers any sample succeeds, so only the minimum number of iterations is needed.
+            if (inlier_ratio >= 1) {
+                return iterations_minimum;
+            }
+            // A failure probability of zero (or less) can never be guaranteed, so use the full budget.
+            if (probability_failure <= 0) {
+                return iterations_maximum;
+            }
+            // A failure probability of one (or more) is satisfied by any number of iterations.
+            if (probability_failure >= 1) {
+                return iterations_minimum;
+            }
 
-            constexpr static const auto log_approx = [](float value) -> float {
-                int punned;
-                const unsigned char* value_pointer = reinterpret_cast<const unsigned char*>(&value);
-                unsigned char* punned_pointer = reinterpret_cast<unsigned char*>(&punned);
-                for (int i = 0; i < 4; ++i) {
-                    punned_pointer[i] = value_pointer[i];
-                }
-                const float magic = static_cast<float>(static_cast<double>(static_cast<float>((punned & 8388607) - 4074142)) * 5.828231702537851e-8);
-                return static_cast<float>(static_cast<double>(static_cast<float>(punned)) * 8.262958294867817e-8 - static_cast<double>(magic * magic) - 87.96988524938206);
-            };
-
-            constexpr static const auto abs = [](float value) -> float {
-                if ((value + 0.0f) < 0) {
-                    return -value;
-                }
-                return value;
-            };
-
-            const float log_probability = log_approx(1.0f - power<sample_size>(inlier_ratio));
-            if (abs(log_probability) < 1e-5f) {
+            // The number of iterations required to draw at least one all-inlier sample with probability (1 - probability_failure):
+            // iterations = ceil(log(probability_failure) / log(1 - inlier_ratio ^ sample_size))
+            const double probability_bad_sample = 1.0 - power<sample_size>(static_cast<double>(inlier_ratio));
+            const double log_probability = math::log(probability_bad_sample);
+            // As the inlier ratio tends to zero, log(1 - inlier_ratio ^ sample_size) tends to zero and the division explodes.
+            if (math::abs(log_probability) < 1e-12) {
                 return iterations_maximum;
             }
 
-            const float log_probability_failure = log_approx(probability_failure);
-            const size_t iterations = static_cast<size_t>(log_probability_failure / log_probability);
+            const double log_probability_failure = math::log(static_cast<double>(probability_failure));
+            const double iterations_estimate = math::ceil(log_probability_failure / log_probability);
+            const size_t iterations = static_cast<size_t>(iterations_estimate);
 
-            // Constrain the iterations estimate by the max and min parameters.
-            if (iterations > iterations_maximum) {
+            if (iterations >= iterations_maximum) {
                 return iterations_maximum;
             }
             if (iterations < iterations_minimum) {
@@ -241,7 +235,8 @@ namespace consensus {
             bool solution_found = false;
             float best_cost = 0;
             this->consensus_sampler.prepare(data_size);
-            for (size_t i = 0; i < this->criteria_iterations_maximum; ++i) {
+            size_t iterations_adaptive = this->criteria_iterations_maximum;
+            for (size_t i = 0; i < iterations_adaptive; ++i) {
                 size_t subset_indices[sample_size];
                 this->consensus_sampler.sample(&subset_indices[0]);
                 data_type subset_data[sample_size];
@@ -258,11 +253,11 @@ namespace consensus {
                         solution_found = true;
                         best_model = model;
                         best_cost = cost;
-                        this->criteria_iterations_maximum = constrain_max_iterations(
+                        iterations_adaptive = constrain_max_iterations(
                             static_cast<float>(inliers_size) / static_cast<float>(data_size),
                             this->criteria_probability_failure,
                             this->criteria_iterations_minimum,
-                            this->criteria_iterations_maximum
+                            iterations_adaptive
                         );
                     }
                 }
@@ -624,8 +619,7 @@ namespace consensus {
 
 namespace consensus {
     static inline bool solve_ransac_essential(const correspondence_2d_2d<double>* correspondences, size_t data_size, float* residuals, size_t* inliers, size_t& inliers_size, model_essential<double>& model) {
-        const float probability_failure = 0.99f;
-        const float inlier_ratio = 0.8f;
+        const float probability_failure = 0.01f;
         const size_t iterations_minimum = 5;
         const size_t iterations_maximum = 300;
         const float residual_threshold = 1.0e-5f;
@@ -638,7 +632,6 @@ namespace consensus {
             random,
             estimator,
             inlier_support,
-            inlier_ratio,
             probability_failure,
             iterations_minimum,
             iterations_maximum
@@ -648,8 +641,7 @@ namespace consensus {
     }
 
     static inline bool solve_ransac_p3p(const correspondence_2d_3d<double>* correspondences, size_t data_size, float* residuals, size_t* inliers, size_t& inliers_size, model_p3p<double>& model) {
-        const float probability_failure = 0.99f;
-        const float inlier_ratio = 0.8f;
+        const float probability_failure = 0.01f;
         const size_t iterations_minimum = 5;
         const size_t iterations_maximum = 300;
         const float residual_threshold = 1.0e-3f;
@@ -662,7 +654,6 @@ namespace consensus {
             random,
             estimator,
             inlier_support,
-            inlier_ratio,
             probability_failure,
             iterations_minimum,
             iterations_maximum
