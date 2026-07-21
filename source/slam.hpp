@@ -44,31 +44,25 @@ public:
 
 private:
     static void ratio_test(std::vector<feature::match>& matches) {
-        for (std::vector<feature::match>::iterator i = matches.begin(); (i != matches.end()) && ((i + 1) != matches.end());) {
-            if (i->lhs_index == (i + 1)->lhs_index) {
-                if (i->score < (i + 1)->score) {
-                    if (i->score / (i + 1)->score > 0.75f) {
-                        i = matches.erase(i, i + 1);
-                    }
-                    else {
-                        ++i;
-                        i = matches.erase(i);
-                    }
-                }
-                else {
-                    if ((i + 1)->score / (i)->score > 0.75f) {
-                        i = matches.erase(i, i + 1);
-                    }
-                    else {
-                        i = matches.erase(i);
-                        ++i;
-                    }
+        std::vector<feature::match>::iterator keep = matches.begin();
+        for (std::vector<feature::match>::iterator i = matches.begin(); i != matches.end();) {
+            std::vector<feature::match>::iterator group_end = i + 1;
+            while ((group_end != matches.end()) && (group_end->lhs_index == i->lhs_index)) {
+                ++group_end;
+            }
+            if (group_end - i == 1) {
+                *keep++ = *i;
+            }
+            else if (group_end - i == 2) {
+                const std::vector<feature::match>::iterator best = (i->score <= (i + 1)->score) ? i : (i + 1);
+                const std::vector<feature::match>::iterator worst = (i->score <= (i + 1)->score) ? (i + 1) : i;
+                if ((worst->score > 0.0f) && (best->score <= 0.75f * worst->score)) {
+                    *keep++ = *best;
                 }
             }
-            else {
-                ++i;
-            }
+            i = group_end;
         }
+        matches.erase(keep, matches.end());
     }
 
     static void symmetry_test(const std::vector<feature::match>& lhs, const std::vector<feature::match>& rhs, std::vector<feature::match>& matches) {
