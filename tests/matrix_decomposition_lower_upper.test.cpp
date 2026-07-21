@@ -319,5 +319,176 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // This particular matrix is invertible but the previously buggy pivot incorrectly report failure.
+    {
+        using test_type = double;
+        constexpr static const int width = 3;
+        constexpr static const int height = 3;
+
+        const test_type matrix[height][width] = {
+            { 1.0, 1.0, 1.0 },
+            { 2.0, 2.0, 1.0 },
+            { 1.0, 2.0, 1.0 }
+        };
+
+        test_type L1[height][height];
+        test_type U1[height][width];
+        test_type P1[height][height];
+        int swaps;
+        REQUIRE(matrix::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
+
+        test_type PA[height][width];
+        matrix_multiply(&P1[0][0], height, height, &matrix[0][0], width, height, &PA[0][0]);
+
+        test_type LU[height][width];
+        matrix_multiply(&L1[0][0], height, height, &U1[0][0], width, height, &LU[0][0]);
+
+        for (int i = 0; i < height; ++i) {
+            for (int j = 0; j < width; ++j) {
+                REQUIRE(is_value_approx(PA[i][j], LU[i][j], 1e-9));
+            }
+        }
+
+        // Each row and column of the permutation matrix must have exactly one entry equal to one
+        // (and the rest zero): otherwise it is not a valid permutation.
+        for (int i = 0; i < height; ++i) {
+            int row_ones = 0;
+            int col_ones = 0;
+            for (int j = 0; j < height; ++j) {
+                row_ones += (P1[i][j] == test_type(1)) ? 1 : 0;
+                col_ones += (P1[j][i] == test_type(1)) ? 1 : 0;
+            }
+            REQUIRE(row_ones == 1);
+            REQUIRE(col_ones == 1);
+        }
+
+        const test_type rhs[height] = { 1.0, 2.0, 3.0 };
+        test_type solution[height];
+        REQUIRE(matrix::solve_lower_upper<test_type>(&matrix[0][0], &rhs[0], width, height, &solution[0]));
+
+        // Verify matrix * solution == rhs.
+        for (int i = 0; i < height; ++i) {
+            test_type sum = 0;
+            for (int j = 0; j < width; ++j) {
+                sum += matrix[i][j] * solution[j];
+            }
+            REQUIRE(is_value_approx(sum, rhs[i], 1e-9));
+        }
+    }
+
+    {
+        class random_pcg final {
+        private:
+            unsigned long long int state = 0x853C49E6748FEA9Bull;
+            unsigned long long int increment = 0xDA3E39CB94B95BDBull;
+
+        private:
+            unsigned int get_random_raw() {
+                unsigned long long int state_previous = this->state;
+                this->state = state_previous * 0x5851F42D4C957F2Dull + this->increment;
+                unsigned int state_shift_xor_shift = static_cast<unsigned int>(((state_previous >> 18u) ^ state_previous) >> 27u);
+                int rotation = state_previous >> 59u;
+                return (state_shift_xor_shift >> rotation) | (state_shift_xor_shift << ((-rotation) & 31));
+            }
+
+        public:
+            double get_random_exclusive_top() {
+                return static_cast<double>(this->get_random_raw()) * (1.0 / static_cast<double>(1ull << 32));
+            }
+        };
+
+        random_pcg rng;
+
+        constexpr static const int trial_count = 5000;
+        constexpr static const int max_size = 8;
+
+        for (int trial = 0; trial < trial_count; ++trial) {
+            const int n = 1 + static_cast<int>(rng.get_random_exclusive_top() * max_size);
+
+            double L[max_size * max_size] = {};
+            double U[max_size * max_size] = {};
+            int permutation[max_size];
+
+            for (int i = 0; i < n; ++i) {
+                permutation[i] = i;
+                L[i * n + i] = 1.0;
+                for (int j = 0; j < i; ++j) {
+                    L[i * n + j] = (4.0 * rng.get_random_exclusive_top()) - 2.0;
+                }
+                // Diagonal magnitude bounded away from zero, so det(U) (and hence det(A)) is known to
+                // be non-zero regardless of what the random off-diagonal entries happen to be.
+                const double sign = (rng.get_random_exclusive_top() < 0.5) ? -1.0 : 1.0;
+                U[i * n + i] = sign * (0.5 + (2.5 * rng.get_random_exclusive_top()));
+                for (int j = i + 1; j < n; ++j) {
+                    U[i * n + j] = (4.0 * rng.get_random_exclusive_top()) - 2.0;
+                }
+            }
+
+            // Fisher-Yates shuffle of the row permutation.
+            for (int i = n - 1; i > 0; --i) {
+                const int j = static_cast<int>(rng.get_random_exclusive_top() * (i + 1));
+                const int temp = permutation[i];
+                permutation[i] = permutation[j];
+                permutation[j] = temp;
+            }
+
+            double LU_temp[max_size * max_size];
+            matrix_multiply(&L[0], n, n, &U[0], n, n, &LU_temp[0]);
+
+            double A[max_size * max_size];
+            for (int i = 0; i < n; ++i) {
+                for (int j = 0; j < n; ++j) {
+                    A[i * n + j] = LU_temp[permutation[i] * n + j];
+                }
+            }
+
+            double matrix_l[max_size * max_size];
+            double matrix_u[max_size * max_size];
+            double matrix_p[max_size * max_size];
+            int swaps;
+            REQUIRE(matrix::decompose_lower_upper<double>(&A[0], n, n, &matrix_l[0], &matrix_u[0], &matrix_p[0], &swaps));
+
+            // Verify the returned permutation is a valid permutation matrix: exactly one entry equal
+            // to one in every row and every column.
+            for (int i = 0; i < n; ++i) {
+                int row_ones = 0;
+                int col_ones = 0;
+                for (int j = 0; j < n; ++j) {
+                    row_ones += (matrix_p[i * n + j] == 1.0) ? 1 : 0;
+                    col_ones += (matrix_p[j * n + i] == 1.0) ? 1 : 0;
+                }
+                REQUIRE(row_ones == 1);
+                REQUIRE(col_ones == 1);
+            }
+
+            // Verify P * A == L * U to tight tolerance.
+            double PA[max_size * max_size];
+            double LU[max_size * max_size];
+            matrix_multiply(&matrix_p[0], n, n, &A[0], n, n, &PA[0]);
+            matrix_multiply(&matrix_l[0], n, n, &matrix_u[0], n, n, &LU[0]);
+            for (int i = 0; i < n; ++i) {
+                for (int j = 0; j < n; ++j) {
+                    REQUIRE(is_value_approx(PA[i * n + j], LU[i * n + j], 1e-9));
+                }
+            }
+
+            // Verify solve_lower_upper succeeds and actually solves the system.
+            double rhs[max_size];
+            for (int i = 0; i < n; ++i) {
+                rhs[i] = (4.0 * rng.get_random_exclusive_top()) - 2.0;
+            }
+            double solution[max_size];
+            REQUIRE(matrix::solve_lower_upper<double>(&matrix_l[0], &matrix_u[0], &matrix_p[0], &rhs[0], n, n, &solution[0]));
+
+            for (int i = 0; i < n; ++i) {
+                double sum = 0.0;
+                for (int j = 0; j < n; ++j) {
+                    sum += A[i * n + j] * solution[j];
+                }
+                REQUIRE(is_value_approx(sum, rhs[i], 1e-8));
+            }
+        }
+    }
+
     return EXIT_SUCCESS;
 }

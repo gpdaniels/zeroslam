@@ -54,49 +54,65 @@ namespace matrix {
             return value;
         };
 
-        // Make a permutation matrix from the identity matrix, and count how many swaps were made.
-        for (int index_row = 0; index_row < height && index_row < width; ++index_row) {
-            // Save the value on the leading diagonal and the current row index as the swap index.
-            type max_element = matrix[index_row * width + index_row];
-            int index_swap = index_row;
-            // Check remaining rows in this column for larger values.
-            for (int index_row_remaining = index_row + 1; index_row_remaining < height; ++index_row_remaining) {
-                // If value is larger update the swap index.
-                if (abs(matrix[index_row_remaining * width + index_row]) > abs(max_element)) {
-                    max_element = matrix[index_row_remaining * width + index_row];
-                    index_swap = index_row_remaining;
-                }
-            }
-            // If there is a row with a greater value than the leading diagonal, swap the rows.
-            if (index_row != index_swap) {
-                for (int x = 0; x < height; ++x) {
-                    const type temp = matrix_p[index_row * height + x];
-                    matrix_p[index_row * height + x] = matrix_p[index_swap * height + x];
-                    matrix_p[index_swap * height + x] = temp;
-                }
-                for (int x = 0; x < width; ++x) {
-                    const type temp = matrix_u[index_row * width + x];
-                    matrix_u[index_row * width + x] = matrix_u[index_swap * width + x];
-                    matrix_u[index_swap * width + x] = temp;
-                }
-                if (swap_count) {
-                    ++(*swap_count);
-                }
-            }
-        }
-
-        // Calculate the lower and upper matrices.
+        // Calculate the lower and upper matrices with partial pivoting.
         for (int index_row = 0; index_row < height; ++index_row) {
             matrix_l[index_row * height + index_row] = type(1);
             if (index_row < width) {
-                // Calculate upper matrix.
-                for (int i = 0; i <= index_row; ++i) {
+                // Calculate the already-finalized upper matrix entries above the pivot.
+                for (int i = 0; i < index_row; ++i) {
                     type sum_lower_upper = 0;
                     for (int k = 0; k < i; ++k) {
                         sum_lower_upper += matrix_l[i * height + k] * matrix_u[k * width + index_row];
                     }
                     matrix_u[i * width + index_row] = matrix_u[i * width + index_row] - sum_lower_upper;
                 }
+
+                // Select the pivot.
+                type max_element;
+                {
+                    type sum_lower_upper = 0;
+                    for (int k = 0; k < index_row; ++k) {
+                        sum_lower_upper += matrix_l[index_row * height + k] * matrix_u[k * width + index_row];
+                    }
+                    max_element = matrix_u[index_row * width + index_row] - sum_lower_upper;
+                }
+                int index_swap = index_row;
+                for (int index_row_remaining = index_row + 1; index_row_remaining < height; ++index_row_remaining) {
+                    type sum_lower_upper = 0;
+                    for (int k = 0; k < index_row; ++k) {
+                        sum_lower_upper += matrix_l[index_row_remaining * height + k] * matrix_u[k * width + index_row];
+                    }
+                    const type candidate = matrix_u[index_row_remaining * width + index_row] - sum_lower_upper;
+                    if (abs(candidate) > abs(max_element)) {
+                        max_element = candidate;
+                        index_swap = index_row_remaining;
+                    }
+                }
+
+                // If a lower row's eliminated value is larger in magnitude than the pivot row's, swap the two rows.
+                if (index_row != index_swap) {
+                    for (int x = 0; x < height; ++x) {
+                        const type temp = matrix_p[index_row * height + x];
+                        matrix_p[index_row * height + x] = matrix_p[index_swap * height + x];
+                        matrix_p[index_swap * height + x] = temp;
+                    }
+                    for (int x = 0; x < index_row; ++x) {
+                        const type temp = matrix_l[index_row * height + x];
+                        matrix_l[index_row * height + x] = matrix_l[index_swap * height + x];
+                        matrix_l[index_swap * height + x] = temp;
+                    }
+                    for (int x = 0; x < width; ++x) {
+                        const type temp = matrix_u[index_row * width + x];
+                        matrix_u[index_row * width + x] = matrix_u[index_swap * width + x];
+                        matrix_u[index_swap * width + x] = temp;
+                    }
+                    if (swap_count) {
+                        ++(*swap_count);
+                    }
+                }
+
+                // The pivot row is now in place at index_row, store its already-computed eliminated value directly as the final upper triangular diagonal entry.
+                matrix_u[index_row * width + index_row] = max_element;
 
                 if (abs(matrix_u[index_row * width + index_row]) < type(1e-6)) {
                     return false;
@@ -146,6 +162,7 @@ namespace matrix {
             return value;
         };
 
+        // Apply the permutation directly into the solution buffer.
         for (int index_row = 0; index_row < height; ++index_row) {
             for (int index_col = 0; index_col < height; ++index_col) {
                 if (matrix_p[index_row * height + index_col] == type(1)) {
