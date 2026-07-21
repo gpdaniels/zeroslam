@@ -533,7 +533,16 @@ namespace factor_graph {
                 double last_chi_squared = this->chi_squared;
                 int failure_count = 0;
                 while (failure_count < max_failures) {
-                    this->solve_linear_system();
+                    if (!this->solve_linear_system()) {
+                        // Solver failed so no step was computed or applied; treat as a failed attempt and retry with more damping.
+                        this->damping_lambda *= this->damping_factor;
+                        this->damping_factor *= 2.0;
+                        ++failure_count;
+                        if (!math::isfinite(this->damping_lambda)) {
+                            break;
+                        }
+                        continue;
+                    }
 
                     this->update_states();
 
@@ -716,7 +725,8 @@ namespace factor_graph {
         }
 
         // Solve the linear system using Schur complement and a dense Cholesky for the reduced system.
-        void solve_linear_system() {
+        // Returns false if the Cholesky decompose or solve of the reduced pose system fails.
+        bool solve_linear_system() {
             // Backup diagonal blocks in case we need to restore.
             const matrix::sparse_block_diagonal<6> h_pp_backup = this->h_pp;
             const matrix::sparse_block_diagonal<3> h_ll_backup = this->h_ll;
@@ -766,10 +776,11 @@ namespace factor_graph {
                 if (this->verbose) {
                     std::fprintf(stderr, "Cholesky solver failed!\n");
                 }
-                // Restore Hessian if solver fails.
+                // Restore Hessian if solver fails and clear any stale step.
                 this->h_pp = h_pp_backup;
                 this->h_ll = h_ll_backup;
-                return;
+                this->delta_x = matrix::matrix<double, 0, 0>::zero(this->count_general_params + this->count_marginalised_params, 1);
+                return false;
             }
 
             // Place pose solution into full delta vector.
@@ -782,6 +793,7 @@ namespace factor_graph {
             // Restore original Hessian blocks.
             this->h_pp = h_pp_backup;
             this->h_ll = h_ll_backup;
+            return true;
         }
 
         // Apply the computed delta_x to vertex states, backing up parameters first.

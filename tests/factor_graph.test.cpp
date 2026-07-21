@@ -178,5 +178,49 @@ int main(int argc, char* argv[]) {
         REQUIRE(factor_graph.get_current_chi() < initialChi2);
     }
 
+    {
+        // Construct a graph whose reduced pose system is not positive definite, forcing the Cholesky solver to fail.
+        // The solve should treat failed attempts as bad steps and complete without corrupting the vertex states.
+        camera::pinhole camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
+        double camera_parameters[4];
+        camera_model.get_parameters(camera_parameters, 4);
+
+        factor_graph::factor_graph factor_graph(true);
+
+        std::unique_ptr<factor_graph::vertex_base> fixed_camera_vertex = std::make_unique<factor_graph::vertex_pose>();
+        fixed_camera_vertex->set_parameters(matrix::matrix<double, 0, 0>(7, 1, matrix::matrix<double, 7, 1>{ { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 } }.data()));
+        fixed_camera_vertex->set_fixed(true);
+        factor_graph.add_vertex(fixed_camera_vertex.get());
+
+        std::unique_ptr<factor_graph::vertex_base> free_camera_vertex = std::make_unique<factor_graph::vertex_pose>();
+        free_camera_vertex->set_parameters(matrix::matrix<double, 0, 0>(7, 1, matrix::matrix<double, 7, 1>{ { 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 } }.data()));
+        free_camera_vertex->set_fixed(false);
+        factor_graph.add_vertex(free_camera_vertex.get());
+
+        std::unique_ptr<factor_graph::vertex_base> landmark_vertex = std::make_unique<factor_graph::vertex_point_xyz>();
+        landmark_vertex->set_parameters(matrix::matrix<double, 0, 0>(3, 1, matrix::matrix<double, 3, 1>{ { 0.1, 0.2, 1.0 } }.data()));
+        landmark_vertex->set_fixed(true);
+        landmark_vertex->set_marginalised(true);
+        factor_graph.add_vertex(landmark_vertex.get());
+
+        camera::pinhole edge_camera(camera_parameters, 4);
+        std::unique_ptr<factor_graph::edge_base> edge = std::make_unique<factor_graph::edge_reprojection<camera::pinhole>>(edge_camera);
+        edge->set_observation(matrix::matrix<double, 0, 0>(2, 1, matrix::matrix<double, 2, 1>{ { 0.15, 0.25 } }.data()));
+        edge->add_vertex(free_camera_vertex.get());
+        edge->add_vertex(landmark_vertex.get());
+        // A negative definite information matrix makes the pose Hessian block negative definite until the damping grows large enough.
+        edge->set_information(-1.0 * matrix::matrix<double, 0, 0>::identity(2, 2));
+        factor_graph.add_edge(edge.get());
+
+        static_cast<void>(factor_graph.solve(10));
+
+        const matrix::matrix<double, 0, 0>& optimised_parameters = free_camera_vertex->get_parameters();
+        REQUIRE(optimised_parameters.rows() == 7);
+        REQUIRE(optimised_parameters.cols() == 1);
+        for (int i = 0; i < 7; ++i) {
+            REQUIRE(std::isfinite(optimised_parameters[i][0]));
+        }
+    }
+
     return EXIT_SUCCESS;
 }
