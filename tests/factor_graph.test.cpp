@@ -222,5 +222,105 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    {
+        // A landmark behind the camera must not produce a zero residual/jacobian, and the normal (in front) case must be completely unaffected by the `behind_camera_penalty`.
+        camera::pinhole camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
+        double camera_parameters[4];
+        camera_model.get_parameters(camera_parameters, 4);
+
+        std::unique_ptr<factor_graph::vertex_base> camera_vertex = std::make_unique<factor_graph::vertex_pose>();
+        camera_vertex->set_parameters(matrix::matrix<double, 0, 0>(7, 1, matrix::matrix<double, 7, 1>{ { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 } }.data()));
+        camera_vertex->set_fixed(false);
+
+        // Normal case: landmark in front of the camera (Z = 1 > 0).
+        {
+            std::unique_ptr<factor_graph::vertex_base> landmark_vertex = std::make_unique<factor_graph::vertex_point_xyz>();
+            landmark_vertex->set_parameters(matrix::matrix<double, 0, 0>(3, 1, matrix::matrix<double, 3, 1>{ { 0.0, 0.0, 1.0 } }.data()));
+            landmark_vertex->set_fixed(false);
+            landmark_vertex->set_marginalised(true);
+
+            camera::pinhole edge_camera(camera_parameters, 4);
+            std::unique_ptr<factor_graph::edge_base> edge = std::make_unique<factor_graph::edge_reprojection<camera::pinhole>>(edge_camera);
+            edge->set_observation(matrix::matrix<double, 0, 0>(2, 1, matrix::matrix<double, 2, 1>{ { 0.1, -0.2 } }.data()));
+            edge->add_vertex(camera_vertex.get());
+            edge->add_vertex(landmark_vertex.get());
+
+            edge->compute_residual();
+            edge->compute_jacobians();
+
+            REQUIRE(edge->get_residual()[0][0] == 0.1);
+            REQUIRE(edge->get_residual()[1][0] == -0.2);
+
+            const matrix::matrix<double, 0, 0>& jacobian_pose = edge->get_jacobians()[0];
+            const double expected_pose[2][6] = {
+                { 0.0, -1.0, 0.0, -1.0, 0.0, 0.0 },
+                { 1.0, 0.0, 0.0, 0.0, -1.0, 0.0 }
+            };
+            for (int r = 0; r < 2; ++r) {
+                for (int c = 0; c < 6; ++c) {
+                    REQUIRE(jacobian_pose[r][c] == expected_pose[r][c]);
+                }
+            }
+
+            const matrix::matrix<double, 0, 0>& jacobian_landmark = edge->get_jacobians()[1];
+            const double expected_landmark[2][3] = {
+                { -1.0, 0.0, 0.0 },
+                { 0.0, -1.0, 0.0 }
+            };
+            for (int r = 0; r < 2; ++r) {
+                for (int c = 0; c < 3; ++c) {
+                    REQUIRE(jacobian_landmark[r][c] == expected_landmark[r][c]);
+                }
+            }
+        }
+
+        {
+            std::unique_ptr<factor_graph::vertex_base> landmark_vertex = std::make_unique<factor_graph::vertex_point_xyz>();
+            landmark_vertex->set_parameters(matrix::matrix<double, 0, 0>(3, 1, matrix::matrix<double, 3, 1>{ { 0.1, 0.2, -10.0 } }.data()));
+            landmark_vertex->set_fixed(false);
+            landmark_vertex->set_marginalised(true);
+
+            camera::pinhole edge_camera(camera_parameters, 4);
+            std::unique_ptr<factor_graph::edge_base> edge = std::make_unique<factor_graph::edge_reprojection<camera::pinhole>>(edge_camera);
+            edge->set_observation(matrix::matrix<double, 0, 0>(2, 1, matrix::matrix<double, 2, 1>{ { 0.1, -0.2 } }.data()));
+            edge->add_vertex(camera_vertex.get());
+            edge->add_vertex(landmark_vertex.get());
+
+            edge->compute_residual();
+
+            REQUIRE(std::isfinite(edge->get_residual()[0][0]));
+            REQUIRE(std::isfinite(edge->get_residual()[1][0]));
+            REQUIRE(!is_value_approx(edge->get_residual()[0][0], 0.0));
+            REQUIRE(!is_value_approx(edge->get_residual()[1][0], 0.0));
+
+            const double chi2 = edge->chi2();
+            REQUIRE(std::isfinite(chi2));
+            REQUIRE(chi2 > 1.0);
+
+            edge->compute_jacobians();
+            const matrix::matrix<double, 0, 0>& jacobian_pose = edge->get_jacobians()[0];
+            const matrix::matrix<double, 0, 0>& jacobian_landmark = edge->get_jacobians()[1];
+
+            bool jacobian_pose_nonzero = false;
+            for (int r = 0; r < 2; ++r) {
+                for (int c = 0; c < 6; ++c) {
+                    REQUIRE(std::isfinite(jacobian_pose[r][c]));
+                    jacobian_pose_nonzero = jacobian_pose_nonzero || (jacobian_pose[r][c] != 0.0);
+                }
+            }
+            bool jacobian_landmark_nonzero = false;
+            for (int r = 0; r < 2; ++r) {
+                for (int c = 0; c < 3; ++c) {
+                    REQUIRE(std::isfinite(jacobian_landmark[r][c]));
+                    jacobian_landmark_nonzero = jacobian_landmark_nonzero || (jacobian_landmark[r][c] != 0.0);
+                }
+            }
+            REQUIRE(jacobian_pose_nonzero);
+            REQUIRE(jacobian_landmark_nonzero);
+            REQUIRE(jacobian_landmark[0][2] < 0.0);
+            REQUIRE(jacobian_landmark[1][2] < 0.0);
+        }
+    }
+
     return EXIT_SUCCESS;
 }

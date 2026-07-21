@@ -967,6 +967,10 @@ namespace factor_graph {
     private:
         camera_type camera;
 
+        // Pixel-scale coefficient applied per unit of camera-frame depth to penalise a landmark that is behind the camera or unprojectable.
+        // Note: Value selected by a sweep on a test sequence. It should be finite, positive, and small relative to an edge cost.
+        constexpr static const double behind_camera_penalty = 0.3;
+
     public:
         edge_reprojection(const camera_type& camera_model)
             : edge_base(2, 2)
@@ -986,8 +990,9 @@ namespace factor_graph {
             // Project into image plane using intrinsic matrix.
             matrix::matrix<double, 2, 1> projected = {{ 0.0, 0.0 }};
             if (!this->camera.project(landmark_camera.data(), projected.data())) {
-                this->residual[0][0] = 0.0;
-                this->residual[1][0] = 0.0;
+                const double penalty = -edge_reprojection::behind_camera_penalty * landmark_camera[2];
+                this->residual[0][0] = penalty;
+                this->residual[1][0] = penalty;
                 return;
             }
             this->residual[0][0] = this->get_observation()[0][0] - projected[0];
@@ -1005,9 +1010,9 @@ namespace factor_graph {
             double projected[2];
             matrix::matrix<double, 2, 3> jacobian_camera;
             if (!this->camera.project(landmark_camera.data(), projected, jacobian_camera.data())) {
-                this->jacobians[0] = matrix::matrix<double, 0, 0>::zero(2, 6);
-                this->jacobians[1] = matrix::matrix<double, 0, 0>::zero(2, 3);
-                return;
+                // Behind the camera the residual is the finite penalty: `-behind_camera_penalty * Z`, so `dR/dZ` is the constant `-behind_camera_penalty` and dR/dX = dR/dY = 0.
+                jacobian_camera[0][0] = 0.0; jacobian_camera[0][1] = 0.0; jacobian_camera[0][2] = edge_reprojection::behind_camera_penalty;
+                jacobian_camera[1][0] = 0.0; jacobian_camera[1][1] = 0.0; jacobian_camera[1][2] = edge_reprojection::behind_camera_penalty;
             }
 
             const double X = landmark_camera[0];
