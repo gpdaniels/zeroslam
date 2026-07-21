@@ -163,6 +163,19 @@ int main(int argc, char* argv[]) {
     }
 
     {
+        matrix::matrix<double, 3, 2> m1;
+        REQUIRE(m1[0][0] == 0);
+        REQUIRE(m1[0][1] == 0);
+        REQUIRE(m1[1][0] == 0);
+        REQUIRE(m1[1][1] == 0);
+        REQUIRE(m1[2][0] == 0);
+        REQUIRE(m1[2][1] == 0);
+        matrix::matrix<double, 3, 2> m2(m1);
+        matrix::matrix<double, 3, 2> zero = matrix::matrix<double, 3, 2>::zero();
+        REQUIRE(m2 == zero);
+    }
+
+    {
         matrix::matrix<double, 3, 2> m = matrix::matrix<double, 3, 2>::identity();
         REQUIRE(m[0][0] == 1);
         REQUIRE(m[0][1] == 0);

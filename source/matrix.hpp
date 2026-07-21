@@ -61,7 +61,8 @@ namespace matrix {
         ~matrix() {
         }
 
-        constexpr matrix(size_t fixed_rows = matrix::matrix_rows, size_t fixed_cols = matrix::matrix_cols) {
+        constexpr matrix(size_t fixed_rows = matrix::matrix_rows, size_t fixed_cols = matrix::matrix_cols)
+            : matrix_data{} {
             ASSERT(fixed_rows == matrix::matrix_rows, "Incorrect rows count for fixed size matrix.");
             ASSERT(fixed_cols == matrix::matrix_cols, "Incorrect cols count for fixed size matrix.");
             static_cast<void>(fixed_rows);
