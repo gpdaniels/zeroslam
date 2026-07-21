@@ -292,6 +292,20 @@ int main(int argc, char* argv[]) {
             const int features = feature::suppress(&features_detected_sorted_by_y[0], 12, 25, &features_suppressed[0]);
             REQUIRE(features == 12);
         }
+
+        {
+            const feature::point features_detected_sorted_by_y[2] = {
+                { 10, 0, 1.0f, 0.0f },
+                { 10, 4, 2.0f, 0.0f },
+            };
+            feature::point features_suppressed[2] = {};
+            const int features = feature::suppress(&features_detected_sorted_by_y[0], 2, 5, &features_suppressed[0]);
+            REQUIRE(features == 2);
+            REQUIRE(features_suppressed[0].x == features_detected_sorted_by_y[0].x);
+            REQUIRE(features_suppressed[0].y == features_detected_sorted_by_y[0].y);
+            REQUIRE(features_suppressed[1].x == features_detected_sorted_by_y[1].x);
+            REQUIRE(features_suppressed[1].y == features_detected_sorted_by_y[1].y);
+        }
     }
 
     {

@@ -98,6 +98,45 @@ int main(int argc, char* argv[]) {
         }
     }
     {
+        constexpr static const int kernel_size = 7;
+        constexpr static const int kernel[kernel_size] = { 18, 34, 49, 55, 49, 34, 18 };
+        {
+            // Narrower than the kernel radius.
+            constexpr static const int width = 2;
+            constexpr static const int height = 3;
+            unsigned char data[height][width] = { { 1, 2 }, { 3, 4 }, { 5, 6 } };
+            unsigned char convolved[height][width] = {};
+            image::convolution_horizontal<kernel_size>(&data[0][0], width, height, width, &kernel[0], &convolved[0][0]);
+            for (int i = 0; i < height; ++i) {
+                for (int j = 0; j < width; ++j) {
+                    REQUIRE(convolved[i][j] == 0);
+                }
+            }
+        }
+        {
+            // Shorter than the kernel radius.
+            constexpr static const int width = 3;
+            constexpr static const int height = 2;
+            unsigned char data[height][width] = { { 1, 2, 3 }, { 4, 5, 6 } };
+            unsigned char convolved[height][width] = {};
+            image::convolution_vertical<kernel_size>(&data[0][0], width, height, width, &kernel[0], &convolved[0][0]);
+            for (int i = 0; i < height; ++i) {
+                for (int j = 0; j < width; ++j) {
+                    REQUIRE(convolved[i][j] == 0);
+                }
+            }
+        }
+        {
+            // Single pixel in both dimensions (the most extreme narrower/shorter-than-kernel case).
+            unsigned char data[1][1] = { { 42 } };
+            unsigned char convolved[1][1] = {};
+            image::convolution_horizontal<kernel_size>(&data[0][0], 1, 1, 1, &kernel[0], &convolved[0][0]);
+            REQUIRE(convolved[0][0] == 0);
+            image::convolution_vertical<kernel_size>(&data[0][0], 1, 1, 1, &kernel[0], &convolved[0][0]);
+            REQUIRE(convolved[0][0] == 0);
+        }
+    }
+    {
         image::image image(10, 20);
         for (size_t i = 0; i < image.get_rows(); ++i) {
             for (size_t j = 0; j < image.get_cols(); ++j) {

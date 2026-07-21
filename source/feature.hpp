@@ -267,7 +267,7 @@ namespace feature {
             return 0;
         }
         size_t* index_rows = new size_t[max_row + 1];
-        for (size_t i = 0; i < max_row; ++i) {
+        for (size_t i = 0; i < max_row + 1; ++i) {
             index_rows[i] = static_cast<size_t>(-1);
         }
         size_t index_row = static_cast<size_t>(-1);

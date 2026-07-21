@@ -242,6 +242,14 @@ int main(int argc, char* argv[]) {
             matrix::matrix<double, 3, 1> so3_log_expected = { { -1.177612, 1.442274, -1.665394 } };
             REQUIRE(are_values_approx(so3_log, so3_log_expected, 3, 1e-4));
         }
+        {
+            const double theta = 1.999e-6;
+            const lie::so3<double> so3 = lie::so3<double>::exp(matrix::matrix<double, 3, 1>{ { theta, 0.0, 0.0 } });
+            const matrix::matrix<double, 3, 1> so3_log = so3.log();
+            REQUIRE(is_value_approx(so3_log[0], theta, 1e-19));
+            REQUIRE(is_value_approx(so3_log[1], 0.0, 1e-19));
+            REQUIRE(is_value_approx(so3_log[2], 0.0, 1e-19));
+        }
     }
 
     {
@@ -974,6 +982,17 @@ int main(int argc, char* argv[]) {
             matrix::matrix<double, 7, 1> sim3_log_expected = { { -1.177611, 1.442274, -1.665394, 0.548948, -0.668049, 0.788500, -0.223144 } };
             REQUIRE(are_values_approx(sim3_log, sim3_log_expected, 7, 1e-4));
         }
+        {
+            const double theta = 9e-4;
+            const double translation_y = 1.0;
+            const lie::so3<double> rotation = lie::so3<double>::exp(matrix::matrix<double, 3, 1>{ { theta, 0.0, 0.0 } });
+            const lie::se3<double> transformation = { rotation, { { 0.0, translation_y, 0.0 } } };
+            const lie::sim3<double> sim3 = { transformation, 1.0 };
+            const matrix::matrix<double, 7, 1> sim3_log = sim3.log();
+            const double b = 1.0 / 12.0;
+            REQUIRE(is_value_approx(sim3_log[6], 0.0, 1e-12));
+            REQUIRE(is_value_approx(sim3_log[4], (1.0 - b * theta * theta) * translation_y, 1e-10));
+        }
     }
 
     {
@@ -1032,6 +1051,15 @@ int main(int argc, char* argv[]) {
             REQUIRE(are_values_approx(sim3.transformation().rotation().get_quaternion(), sim3_expected.transformation().rotation().get_quaternion(), 4, 1e-4));
             REQUIRE(are_values_approx(sim3.transformation().translation(), sim3_expected.transformation().translation(), 3, 1e-4));
             REQUIRE(is_value_approx(sim3.scale(), sim3_expected.scale(), 1e-4));
+        }
+        {
+            const double theta = 9.9e-7;
+            const double upsilon_y = 1.0;
+            const matrix::matrix<double, 7, 1> sim3_log = { { theta, 0.0, 0.0, 0.0, upsilon_y, 0.0, 0.0 } };
+            const lie::sim3<double> sim3 = lie::sim3<double>::exp(sim3_log);
+            const double b = 1.0 / 6.0;
+            const matrix::matrix<double, 3, 1> expected_translation = { { 0.0, (1.0 - b * theta * theta) * upsilon_y, 0.5 * theta * upsilon_y } };
+            REQUIRE(are_values_approx(sim3.transformation().translation(), expected_translation, 3, 1e-14));
         }
     }
 

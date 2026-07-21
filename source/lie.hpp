@@ -264,7 +264,7 @@ namespace lie {
         const type imaginary_length_squared = imaginary.get_length_squared();
         type imaginary_multiplier;
         if (imaginary_length_squared < 1e-6 * 1e-6) {
-            imaginary_multiplier = (2 / real) - ((2 * imaginary_length_squared) / (real * real * real));
+            imaginary_multiplier = (2 / real) - ((2 * imaginary_length_squared) / (3 * real * real * real));
         }
         else {
             const type imaginary_length = math::sqrt(imaginary_length_squared);
@@ -565,7 +565,7 @@ namespace lie {
             c = 1;
             if (math::abs(theta) < 1e-6) {
                 a = 0.5;
-                b = 1 / 6;
+                b = type(1) / type(6);
             }
             else {
                 const type theta_squared = theta * theta;
@@ -611,7 +611,7 @@ namespace lie {
             c = 1 - 0.5 * sigma;
             a = -0.5;
             if (math::abs(theta_squared) < 1e-6) {
-                b = 1 / 12;
+                b = type(1) / type(12);
             }
             else {
                 b = (theta * sin_theta + 2 * cos_theta - 2) / (2 * theta_squared * (cos_theta - 1));

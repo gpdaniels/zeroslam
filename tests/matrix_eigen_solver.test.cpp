@@ -121,6 +121,65 @@ int main(int argc, char* argv[]) {
     {
         // Test:
         // - symmetric 4x4
+        // - doubles
+        // - with eigen vectors
+        // - sort results
+        // - eigenvectors output buffer pre-filled with garbage
+
+        const double matrix[4][4] = {
+            { -2.0000, -0.6714, 0.8698, 0.5792 },
+            { -0.6714, -1.1242, -0.0365, -0.5731 },
+            { 0.8698, -0.0365, -0.4660, -0.8542 },
+            { 0.5792, -0.5731, -0.8542, 0.1188 }
+        };
+
+        const double vectors[4][4] = {
+            { -0.846873, 0.054867, 0.522012, 0.085436 },
+            { -0.252527, 0.814103, -0.452288, -0.262490 },
+            { 0.402834, 0.356538, 0.694297, -0.478076 },
+            { 0.238246, 0.455089, 0.202213, 0.833812 }
+        };
+
+        const double values[8] = {
+            -2.776886,
+            0.0,
+            -1.505801,
+            0.0,
+            -0.037042,
+            0.0,
+            0.848329,
+            0.0
+        };
+
+        double values2[8] = {};
+        double vectors2[4][4] = {
+            { 1e30, 1e30, 1e30, 1e30 },
+            { 1e30, 1e30, 1e30, 1e30 },
+            { 1e30, 1e30, 1e30, 1e30 },
+            { 1e30, 1e30, 1e30, 1e30 }
+        };
+        REQUIRE((matrix::eigen_solver<double, true, true>(&matrix[0][0], 4, &values2[0], &vectors2[0][0])));
+
+        // Normalise eigen vectors.
+        for (int j = 0; j < 4; ++j) {
+            const double scale = vectors[0][j] / vectors2[0][j];
+            for (int i = 0; i < 4; ++i) {
+                vectors2[i][j] = scale * vectors2[i][j];
+            }
+        }
+
+        for (int i = 0; i < 4; ++i) {
+            REQUIRE(is_value_approx(values[i * 2 + 0], values2[i * 2 + 0], 1e-5));
+            REQUIRE(is_value_approx(values[i * 2 + 1], values2[i * 2 + 1], 1e-5));
+            for (int j = 0; j < 4; ++j) {
+                REQUIRE(is_value_approx(vectors[i][j], vectors2[i][j], 1e-5));
+            }
+        }
+    }
+
+    {
+        // Test:
+        // - symmetric 4x4
         // - floats
         // - with eigen vectors
         // - sort results

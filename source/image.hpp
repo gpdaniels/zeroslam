@@ -133,7 +133,7 @@ namespace image {
             divisor += kernel[k];
         }
         for (int y = 0; y < height; ++y) {
-            for (int x = 0; x < kernel_radius; ++x) {
+            for (int x = 0; x < math::min(kernel_radius, width); ++x) {
                 convolved[(y + 0) * stride + x] = 0;
             }
             for (int x = 0; x < width - (kernel_size - 1); ++x) {
@@ -143,7 +143,7 @@ namespace image {
                 }
                 convolved[y * stride + (x + kernel_radius)] = static_cast<unsigned char>((static_cast<float>(sum) / static_cast<float>(divisor)) + 0.5f);
             }
-            for (int x = width - kernel_radius; x < width; ++x) {
+            for (int x = math::max(0, width - kernel_radius); x < width; ++x) {
                 convolved[y * stride + x] = 0;
             }
         }
@@ -163,7 +163,7 @@ namespace image {
         for (int k = 0; k < kernel_size; ++k) {
             divisor += kernel[k];
         }
-        for (int y = 0; y < kernel_radius; ++y) {
+        for (int y = 0; y < math::min(kernel_radius, height); ++y) {
             for (int x = 0; x < width; ++x) {
                 convolved[y * stride + x] = 0;
             }
@@ -177,7 +177,7 @@ namespace image {
                 convolved[(y + kernel_radius) * stride + x] = static_cast<unsigned char>((static_cast<float>(sum) / static_cast<float>(divisor)) + 0.5f);
             }
         }
-        for (int y = height - kernel_radius; y < height; ++y) {
+        for (int y = math::max(0, height - kernel_radius); y < height; ++y) {
             for (int x = 0; x < width; ++x) {
                 convolved[y * stride + x] = 0;
             }

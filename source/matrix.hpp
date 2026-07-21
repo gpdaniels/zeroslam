@@ -449,7 +449,7 @@ namespace matrix {
     constexpr static inline matrix<type, rows, cols> operator-(type lhs, const matrix<type, rows, cols>& rhs) {
         matrix<type, rows, cols> result = rhs;
         for (size_t i = 0; i < result.rows() * result.cols(); ++i) {
-            result.data()[i] -= lhs;
+            result.data()[i] = lhs - result.data()[i];
         }
         return result;
     }

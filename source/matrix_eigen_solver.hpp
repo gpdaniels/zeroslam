@@ -173,6 +173,9 @@ namespace matrix {
 
         // Initialize eigenvector accumulation matrix if requested.
         if constexpr (extract_eigenvectors) {
+            for (int i = 0; i < size * size; ++i) {
+                eigenvectors[i] = 0.0;
+            }
             for (int row = 0; row < size; ++row) {
                 eigenvectors[row * size + row] = 1.0;
             }
