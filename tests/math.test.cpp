@@ -115,19 +115,19 @@ int main(int argc, char* argv[]) {
 
     {
         for (const double value : test_values) {
-            const bool lhs = math::signbit(value);
-            const bool rhs = std::signbit(value);
-            REQUIRE(lhs == rhs);
-        }
-    }
-
-    {
-        for (const double value : test_values) {
             for (const double value2 : test_values) {
                 const double lhs = math::copysign(value, value2);
                 const double rhs = std::copysign(value, value2);
                 REQUIRE((lhs == rhs) || (std::isnan(lhs) && std::isnan(rhs)));
             }
+        }
+    }
+
+    {
+        for (const double value : test_values) {
+            const bool lhs = math::signbit(value);
+            const bool rhs = std::signbit(value);
+            REQUIRE(lhs == rhs);
         }
     }
 
