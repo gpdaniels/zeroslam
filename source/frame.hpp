@@ -68,7 +68,8 @@ namespace frame {
             // Pyramid.
             // Note: The number of octaves is calculated from floored powers of two required to represent the smallest image dimension.
             // Note: We subtract five levels to ensure the smalles image size has a minimum dimension of at least 32 pixels.
-            const int octaves = static_cast<int>(math::floor(math::log(static_cast<double>(math::min(input_image_grey.get_cols(), input_image_grey.get_rows()))) / math::log(2.0))) - 5;
+            // Note: The clamp to a minimum of one guarantees that at least the base level (level 0) is always processed, even for tiny images whose smaller dimension is under 64 pixels (which would otherwise yield a non-positive octave count).
+            const int octaves = math::max(1, static_cast<int>(math::floor(math::log(static_cast<double>(math::min(input_image_grey.get_cols(), input_image_grey.get_rows()))) / math::log(2.0))) - 5);
             this->image_pyramid.reserve(octaves);
             this->keypoint_pyramid.reserve(octaves);
             this->descriptor_pyramid.reserve(octaves);
