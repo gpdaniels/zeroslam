@@ -574,7 +574,7 @@ namespace consensus {
 
                 const scalar_type dot = rhs_point_transformed_normalized[0] * lhs_point_normalized[0] + rhs_point_transformed_normalized[1] * lhs_point_normalized[1] + rhs_point_transformed_normalized[2] * lhs_point_normalized[2];
                 if (math::isnan(dot)) {
-                    residuals[i] = math::inf();
+                    residuals[i] = math::inf<scalar_type>();
                 }
                 else {
                     // The evaluator compares with a fixed threshold, so avoid an acos() call here
