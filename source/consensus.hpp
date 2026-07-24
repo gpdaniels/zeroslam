@@ -577,7 +577,10 @@ namespace consensus {
                     residuals[i] = math::inf();
                 }
                 else {
-                    residuals[i] = math::acos(math::max(-1.0, math::min(1.0, static_cast<double>(dot))));
+                    // The evaluator compares with a fixed threshold, so avoid an acos() call here
+                    // PREVIOUSLY: residuals[i] = math::acos(math::max(-1.0, math::min(1.0, static_cast<double>(dot))));
+                    // Using `1 - dot` rather than "-dot" so the float residual keeps fine resolution near the threshold.
+                    residuals[i] = 1.0 - dot;
                 }
             }
         }
@@ -644,7 +647,10 @@ namespace consensus {
         const float probability_failure = 0.01f;
         const size_t iterations_minimum = 5;
         const size_t iterations_maximum = 300;
-        const float residual_threshold = 1.0e-3f;
+        
+        // The estimator's residual is `1 - dot`, so the equivalent threshold is `1 - cos(threshold_angle_radians)`, computed once here.
+        const float threshold_angle_radians = 1.0e-3f;
+        const float residual_threshold = static_cast<float>(1.0 - math::cos(static_cast<double>(threshold_angle_radians)));
 
         random<3> random;
         p3p<double> estimator;
