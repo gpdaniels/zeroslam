@@ -30,6 +30,10 @@ namespace geometry {
         matrix::matrix<double, 3, 1>& result
     ) {
         constexpr static const double tolerance = 1e-8;
+        // TODO: A near-zero ray z means a bearing that is ~90 degrees off-axis (or from a non-pinhole/distorted model). Currently unsupported.
+        if ((math::abs(lhs_ray[2]) < tolerance) || (math::abs(rhs_ray[2]) < tolerance)) {
+            return false;
+        }
         // Build system matrix.
         double matrix_a[4][4];
         for (int i = 0; i < 4; ++i) {
@@ -53,8 +57,8 @@ namespace geometry {
             return false;
         }
 
-        // Check for non-unique solutions by comparing the two lowest singular values.
-        if (math::abs(matrix_s[2][2] - matrix_s[3][3]) < tolerance) {
+        // Check for non-unique solutions by comparing the two lowest singular values relative to the largest singular value.
+        if (math::abs(matrix_s[2][2] - matrix_s[3][3]) < tolerance * matrix_s[0][0]) {
             // If the singular values are non-unique check if the associated points are different.
             const double* point_homography_alternate = &matrix_vt[2][0];
             const double point_difference =
