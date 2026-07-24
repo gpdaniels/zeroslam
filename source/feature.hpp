@@ -1092,8 +1092,8 @@ namespace feature {
             { { 7, 0 }, { 12, -2 } },
             { { -1, -6 }, { 0, -11 } }
         };
-        const float angle_sin = static_cast<float>(math::sin(static_cast<double>(angle_radians)));
-        const float angle_cos = static_cast<float>(math::cos(static_cast<double>(angle_radians)));
+        const float angle_sin = math::sin(angle_radians);
+        const float angle_cos = math::cos(angle_radians);
         for (int index = 0; index < pattern_size; index += 8) {
             const unsigned char pixels_lhs[8] = {
                 data[(math::round(pattern[index + 0][0][0] * angle_sin + pattern[index + 0][0][1] * angle_cos)) * stride + (math::round(pattern[index + 0][0][0] * angle_cos - pattern[index + 0][0][1] * angle_sin))],

@@ -62,7 +62,13 @@ namespace math {
     constexpr static inline double exp(double value);
     constexpr static inline double log(double value);
     constexpr static inline double pow(double value, double exponent);
+    template <typename type>
+    constexpr static inline type sin(type value);
+    constexpr static inline float sin(float value);
     constexpr static inline double sin(double value);
+    template <typename type>
+    constexpr static inline type cos(type value);
+    constexpr static inline float cos(float value);
     constexpr static inline double cos(double value);
     constexpr static inline double asin(double value);
     constexpr static inline double acos(double value);
@@ -457,6 +463,23 @@ namespace math {
 #endif
     }
 
+    template <typename type>
+    constexpr static inline type sin(type value) {
+#if defined(_MSC_VER)
+        __debugbreak()
+#else
+        __builtin_trap();
+#endif
+    }
+
+    constexpr static inline float sin(float value) {
+#if __has_builtin(__builtin_sinf)
+        return __builtin_sinf(value);
+#else
+#error "TODO: Not-implemented"
+#endif
+    }
+
     constexpr static inline double sin(double value) {
 #if __has_builtin(__builtin_sin)
         return __builtin_sin(value);
@@ -493,6 +516,23 @@ namespace math {
         polynomial *= remapped2;
         polynomial += 1.0;
         return sign * remapped * polynomial;
+#endif
+    }
+
+    template <typename type>
+    constexpr static inline type cos(type value) {
+#if defined(_MSC_VER)
+        __debugbreak()
+#else
+        __builtin_trap();
+#endif
+    }
+
+    constexpr static inline float cos(float value) {
+#if __has_builtin(__builtin_cosf)
+        return __builtin_cosf(value);
+#else
+#error "TODO: Not-implemented"
 #endif
     }
 
