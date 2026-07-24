@@ -91,6 +91,11 @@ inline unsigned char* pgm_load(const char* path, std::size_t& rows, std::size_t&
         std::fclose(handle);
         return nullptr;
     }
+    if ((maximum <= 0) || (maximum > 255)) {
+        std::fprintf(stderr, "Unsupported PGM maxval %d: only 8-bit binary PGM (P5, maxval 1..255) is supported.\n", maximum);
+        std::fclose(handle);
+        return nullptr;
+    }
     const std::size_t size = cols * rows;
     if (size > 4096 * 4096) {
         std::fclose(handle);
