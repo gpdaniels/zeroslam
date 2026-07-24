@@ -63,6 +63,9 @@ namespace map {
         }
 
         void optimise(int local_window, bool fix_landmarks, int rounds, bool use_relative_convergence = false) {
+            if (this->frames.empty()) {
+                return;
+            }
             std::unordered_map<int, factor_graph::vertex_base*> camera_vertexes;
             std::unordered_map<int, factor_graph::vertex_base*> landmark_vertexes;
             std::unordered_map<int, factor_graph::edge_base*> observation_edges;
@@ -270,7 +273,12 @@ namespace map {
                     ++it;
                     continue;
                 }
-                const std::vector<observation<int, size_t>>& landmark_observations = this->observations.at(it->first);
+                const std::unordered_map<int, std::vector<observation<int, size_t>>>::const_iterator observations_it = this->observations.find(it->first);
+                if (observations_it == this->observations.end()) {
+                    it = this->landmarks.erase(it);
+                    continue;
+                }
+                const std::vector<observation<int, size_t>>& landmark_observations = observations_it->second;
                 const bool not_seen_in_many_frames = landmark_observations.size() <= 4;
                 const bool not_seen_recently = landmark_observations.empty() || ((landmark_observations.back().first + 7) < frame::frame::id_generator);
                 if (not_seen_in_many_frames && not_seen_recently) {
@@ -279,8 +287,13 @@ namespace map {
                     continue;
                 }
                 float reprojection_error = 0.0f;
+                size_t processed_observations = 0;
                 for (const auto& [frame_id, kp_index] : landmark_observations) {
-                    const frame::frame& frame = this->frames.at(frame_id);
+                    const std::unordered_map<int, frame::frame>::const_iterator frame_it = this->frames.find(frame_id);
+                    if (frame_it == this->frames.end()) {
+                        continue;
+                    }
+                    const frame::frame& frame = frame_it->second;
                     const matrix::matrix<double, 2, 1> measured = { { static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].x), static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].y) } };
                     const matrix::matrix<double, 3, 1> mapped = (frame.rotation * it->second.location) + frame.translation;
                     matrix::matrix<double, 2, 1> reprojected;
@@ -290,8 +303,14 @@ namespace map {
                     else {
                         reprojection_error += static_cast<float>(math::sqrt((measured - reprojected).get_length_squared()));
                     }
+                    ++processed_observations;
                 }
-                reprojection_error /= static_cast<float>(landmark_observations.size());
+                if (processed_observations == 0) {
+                    this->observations.erase(it->first);
+                    it = this->landmarks.erase(it);
+                    continue;
+                }
+                reprojection_error /= static_cast<float>(processed_observations);
                 if (reprojection_error >= 5.991f) {
                     this->observations.erase(it->first);
                     it = this->landmarks.erase(it);
