@@ -142,5 +142,26 @@ int main(int argc, char* argv[]) {
         REQUIRE(before > after);
     }
 
+    // Empty map can be optimised.
+    {
+        map::map m;
+        REQUIRE(m.frames.empty());
+        m.optimise(10, false, 50);
+        m.optimise(1, true, 50);
+        REQUIRE(m.frames.empty());
+    }
+
+    // A landmark with no observations will be culled.
+    {
+        map::map m;
+        landmark::point p;
+        p.id = 42;
+        m.add_landmark(p);
+        REQUIRE(m.observations.find(p.id) == m.observations.end());
+        REQUIRE(m.landmarks.find(p.id) != m.landmarks.end());
+        m.cull();
+        REQUIRE(m.landmarks.find(p.id) == m.landmarks.end());
+    }
+
     return EXIT_SUCCESS;
 }

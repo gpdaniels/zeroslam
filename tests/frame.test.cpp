@@ -57,5 +57,32 @@ int main(int argc, char* argv[]) {
         REQUIRE(frame_0.id == 0);
     }
 
+    {
+        const matrix::matrix<double, 3, 3> intrinsics = { { { 1.0, 0.0, 0.5 }, { 0.0, 1.0, 0.5 }, { 0.0, 0.0, 1.0 } } };
+        camera::pinhole camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }.data(), 4);
+
+        image::image tiny(16, 16);
+        for (size_t i = 0; i < tiny.get_rows(); ++i) {
+            for (size_t j = 0; j < tiny.get_cols(); ++j) {
+                tiny.get_data()[i * tiny.get_cols() + j] = static_cast<unsigned char>((i * 16 + j) % 256);
+            }
+        }
+        frame::frame frame_tiny(camera, tiny);
+        REQUIRE(frame_tiny.image_pyramid.size() >= 1);
+        REQUIRE(frame_tiny.keypoint_pyramid.size() >= 1);
+        REQUIRE(frame_tiny.descriptor_pyramid.size() >= 1);
+
+        image::image small(48, 48);
+        for (size_t i = 0; i < small.get_rows(); ++i) {
+            for (size_t j = 0; j < small.get_cols(); ++j) {
+                small.get_data()[i * small.get_cols() + j] = static_cast<unsigned char>((i + j) % 256);
+            }
+        }
+        frame::frame frame_small(camera, small);
+        REQUIRE(frame_small.image_pyramid.size() >= 1);
+        REQUIRE(frame_small.keypoint_pyramid.size() >= 1);
+        REQUIRE(frame_small.descriptor_pyramid.size() >= 1);
+    }
+
     return EXIT_SUCCESS;
 }

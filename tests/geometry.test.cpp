@@ -170,5 +170,22 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    {
+        const matrix::matrix<double, 3, 4> lhs_pose = { { { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 } } };
+        const matrix::matrix<double, 3, 4> rhs_pose = { { { 1, 0, 0, -2.0 }, { 0, 1, 0, 0.3 }, { 0, 0, 1, 0.5 } } };
+        const matrix::matrix<double, 3, 1> zero_z_ray = { { 1.0, 0.0, 0.0 } };
+        const matrix::matrix<double, 3, 1> normal_ray = { { 0.1, 0.0, 1.0 } };
+        matrix::matrix<double, 3, 1> result;
+        REQUIRE(geometry::triangulate(zero_z_ray, lhs_pose, normal_ray, rhs_pose, result) == false);
+        REQUIRE(geometry::triangulate(normal_ray, lhs_pose, zero_z_ray, rhs_pose, result) == false);
+
+        const matrix::matrix<double, 3, 1> lhs_ray = { { 1.0, 0.5, 4.0 } };
+        const matrix::matrix<double, 3, 1> rhs_ray = { { -1.0, 0.8, 4.5 } };
+        matrix::matrix<double, 3, 1> valid_result;
+        REQUIRE(geometry::triangulate(lhs_ray, lhs_pose, rhs_ray, rhs_pose, valid_result));
+        const matrix::matrix<double, 3, 1> expected = { { 1.0, 0.5, 4.0 } };
+        REQUIRE(are_values_approx<const double*>(valid_result.data(), expected.data(), 3));
+    }
+
     return EXIT_SUCCESS;
 }
