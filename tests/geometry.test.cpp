@@ -168,6 +168,35 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < world_points_count; ++i) {
             test_triangulation(matrix_camera, lhs_rotation, lhs_translation, rhs_rotation, rhs_translation, world_points_expected[i]);
         }
+
+        {
+            constexpr static const double noise_amplitude = 1e-3;
+            unsigned long long int noise_state = 0x0123456789ABCDEFull;
+            const auto next_noise = [&noise_state](double amplitude) -> double {
+                noise_state = noise_state * 6364136223846793005ull + 1442695040888963407ull;
+                const double unit = static_cast<double>((noise_state >> 11) & 0x1FFFFF) / static_cast<double>(0x200000);
+                return (2.0 * unit - 1.0) * amplitude;
+            };
+            const matrix::matrix<double, 3, 4> lhs_pose = create_projection_matrix(matrix_camera, lhs_rotation, lhs_translation);
+            const matrix::matrix<double, 3, 4> rhs_pose = create_projection_matrix(matrix_camera, rhs_rotation, rhs_translation);
+            for (int i = 0; i < world_points_count; ++i) {
+                const matrix::matrix<double, 3, 1> lhs_camera_point = project_world_to_camera(lhs_rotation, lhs_translation, world_points_expected[i]);
+                const matrix::matrix<double, 3, 1> rhs_camera_point = project_world_to_camera(rhs_rotation, rhs_translation, world_points_expected[i]);
+                const matrix::matrix<double, 2, 1> lhs_image_point = project_camera_to_image(matrix_camera, lhs_camera_point);
+                const matrix::matrix<double, 2, 1> rhs_image_point = project_camera_to_image(matrix_camera, rhs_camera_point);
+                const matrix::matrix<double, 2, 1> lhs_image_point_noisy = { { lhs_image_point[0] + next_noise(noise_amplitude), lhs_image_point[1] + next_noise(noise_amplitude) } };
+                const matrix::matrix<double, 2, 1> rhs_image_point_noisy = { { rhs_image_point[0] + next_noise(noise_amplitude), rhs_image_point[1] + next_noise(noise_amplitude) } };
+                matrix::matrix<double, 3, 1> world_point_triangulated;
+                REQUIRE(geometry::triangulate(lhs_image_point_noisy, lhs_pose, rhs_image_point_noisy, rhs_pose, world_point_triangulated));
+                const double error = std::sqrt(
+                    (world_point_triangulated[0] - world_points_expected[i][0]) * (world_point_triangulated[0] - world_points_expected[i][0]) +
+                    (world_point_triangulated[1] - world_points_expected[i][1]) * (world_point_triangulated[1] - world_points_expected[i][1]) +
+                    (world_point_triangulated[2] - world_points_expected[i][2]) * (world_point_triangulated[2] - world_points_expected[i][2])
+                );
+                const double error_bound = (i == 4) ? 0.2 : 0.05;
+                REQUIRE(error < error_bound);
+            }
+        }
     }
 
     {
@@ -185,6 +214,35 @@ int main(int argc, char* argv[]) {
         REQUIRE(geometry::triangulate(lhs_ray, lhs_pose, rhs_ray, rhs_pose, valid_result));
         const matrix::matrix<double, 3, 1> expected = { { 1.0, 0.5, 4.0 } };
         REQUIRE(are_values_approx<const double*>(valid_result.data(), expected.data(), 3));
+    }
+
+    {
+        const matrix::matrix<double, 3, 4> lhs_pose = { { { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 } } };
+        const matrix::matrix<double, 3, 4> rhs_pose_behind = { { { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, -5.0 } } };
+        const double world_point[3] = { 0.2, 0.1, 2.0 };
+
+        const matrix::matrix<double, 3, 1> lhs_ray = { { world_point[0], world_point[1], world_point[2] } };
+        const matrix::matrix<double, 3, 1> rhs_ray_behind = { { world_point[0], world_point[1], world_point[2] - 5.0 } };
+        matrix::matrix<double, 3, 1> result_behind;
+        REQUIRE(geometry::triangulate(lhs_ray, lhs_pose, rhs_ray_behind, rhs_pose_behind, result_behind));
+
+        const matrix::matrix<double, 3, 1> expected = { { world_point[0], world_point[1], world_point[2] } };
+        REQUIRE(are_values_approx<const double*>(result_behind.data(), expected.data(), 3));
+
+        const double lhs_depth = lhs_pose[2][0] * result_behind[0] + lhs_pose[2][1] * result_behind[1] + lhs_pose[2][2] * result_behind[2] + lhs_pose[2][3];
+        const double rhs_depth = rhs_pose_behind[2][0] * result_behind[0] + rhs_pose_behind[2][1] * result_behind[1] + rhs_pose_behind[2][2] * result_behind[2] + rhs_pose_behind[2][3];
+        REQUIRE(lhs_depth > 0.0);
+        REQUIRE(rhs_depth < 0.0);
+        REQUIRE(!((lhs_depth > 0.0) && (rhs_depth > 0.0)));
+
+        const matrix::matrix<double, 3, 4> rhs_pose_front = { { { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0.5 } } };
+        const matrix::matrix<double, 3, 1> rhs_ray_front = { { world_point[0], world_point[1], world_point[2] + 0.5 } };
+        matrix::matrix<double, 3, 1> result_front;
+        REQUIRE(geometry::triangulate(lhs_ray, lhs_pose, rhs_ray_front, rhs_pose_front, result_front));
+        const double rhs_depth_front = rhs_pose_front[2][0] * result_front[0] + rhs_pose_front[2][1] * result_front[1] + rhs_pose_front[2][2] * result_front[2] + rhs_pose_front[2][3];
+        REQUIRE(result_front[2] > 0.0);
+        REQUIRE(rhs_depth_front > 0.0);
+        REQUIRE((result_front[2] > 0.0) && (rhs_depth_front > 0.0));
     }
 
     return EXIT_SUCCESS;

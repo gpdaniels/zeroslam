@@ -490,5 +490,88 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    {
+        using test_type = double;
+        constexpr static const int width = 3;
+        constexpr static const int height = 3;
+
+        const test_type matrix[height][width] = {
+            { 2.0, 1.0, 1.0 },
+            { 2.0, 1.0, 3.0 },
+            { 1.0, 3.0, 2.0 }
+        };
+
+        test_type L1[height][height];
+        test_type U1[height][width];
+        test_type P1[height][height];
+        int swaps;
+        REQUIRE(matrix::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
+
+        // A pivot swap that only elimination fill-in reveals must actually have happened.
+        REQUIRE(swaps >= 1);
+
+        // The returned permutation must be a valid permutation matrix.
+        for (int i = 0; i < height; ++i) {
+            int row_ones = 0;
+            int col_ones = 0;
+            for (int j = 0; j < height; ++j) {
+                row_ones += (P1[i][j] == test_type(1)) ? 1 : 0;
+                col_ones += (P1[j][i] == test_type(1)) ? 1 : 0;
+            }
+            REQUIRE(row_ones == 1);
+            REQUIRE(col_ones == 1);
+        }
+
+        // Reconstruct P * A == L * U.
+        test_type PA[height][width];
+        matrix_multiply(&P1[0][0], height, height, &matrix[0][0], width, height, &PA[0][0]);
+        test_type LU[height][width];
+        matrix_multiply(&L1[0][0], height, height, &U1[0][0], width, height, &LU[0][0]);
+        for (int i = 0; i < height; ++i) {
+            for (int j = 0; j < width; ++j) {
+                REQUIRE(is_value_approx(PA[i][j], LU[i][j], 1e-9));
+            }
+        }
+
+        // Solve A * x == b for a known x = { 1, 2, 3 }, so b = { 7, 13, 13 }, and recover x.
+        const test_type rhs[height] = { 7.0, 13.0, 13.0 };
+        test_type solution[height];
+        REQUIRE(matrix::solve_lower_upper<test_type>(&matrix[0][0], &rhs[0], width, height, &solution[0]));
+        REQUIRE(is_value_approx(solution[0], 1.0, 1e-9));
+        REQUIRE(is_value_approx(solution[1], 2.0, 1e-9));
+        REQUIRE(is_value_approx(solution[2], 3.0, 1e-9));
+
+        // And, independently, verify A * solution == rhs.
+        for (int i = 0; i < height; ++i) {
+            test_type sum = 0;
+            for (int j = 0; j < width; ++j) {
+                sum += matrix[i][j] * solution[j];
+            }
+            REQUIRE(is_value_approx(sum, rhs[i], 1e-9));
+        }
+    }
+
+    {
+        using test_type = double;
+        constexpr static const int width = 3;
+        constexpr static const int height = 3;
+
+        const test_type matrix[height][width] = {
+            { 1.0, 2.0, 3.0 },
+            { 2.0, 4.0, 6.0 },
+            { 1.0, 1.0, 1.0 }
+        };
+
+        test_type L1[height][height];
+        test_type U1[height][width];
+        test_type P1[height][height];
+        int swaps;
+        REQUIRE(matrix::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps) == false);
+
+        const test_type rhs[height] = { 1.0, 2.0, 3.0 };
+        test_type solution[height];
+        REQUIRE(matrix::solve_lower_upper<test_type>(&matrix[0][0], &rhs[0], width, height, &solution[0]) == false);
+    }
+
     return EXIT_SUCCESS;
 }

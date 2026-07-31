@@ -641,4 +641,48 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+
+    {
+        const double matrix[3][3] = {
+            { 5.0, 0.0, 0.0 },
+            { 0.0, -2.0, 0.0 },
+            { 0.0, 0.0, 3.0 }
+        };
+
+        // Pre-fill with garbage instead of zero-initialising.
+        double values[6] = { 1e30, 1e30, 1e30, 1e30, 1e30, 1e30 };
+        double vectors[3][3] = {
+            { 1e30, 1e30, 1e30 },
+            { 1e30, 1e30, 1e30 },
+            { 1e30, 1e30, 1e30 }
+        };
+        REQUIRE((matrix::eigen_solver<double, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
+
+        // Sorted eigenvalues: -2, 3, 5, all with zero imaginary part.
+        REQUIRE(is_value_approx(-2.0, values[0], 1e-8));
+        REQUIRE(is_value_approx(3.0, values[2], 1e-8));
+        REQUIRE(is_value_approx(5.0, values[4], 1e-8));
+        for (int i = 0; i < 3; ++i) {
+            REQUIRE(is_value_approx(0.0, values[i * 2 + 1], 1e-8));
+        }
+
+        // No eigenvector entry may retain the 1e30 garbage: every entry must be finite and small.
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                REQUIRE(std::abs(vectors[i][j]) < 100.0);
+            }
+        }
+
+        // Verify (A * v) == (lambda * v) for each eigenpair.
+        for (int col = 0; col < 3; ++col) {
+            const double lambda = values[col * 2 + 0];
+            for (int row = 0; row < 3; ++row) {
+                double result = 0.0;
+                for (int k = 0; k < 3; ++k) {
+                    result += matrix[row][k] * vectors[k][col];
+                }
+                REQUIRE(is_value_approx(result, lambda * vectors[row][col], 1e-8));
+            }
+        }
+    }
 }

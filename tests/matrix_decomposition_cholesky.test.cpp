@@ -136,4 +136,57 @@ int main(int argc, char* argv[]) {
         double result[2] = { 0, 0 };
         REQUIRE(!matrix::solve_cholesky(&decomposed[0][0], &rhs[0], 2, 2, &result[0]));
     }
+
+    {
+        const double matrix[2][2] = {
+            { 4.0, 2.0 },
+            { 2.0, 3.0 }
+        };
+        double decomposed[2][2] = {
+            { 0, 0 },
+            { 0, 0 }
+        };
+        REQUIRE(matrix::decompose_cholesky(&matrix[0][0], 2, 2, &decomposed[0][0]));
+
+        // The factor must match the known-exact lower-triangular L (upper part left as zero).
+        REQUIRE(is_value_approx(decomposed[0][0], 2.0, 1e-12));
+        REQUIRE(is_value_approx(decomposed[0][1], 0.0, 1e-12));
+        REQUIRE(is_value_approx(decomposed[1][0], 1.0, 1e-12));
+        REQUIRE(is_value_approx(decomposed[1][1], std::sqrt(2.0), 1e-12));
+
+        // Reconstruct L * L^T == A.
+        for (int i = 0; i < 2; ++i) {
+            for (int j = 0; j < 2; ++j) {
+                double reconstructed = 0;
+                for (int k = 0; k < 2; ++k) {
+                    reconstructed += decomposed[i][k] * decomposed[j][k];
+                }
+                REQUIRE(is_value_approx(reconstructed, matrix[i][j], 1e-12));
+            }
+        }
+
+        // Solve A * x == b for a known x = { 1, 1 }, so b = { 6, 5 }, and recover x.
+        const double rhs[2] = { 6.0, 5.0 };
+        const double expected[2] = { 1.0, 1.0 };
+        double result[2] = { 0, 0 };
+        REQUIRE(matrix::solve_cholesky(&decomposed[0][0], &rhs[0], 2, 2, &result[0]));
+        REQUIRE(are_values_approx(result, expected, 2, 1e-10));
+    }
+
+    {
+        const double matrix[2][2] = {
+            { 1.0, 3.0 },
+            { 3.0, 1.0 }
+        };
+        double decomposed[2][2] = {
+            { 0, 0 },
+            { 0, 0 }
+        };
+        REQUIRE(!matrix::decompose_cholesky(&matrix[0][0], 2, 2, &decomposed[0][0]));
+
+        // The failed decomposition must not be reported as solvable, and must not yield a NaN result.
+        const double rhs[2] = { 1.0, 1.0 };
+        double result[2] = { 0, 0 };
+        REQUIRE(!matrix::solve_cholesky(&decomposed[0][0], &rhs[0], 2, 2, &result[0]));
+    }
 }

@@ -807,5 +807,75 @@ int main(int argc, char* argv[]) {
         REQUIRE(matches_count == 12);
     }
 
+    {
+        constexpr static const int data_size = 96;
+        constexpr static const int data_center = data_size / 2;
+        constexpr static const auto render = [](unsigned char* image, int cx, int cy) {
+            for (int y = 0; y < data_size; ++y) {
+                for (int x = 0; x < data_size; ++x) {
+                    const int rx = x - cx;
+                    const int ry = y - cy;
+                    const int texture = (rx * 7 + ry * 13 + rx * ry) & 0x3F;
+                    const int corner = ((rx >= 0) && (ry >= 0)) ? 160 : 0;
+                    image[y * data_size + x] = static_cast<unsigned char>(texture + corner);
+                }
+            }
+        };
+
+        unsigned char data_base[data_size * data_size];
+        unsigned char data_shifted[data_size * data_size];
+        constexpr static const int shift_x = 5;
+        constexpr static const int shift_y = 3;
+        render(&data_base[0], data_center, data_center);
+        render(&data_shifted[0], data_center + shift_x, data_center + shift_y);
+
+        feature::descriptor descriptor_base;
+        feature::describe(
+            &data_base[data_center * data_size + data_center],
+            data_size,
+            feature::dominant_angle(&data_base[data_center * data_size + data_center], data_size),
+            descriptor_base
+        );
+
+        feature::descriptor descriptor_shifted;
+        feature::describe(
+            &data_shifted[(data_center + shift_y) * data_size + (data_center + shift_x)],
+            data_size,
+            feature::dominant_angle(&data_shifted[(data_center + shift_y) * data_size + (data_center + shift_x)], data_size),
+            descriptor_shifted
+        );
+        const unsigned int distance_integer_shift = feature::distance<256>(&descriptor_base.data[0], &descriptor_shifted.data[0]);
+        REQUIRE(distance_integer_shift == 0);
+
+        unsigned char patch_unshifted[41 * 41];
+        unsigned char patch_subpixel[41 * 41];
+        feature::patch_bilinear(&data_base[data_center * data_size + data_center], data_size, 0.0f, 0.0f, &patch_unshifted[0]);
+        feature::patch_bilinear(&data_base[data_center * data_size + data_center], data_size, 0.25f, 0.25f, &patch_subpixel[0]);
+        feature::descriptor descriptor_unshifted;
+        feature::descriptor descriptor_subpixel;
+        feature::describe(&patch_unshifted[20 * 41 + 20], 41, feature::dominant_angle(&patch_unshifted[20 * 41 + 20], 41), descriptor_unshifted);
+        feature::describe(&patch_subpixel[20 * 41 + 20], 41, feature::dominant_angle(&patch_subpixel[20 * 41 + 20], 41), descriptor_subpixel);
+        const unsigned int distance_subpixel_shift = feature::distance<256>(&descriptor_unshifted.data[0], &descriptor_subpixel.data[0]);
+        REQUIRE(distance_subpixel_shift < 40);
+
+        unsigned char data_unrelated[data_size * data_size];
+        for (int y = 0; y < data_size; ++y) {
+            for (int x = 0; x < data_size; ++x) {
+                data_unrelated[y * data_size + x] = static_cast<unsigned char>((x * 5 + y * 11 + 37) % 256);
+            }
+        }
+        feature::descriptor descriptor_unrelated;
+        feature::describe(
+            &data_unrelated[data_center * data_size + data_center],
+            data_size,
+            feature::dominant_angle(&data_unrelated[data_center * data_size + data_center], data_size),
+            descriptor_unrelated
+        );
+        const unsigned int distance_unrelated = feature::distance<256>(&descriptor_base.data[0], &descriptor_unrelated.data[0]);
+        REQUIRE(distance_unrelated > 100);
+        REQUIRE(distance_integer_shift < distance_unrelated);
+        REQUIRE(distance_subpixel_shift * 2 < distance_unrelated);
+    }
+
     return EXIT_SUCCESS;
 }

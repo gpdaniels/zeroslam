@@ -271,6 +271,94 @@ int main(int argc, char* argv[]) {
             source.get_data()[i] = 0;
         }
     }
+    {
+        // Copy-assignment must deep-copy.
+        image::image source(4, 6);
+        for (size_t i = 0; i < source.get_rows() * source.get_cols(); ++i) {
+            source.get_data()[i] = static_cast<unsigned char>(i + 1);
+        }
+        image::image destination(3, 3);
+        for (size_t i = 0; i < destination.get_rows() * destination.get_cols(); ++i) {
+            destination.get_data()[i] = 200;
+        }
+        destination = source;
+        REQUIRE(destination.get_rows() == 4);
+        REQUIRE(destination.get_cols() == 6);
+        REQUIRE(destination.get_data() != source.get_data());
+        for (size_t i = 0; i < destination.get_rows() * destination.get_cols(); ++i) {
+            REQUIRE(destination.get_data()[i] == static_cast<unsigned char>(i + 1));
+        }
+        for (size_t i = 0; i < source.get_rows() * source.get_cols(); ++i) {
+            source.get_data()[i] = 0;
+        }
+        for (size_t i = 0; i < destination.get_rows() * destination.get_cols(); ++i) {
+            REQUIRE(destination.get_data()[i] == static_cast<unsigned char>(i + 1));
+        }
+        for (size_t i = 0; i < destination.get_rows() * destination.get_cols(); ++i) {
+            destination.get_data()[i] = 123;
+        }
+        for (size_t i = 0; i < source.get_rows() * source.get_cols(); ++i) {
+            REQUIRE(source.get_data()[i] == 0);
+        }
+    }
+    {
+        image::image source(6, 4);
+        for (size_t i = 0; i < source.get_rows() * source.get_cols(); ++i) {
+            source.get_data()[i] = static_cast<unsigned char>(i);
+        }
+        unsigned char* source_data = source.get_data();
+        image::image target(2, 2);
+        target = static_cast<image::image&&>(source);
+        REQUIRE(target.get_rows() == 6);
+        REQUIRE(target.get_cols() == 4);
+        REQUIRE(target.get_data() == source_data);
+        for (size_t i = 0; i < target.get_rows() * target.get_cols(); ++i) {
+            REQUIRE(target.get_data()[i] == static_cast<unsigned char>(i));
+        }
+        REQUIRE(source.get_rows() == 2);
+        REQUIRE(source.get_cols() == 2);
+        REQUIRE(source.get_data() != nullptr);
+        for (size_t i = 0; i < source.get_rows() * source.get_cols(); ++i) {
+            source.get_data()[i] = 9;
+        }
+        image::image replacement(3, 5);
+        for (size_t i = 0; i < replacement.get_rows() * replacement.get_cols(); ++i) {
+            replacement.get_data()[i] = static_cast<unsigned char>(i + 2);
+        }
+        source = replacement;
+        REQUIRE(source.get_rows() == 3);
+        REQUIRE(source.get_cols() == 5);
+        for (size_t i = 0; i < source.get_rows() * source.get_cols(); ++i) {
+            REQUIRE(source.get_data()[i] == static_cast<unsigned char>(i + 2));
+        }
+    }
+    {
+        constexpr static const unsigned char constant = 100;
+        image::image image(3, 3);
+        for (size_t i = 0; i < image.get_rows() * image.get_cols(); ++i) {
+            image.get_data()[i] = constant;
+        }
+        image::image resized(7, 7);
+        image::resize(image.get_data(), image.get_cols(), image.get_rows(), resized.get_cols(), resized.get_rows(), resized.get_data(), image::interpolate_linear);
+        for (size_t i = 0; i < resized.get_rows() * resized.get_cols(); ++i) {
+            REQUIRE(resized.get_data()[i] == constant);
+        }
+    }
+    {
+        unsigned char data[2][4] = {
+            { 0, 8, 16, 24 },
+            { 0, 8, 16, 24 }
+        };
+        image::image image(2, 4, &data[0][0]);
+        image::image resized(2, 8);
+        image::resize(image.get_data(), image.get_cols(), image.get_rows(), resized.get_cols(), resized.get_rows(), resized.get_data(), image::interpolate_linear);
+        const unsigned char expected[8] = { 0, 2, 6, 10, 14, 18, 22, 24 };
+        for (size_t i = 0; i < resized.get_rows(); ++i) {
+            for (size_t j = 0; j < resized.get_cols(); ++j) {
+                REQUIRE(resized.get_data()[i * resized.get_cols() + j] == expected[j]);
+            }
+        }
+    }
 
     return EXIT_SUCCESS;
 }

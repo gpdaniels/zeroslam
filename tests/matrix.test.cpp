@@ -449,6 +449,11 @@ int main(int argc, char* argv[]) {
         REQUIRE(result2[0][1] == 5.0);
         REQUIRE(result2[1][0] == 4.0);
         REQUIRE(result2[1][1] == -33.0);
+        matrix::matrix<double, 2, 2> result3 = 7.0 + m2;
+        REQUIRE(result3[0][0] == 6.0);
+        REQUIRE(result3[0][1] == 5.0);
+        REQUIRE(result3[1][0] == 4.0);
+        REQUIRE(result3[1][1] == -33.0);
     }
 
     {
@@ -486,6 +491,11 @@ int main(int argc, char* argv[]) {
             REQUIRE(result2[0][1] == -14.0);
             REQUIRE(result2[1][0] == -21.0);
             REQUIRE(result2[1][1] == -280.0);
+            matrix::matrix<double, 2, 2> result3 = 7.0 * m2;
+            REQUIRE(result3[0][0] == -7.0);
+            REQUIRE(result3[0][1] == -14.0);
+            REQUIRE(result3[1][0] == -21.0);
+            REQUIRE(result3[1][1] == -280.0);
         }
         {
             matrix::matrix<double, 3, 2> m;

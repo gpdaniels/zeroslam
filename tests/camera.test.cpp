@@ -337,5 +337,16 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    {
+        camera::pinhole pinhole;
+        double image_point[2] = { 0.0, 0.0 };
+        const double point_behind[3] = { 0.1, 0.2, -1.0 };
+        const double point_at_camera[3] = { 0.1, 0.2, 0.0 };
+        const double point_in_front[3] = { 0.1, 0.2, 2.0 };
+        REQUIRE(pinhole.project(&point_behind[0], &image_point[0]) == false);
+        REQUIRE(pinhole.project(&point_at_camera[0], &image_point[0]) == false);
+        REQUIRE(pinhole.project(&point_in_front[0], &image_point[0]) == true);
+    }
+
     return EXIT_SUCCESS;
 }
