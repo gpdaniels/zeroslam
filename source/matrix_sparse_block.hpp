@@ -90,7 +90,7 @@ namespace matrix {
             ASSERT(index_col < this->cols(), "Column index must be less than the width of the matrix.");
             const size_t block_row = index_row / sparse_block::block_rows;
             const size_t block_col = index_col / sparse_block::block_cols;
-            typename std::unordered_map<block_key<size_t, size_t>, block_type>::const_iterator block_iterator = this->sparse_blocks.find({ block_row, block_col });
+            typename std::unordered_map<block_key<size_t, size_t>, block_type, block_key<size_t, size_t>>::const_iterator block_iterator = this->sparse_blocks.find({ block_row, block_col });
             if (block_iterator == this->sparse_blocks.end()) {
                 return 0;
             }
@@ -117,7 +117,7 @@ namespace matrix {
 
     public:
         bool validate() const {
-            for (typename std::unordered_map<block_key<size_t, size_t>, block_type>::const_iterator block_iterator = this->sparse_blocks.begin(); block_iterator != this->sparse_blocks.end(); ++block_iterator) {
+            for (typename std::unordered_map<block_key<size_t, size_t>, block_type, block_key<size_t, size_t>>::const_iterator block_iterator = this->sparse_blocks.begin(); block_iterator != this->sparse_blocks.end(); ++block_iterator) {
                 if (block_iterator->first.first >= this->rows() / sparse_block::block_rows) {
                     return false;
                 }
@@ -132,7 +132,7 @@ namespace matrix {
         sparse_block<block_cols, block_rows> get_transpose() const {
             sparse_block<block_cols, block_rows> result(this->cols(), this->rows());
             result.sparse_blocks.reserve(this->sparse_blocks.size());
-            for (typename std::unordered_map<block_key<size_t, size_t>, block_type>::const_iterator block_iterator = this->sparse_blocks.begin(); block_iterator != this->sparse_blocks.end(); ++block_iterator) {
+            for (typename std::unordered_map<block_key<size_t, size_t>, block_type, block_key<size_t, size_t>>::const_iterator block_iterator = this->sparse_blocks.begin(); block_iterator != this->sparse_blocks.end(); ++block_iterator) {
                 result.sparse_blocks[{ block_iterator->first.second, block_iterator->first.first }] = transpose(block_iterator->second);
             }
             return result;
@@ -143,8 +143,8 @@ namespace matrix {
             ASSERT(this->rows() == rhs.rows(), "LHS rows must equal RHS rows.");
             ASSERT(this->cols() == rhs.cols(), "LHS cols must equal RHS cols.");
             sparse_block result = *this;
-            for (typename std::unordered_map<block_key<size_t, size_t>, block_type>::const_iterator rhs_iterator = rhs.sparse_blocks.begin(); rhs_iterator != rhs.sparse_blocks.end(); ++rhs_iterator) {
-                typename std::unordered_map<block_key<size_t, size_t>, block_type>::iterator result_iterator = result.sparse_blocks.find(rhs_iterator->first);
+            for (typename std::unordered_map<block_key<size_t, size_t>, block_type, block_key<size_t, size_t>>::const_iterator rhs_iterator = rhs.sparse_blocks.begin(); rhs_iterator != rhs.sparse_blocks.end(); ++rhs_iterator) {
+                typename std::unordered_map<block_key<size_t, size_t>, block_type, block_key<size_t, size_t>>::iterator result_iterator = result.sparse_blocks.find(rhs_iterator->first);
                 if (result_iterator == result.sparse_blocks.end()) {
                     result.sparse_blocks[rhs_iterator->first] = rhs_iterator->second;
                 }

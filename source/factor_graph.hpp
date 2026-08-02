@@ -769,7 +769,7 @@ namespace factor_graph {
             // Step 2: solve reduced pose system Hpp_schur * delta_xpp = b_pp_schur.
             // Assemble dense matrix for Cholesky since a sparse block Cholesky is not provided here.
             matrix::matrix<double, 0, 0> hpp_schur_dense = matrix::matrix<double, 0, 0>::zero(h_pp_schur.rows(), h_pp_schur.cols());
-            for (std::unordered_map<typename matrix::sparse_block<6, 6>::block_key<size_t, size_t>, typename matrix::sparse_block<6, 6>::block_type>::const_iterator iterator = h_pp_schur.blocks().begin(); iterator != h_pp_schur.blocks().end(); ++iterator) {
+            for (std::unordered_map<typename matrix::sparse_block<6, 6>::block_key<size_t, size_t>, typename matrix::sparse_block<6, 6>::block_type, typename matrix::sparse_block<6, 6>::block_key<size_t, size_t>>::const_iterator iterator = h_pp_schur.blocks().begin(); iterator != h_pp_schur.blocks().end(); ++iterator) {
                 for (int i = 0; i < 6; ++i) {
                     for (int j = 0; j < 6; ++j) {
                         hpp_schur_dense[iterator->first.first * 6 + i][iterator->first.second * 6 + j] = hpp_schur_dense[iterator->first.first * 6 + i][iterator->first.second * 6 + j] + iterator->second[i][j];

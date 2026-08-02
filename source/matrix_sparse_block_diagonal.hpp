@@ -108,8 +108,8 @@ namespace matrix {
         ASSERT(lhs.cols() == rhs.rows(), "LHS cols must equal RHS rows.");
         sparse_block<block_rows, block_cols> result(lhs.rows(), rhs.cols());
         result.blocks().reserve(lhs.blocks().size());
-        for (typename std::unordered_map<typename sparse_block<block_rows, block_cols>::template block_key<size_t, size_t>, typename sparse_block<block_rows, block_cols>::block_type>::const_iterator lhs_iterator = lhs.blocks().begin(); lhs_iterator != lhs.blocks().end(); ++lhs_iterator) {
-            typename std::unordered_map<typename sparse_block<block_rows, block_cols>::template block_key<size_t, size_t>, typename sparse_block<block_rows, block_cols>::block_type>::iterator result_iterator = result.blocks().find(lhs_iterator->first);
+        for (typename std::unordered_map<typename sparse_block<block_rows, block_cols>::template block_key<size_t, size_t>, typename sparse_block<block_rows, block_cols>::block_type, typename sparse_block<block_rows, block_cols>::template block_key<size_t, size_t>>::const_iterator lhs_iterator = lhs.blocks().begin(); lhs_iterator != lhs.blocks().end(); ++lhs_iterator) {
+            typename std::unordered_map<typename sparse_block<block_rows, block_cols>::template block_key<size_t, size_t>, typename sparse_block<block_rows, block_cols>::block_type, typename sparse_block<block_rows, block_cols>::template block_key<size_t, size_t>>::iterator result_iterator = result.blocks().find(lhs_iterator->first);
             if (result_iterator == result.blocks().end()) {
                 result.blocks()[lhs_iterator->first] = lhs_iterator->second * rhs.diagonal()[lhs_iterator->first.second];
             }
@@ -129,8 +129,8 @@ namespace matrix {
         for (size_t index = 0; index < lhs.diagonal().size(); ++index) {
             result.blocks()[{ index, index }] = lhs.diagonal()[index];
         }
-        for (typename std::unordered_map<typename sparse_block<block_size, block_size>::template block_key<size_t, size_t>, typename sparse_block<block_size, block_size>::block_type>::const_iterator rhs_iterator = rhs.blocks().begin(); rhs_iterator != rhs.blocks().end(); ++rhs_iterator) {
-            typename std::unordered_map<typename sparse_block<block_size, block_size>::template block_key<size_t, size_t>, typename sparse_block<block_size, block_size>::block_type>::iterator result_iterator = result.blocks().find(rhs_iterator->first);
+        for (typename std::unordered_map<typename sparse_block<block_size, block_size>::template block_key<size_t, size_t>, typename sparse_block<block_size, block_size>::block_type, typename sparse_block<block_size, block_size>::template block_key<size_t, size_t>>::const_iterator rhs_iterator = rhs.blocks().begin(); rhs_iterator != rhs.blocks().end(); ++rhs_iterator) {
+            typename std::unordered_map<typename sparse_block<block_size, block_size>::template block_key<size_t, size_t>, typename sparse_block<block_size, block_size>::block_type, typename sparse_block<block_size, block_size>::template block_key<size_t, size_t>>::iterator result_iterator = result.blocks().find(rhs_iterator->first);
             if (result_iterator == result.blocks().end()) {
                 result.blocks()[rhs_iterator->first] = -rhs_iterator->second;
             }
