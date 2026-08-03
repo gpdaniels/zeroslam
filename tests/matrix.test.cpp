@@ -291,13 +291,15 @@ int main(int argc, char* argv[]) {
         {
             matrix::matrix<double, 1, 1> m = { { 0.1 } };
             matrix::matrix<double, 1, 1> inverse = { { 10.0 } };
-            matrix::matrix<double, 1, 1> result = invert(m);
+            matrix::matrix<double, 1, 1> result;
+            REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 1 * 1, 1e-6));
         }
         {
             matrix::matrix<double, 2, 2> m = { { { 1.0, 2.0 }, { 3.0, 4.0 } } };
             matrix::matrix<double, 2, 2> inverse = { { { -2.0, +1.0 }, { +1.5, -0.5 } } };
-            matrix::matrix<double, 2, 2> result = invert(m);
+            matrix::matrix<double, 2, 2> result;
+            REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 2 * 2, 1e-6));
         }
         {
@@ -305,13 +307,15 @@ int main(int argc, char* argv[]) {
                 { { 1.0, 2.0, 0.0 }, { 0.0, 1.0, 2.0 }, { 2.0, 0.0, 1.0 } }
             };
             matrix::matrix<double, 3, 3> inverse = { { { +1.0 / 9.0, -2.0 / 9.0, +4.0 / 9.0 }, { +4.0 / 9.0, +1.0 / 9.0, -2.0 / 9.0 }, { -2.0 / 9.0, +4.0 / 9.0, +1.0 / 9.0 } } };
-            matrix::matrix<double, 3, 3> result = invert(m);
+            matrix::matrix<double, 3, 3> result;
+            REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 3 * 3, 1e-6));
         }
         {
             matrix::matrix<double, 4, 4> m = { { { 0.0, 0.0, 0.0, 1.0 }, { 0.0, 0.0, 1.0, 0.0 }, { 0.0, 1.0, 0.0, 0.0 }, { 1.0, 0.0, 0.0, 1.0 } } };
             matrix::matrix<double, 4, 4> inverse = { { { -1.0, 0.0, 0.0, 1.0 }, { 0.0, 0.0, 1.0, 0.0 }, { 0.0, 1.0, 0.0, 0.0 }, { 1.0, 0.0, 0.0, 0.0 } } };
-            matrix::matrix<double, 4, 4> result = invert(m);
+            matrix::matrix<double, 4, 4> result;
+            REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 4 * 4, 1e-6));
         }
         {
@@ -323,49 +327,57 @@ int main(int argc, char* argv[]) {
                   { 0.0565473604, -0.0294482813, 0.0047056438, 0.0621000202, -0.0620421046 },
                   { 0.0328236759, 0.0598811281, -0.0575681232, -0.0551067095, 0.0359366403 } }
             };
-            matrix::matrix<double, 5, 5> result = invert(m);
+            matrix::matrix<double, 5, 5> result;
+            REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 5 * 5, 1e-6));
         }
         // Un-invertible
         {
             matrix::matrix<double, 1, 1> m = { { 0.0 } };
-            matrix::matrix<double, 1, 1> result = invert(m);
+            matrix::matrix<double, 1, 1> result;
+            REQUIRE(!invert(m, result));
             REQUIRE(are_values_approx(result.data(), matrix::matrix<double, 1, 1>::zero().data(), 1 * 1, 1e-6));
         }
         {
             matrix::matrix<double, 2, 2> m = { { { 0.0, 0.0 }, { 0.0, 1.0 } } };
-            matrix::matrix<double, 2, 2> result = invert(m);
+            matrix::matrix<double, 2, 2> result;
+            REQUIRE(!invert(m, result));
             REQUIRE(are_values_approx(result.data(), matrix::matrix<double, 2, 2>::zero().data(), 2 * 2, 1e-6));
         }
         {
             matrix::matrix<double, 3, 3> m = {
                 { { 1.0, 2.0, 3.0 }, { 4.0, 5.0, 6.0 }, { 7.0, 8.0, 9.0 } }
             };
-            matrix::matrix<double, 3, 3> result = invert(m);
+            matrix::matrix<double, 3, 3> result;
+            REQUIRE(!invert(m, result));
             REQUIRE(are_values_approx(result.data(), matrix::matrix<double, 3, 3>::zero().data(), 3 * 3, 1e-6));
         }
         {
             matrix::matrix<double, 4, 4> m = { { { 0.0, 0.0, 0.0, 0.0 }, { 0.0, 1.0, 0.0, 0.0 }, { 0.0, 0.0, 1.0, 0.0 }, { 0.0, 0.0, 0.0, 1.0 } } };
-            matrix::matrix<double, 4, 4> result = invert(m);
+            matrix::matrix<double, 4, 4> result;
+            REQUIRE(!invert(m, result));
             REQUIRE(are_values_approx(result.data(), matrix::matrix<double, 4, 4>::zero().data(), 4 * 4, 1e-6));
         }
         // Small-scale but well-conditioned matrices must still be invertible.
         {
             matrix::matrix<double, 3, 3> m = { { { 1e-3, 0.0, 0.0 }, { 0.0, 1e-3, 0.0 }, { 0.0, 0.0, 1e-3 } } };
             matrix::matrix<double, 3, 3> inverse = { { { 1e3, 0.0, 0.0 }, { 0.0, 1e3, 0.0 }, { 0.0, 0.0, 1e3 } } };
-            matrix::matrix<double, 3, 3> result = invert(m);
+            matrix::matrix<double, 3, 3> result;
+            REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 3 * 3, 1e-6));
         }
         {
             matrix::matrix<double, 4, 4> m = { { { 1e-3, 0.0, 0.0, 0.0 }, { 0.0, 1e-3, 0.0, 0.0 }, { 0.0, 0.0, 1e-3, 0.0 }, { 0.0, 0.0, 0.0, 1e-3 } } };
             matrix::matrix<double, 4, 4> inverse = { { { 1e3, 0.0, 0.0, 0.0 }, { 0.0, 1e3, 0.0, 0.0 }, { 0.0, 0.0, 1e3, 0.0 }, { 0.0, 0.0, 0.0, 1e3 } } };
-            matrix::matrix<double, 4, 4> result = invert(m);
+            matrix::matrix<double, 4, 4> result;
+            REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 4 * 4, 1e-6));
         }
         // A rank deficiency that only appears at the final pivot must still return the zero matrix, the last row is the sum of the first three.
         {
             matrix::matrix<double, 4, 4> m = { { { 2.0, 0.0, 0.0, 1.0 }, { 0.0, 2.0, 0.0, 1.0 }, { 0.0, 0.0, 2.0, 1.0 }, { 2.0, 2.0, 2.0, 3.0 } } };
-            matrix::matrix<double, 4, 4> result = invert(m);
+            matrix::matrix<double, 4, 4> result;
+            REQUIRE(!invert(m, result));
             REQUIRE(are_values_approx(result.data(), matrix::matrix<double, 4, 4>::zero().data(), 4 * 4, 1e-6));
         }
     }

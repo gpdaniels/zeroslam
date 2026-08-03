@@ -627,7 +627,7 @@ namespace matrix {
     // General invese funcion.
 
     template <typename type, size_t size>
-    constexpr static inline matrix<type, size, size> invert(const matrix<type, size, size>& value) {
+    constexpr static inline bool invert(const matrix<type, size, size>& value, matrix<type, size, size>& out) {
         ASSERT(value.rows() > 0, "Matrix must have rows to have an inverse.");
         ASSERT(value.cols() > 0, "Matrix must have cols to have an inverse.");
         ASSERT(value.rows() == value.cols(), "Matrix must be square to have an inverse.");
@@ -656,7 +656,8 @@ namespace matrix {
             }
             // If there is no valid pivot there is no valid inverse, note this comparison is also false for NaN values.
             if (!(pivot_scale > epsilon)) {
-                return matrix<type, size, size>::zero(size, size);
+                out = matrix<type, size, size>::zero(size, size);
+                return false;
             }
             // Swap current row with the pivot one if the pivot row is not the current row.
             if (pivot_row_index != i) {
@@ -682,7 +683,8 @@ namespace matrix {
         }
         // Check the final pivot, which is not covered by the forward elimination loop, note this comparison is also false for NaN values.
         if (!(math::abs(working[value.rows() - 1][value.cols() - 1]) > epsilon)) {
-            return matrix<type, size, size>::zero(size, size);
+            out = matrix<type, size, size>::zero(size, size);
+            return false;
         }
         // Set matrix_data along the diagonal to one.
         for (size_t i = 0; i < value.cols(); ++i) {
@@ -706,24 +708,27 @@ namespace matrix {
                 working[i][j] = 0;
             }
         }
-        return augmented;
+        out = augmented;
+        return true;
     }
 
     // Specialised inverse functions.
 
     template <typename type>
-    inline matrix<type, 1, 1> invert(const matrix<type, 1, 1>& value) {
+    inline bool invert(const matrix<type, 1, 1>& value, matrix<type, 1, 1>& out) {
         const type determinant = value[0];
         const type scale = math::abs(value[0]);
         if (!(math::abs(determinant) > scale * static_cast<type>(1e-12))) {
-            return matrix<type, 1, 1>::zero();
+            out = matrix<type, 1, 1>::zero();
+            return false;
         }
         const type determinant_inverse = 1.0 / determinant;
-        return { { determinant_inverse } };
+        out = { { determinant_inverse } };
+        return true;
     }
 
     template <typename type>
-    inline matrix<type, 2, 2> invert(const matrix<type, 2, 2>& value) {
+    inline bool invert(const matrix<type, 2, 2>& value, matrix<type, 2, 2>& out) {
         const type determinant = (value[0][0] * value[1][1]) - (value[0][1] * value[1][0]);
         type scale = 0;
         for (size_t i = 0; i < 2; ++i) {
@@ -732,15 +737,17 @@ namespace matrix {
             }
         }
         if (!(math::abs(determinant) > scale * scale * static_cast<type>(1e-12))) {
-            return matrix<type, 2, 2>::zero();
+            out = matrix<type, 2, 2>::zero();
+            return false;
         }
         const type determinant_inverse = 1.0 / determinant;
-        return { { { +value[1][1] * determinant_inverse, -value[0][1] * determinant_inverse },
-                   { -value[1][0] * determinant_inverse, +value[0][0] * determinant_inverse } } };
+        out = { { { +value[1][1] * determinant_inverse, -value[0][1] * determinant_inverse },
+                  { -value[1][0] * determinant_inverse, +value[0][0] * determinant_inverse } } };
+        return true;
     }
 
     template <typename type>
-    inline matrix<type, 3, 3> invert(const matrix<type, 3, 3>& value) {
+    inline bool invert(const matrix<type, 3, 3>& value, matrix<type, 3, 3>& out) {
         const type determinant =
             +value[0][0] * (value[1][1] * value[2][2] - value[2][1] * value[1][2]) - value[0][1] * (value[1][0] * value[2][2] - value[1][2] * value[2][0]) + value[0][2] * (value[1][0] * value[2][1] - value[1][1] * value[2][0]);
         type scale = 0;
@@ -750,18 +757,20 @@ namespace matrix {
             }
         }
         if (!(math::abs(determinant) > scale * scale * scale * static_cast<type>(1e-12))) {
-            return matrix<type, 3, 3>::zero();
+            out = matrix<type, 3, 3>::zero();
+            return false;
         }
         const type determinant_inverse = 1.0 / determinant;
-        return { { { (value[1][1] * value[2][2] - value[2][1] * value[1][2]) * determinant_inverse,
-                     (value[0][2] * value[2][1] - value[0][1] * value[2][2]) * determinant_inverse,
-                     (value[0][1] * value[1][2] - value[0][2] * value[1][1]) * determinant_inverse },
-                   { (value[1][2] * value[2][0] - value[1][0] * value[2][2]) * determinant_inverse,
-                     (value[0][0] * value[2][2] - value[0][2] * value[2][0]) * determinant_inverse,
-                     (value[1][0] * value[0][2] - value[0][0] * value[1][2]) * determinant_inverse },
-                   { (value[1][0] * value[2][1] - value[2][0] * value[1][1]) * determinant_inverse,
-                     (value[2][0] * value[0][1] - value[0][0] * value[2][1]) * determinant_inverse,
-                     (value[0][0] * value[1][1] - value[1][0] * value[0][1]) * determinant_inverse } } };
+        out = { { { (value[1][1] * value[2][2] - value[2][1] * value[1][2]) * determinant_inverse,
+                    (value[0][2] * value[2][1] - value[0][1] * value[2][2]) * determinant_inverse,
+                    (value[0][1] * value[1][2] - value[0][2] * value[1][1]) * determinant_inverse },
+                  { (value[1][2] * value[2][0] - value[1][0] * value[2][2]) * determinant_inverse,
+                    (value[0][0] * value[2][2] - value[0][2] * value[2][0]) * determinant_inverse,
+                    (value[1][0] * value[0][2] - value[0][0] * value[1][2]) * determinant_inverse },
+                  { (value[1][0] * value[2][1] - value[2][0] * value[1][1]) * determinant_inverse,
+                    (value[2][0] * value[0][1] - value[0][0] * value[2][1]) * determinant_inverse,
+                    (value[0][0] * value[1][1] - value[1][0] * value[0][1]) * determinant_inverse } } };
+        return true;
     }
 }
 

@@ -759,7 +759,9 @@ namespace factor_graph {
                 const int size = landmark_vertex->get_local_dimensions();
                 ASSERT(size == 3, "Currently only landmarks of size 3 are supported.");
                 ASSERT(idx % 3 == 0, "Landmark indexes must be aligned in sets of 3.");
-                this->h_ll_inverse.diagonal()[idx / size] = matrix::invert(this->h_ll.diagonal()[idx / size]);
+                matrix::matrix<double, 3, 3> inverse_block;
+                matrix::invert(this->h_ll.diagonal()[idx / size], inverse_block);
+                this->h_ll_inverse.diagonal()[idx / size] = inverse_block;
             }
 
             // Step 1: Schur complement setup.
