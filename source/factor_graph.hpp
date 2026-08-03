@@ -280,8 +280,9 @@ namespace factor_graph {
         virtual void compute_residual() = 0;
 
         virtual void compute_jacobians() {
-            // Estimate the jacobian numerically by symmetric difference.
-            const double delta = 1e-9;
+            // Estimate the jacobian numerically by symmetric (central) difference.
+            // For a central difference the total error is minimised near `h = eps^(1/3)` about 1e-5 for doubles.
+            const double delta = 1e-5;
             const double scalar = 1.0 / (2.0 * delta);
 
             // Save current residual to restore later.
