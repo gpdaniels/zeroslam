@@ -521,13 +521,14 @@ namespace feature {
             indexes_size = 0;
             const int grid_width = max_width / square_size;
             const int grid_height = max_height / square_size;
+            const int grid_stride = grid_width + 1;
             for (int i = 0; i < (grid_width + 1) * (grid_height + 1); ++i) {
                 covered_squares[i] = false;
             }
             for (int i = 0; i < features_detected_sorted_size; ++i) {
                 const int cell_x = static_cast<int>(features_detected_sorted[i].x) / square_size;
                 const int cell_y = static_cast<int>(features_detected_sorted[i].y) / square_size;
-                if (covered_squares[cell_y * grid_width + cell_x] == false) {
+                if (covered_squares[cell_y * grid_stride + cell_x] == false) {
                     indexes[indexes_size++] = i;
                     const int cell_x_min = math::max(0, cell_x - square_covering_radius);
                     const int cell_x_max = math::min(grid_width, cell_x + square_covering_radius);
@@ -536,7 +537,7 @@ namespace feature {
                     // Mark all squares within as covered.
                     for (int y = cell_y_min; y <= cell_y_max; ++y) {
                         for (int x = cell_x_min; x <= cell_x_max; ++x) {
-                            covered_squares[y * grid_width + x] = true;
+                            covered_squares[y * grid_stride + x] = true;
                         }
                     }
                 }
