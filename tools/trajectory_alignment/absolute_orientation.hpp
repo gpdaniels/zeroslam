@@ -116,7 +116,7 @@ void compute_covariance_matrix(
     }
 }
 
-void compute_rotation_matrix(
+bool compute_rotation_matrix(
     double covariance_matrix[3][3],
     double optimal_rotation[3][3]
 ) {
@@ -124,14 +124,16 @@ void compute_rotation_matrix(
     double singular_value_s[3][3];
     double singular_value_vt[3][3];
 
-    matrix::decompose_singular_value(
-        &covariance_matrix[0][0], 
-        3, 
-        3, 
-        &singular_value_u[0][0], 
-        &singular_value_s[0][0], 
-        &singular_value_vt[0][0]
-    );
+    if (!matrix::decompose_singular_value(
+            &covariance_matrix[0][0],
+            3,
+            3,
+            &singular_value_u[0][0],
+            &singular_value_s[0][0],
+            &singular_value_vt[0][0]
+        )) {
+        return false;
+    }
 
     double singular_value_v[3][3];
     for (size_t row = 0; row < 3; ++row) {
@@ -186,9 +188,11 @@ void compute_rotation_matrix(
             }
         }
     }
+
+    return true;
 }
 
-double compute_optimal_scale(
+bool compute_optimal_scale(
     const double* const estimated_x,
     const double* const estimated_y,
     const double* const estimated_z,
@@ -196,7 +200,8 @@ double compute_optimal_scale(
     const double estimated_centroid_x,
     const double estimated_centroid_y,
     const double estimated_centroid_z,
-    const double covariance_matrix[3][3]
+    const double covariance_matrix[3][3],
+    double& optimal_scale
 ) {
     double singular_value_u[3][3];
     double singular_value_s[3][3];
@@ -208,14 +213,16 @@ double compute_optimal_scale(
         }
     }
 
-    matrix::decompose_singular_value(
-        &covariance_copy[0][0], 
-        3, 
-        3, 
-        &singular_value_u[0][0], 
-        &singular_value_s[0][0], 
-        &singular_value_vt[0][0]
-    );
+    if (!matrix::decompose_singular_value(
+            &covariance_copy[0][0],
+            3,
+            3,
+            &singular_value_u[0][0],
+            &singular_value_s[0][0],
+            &singular_value_vt[0][0]
+        )) {
+        return false;
+    }
 
     double estimated_variance = 0;
     for (size_t index = 0; index < point_count; ++index) {
@@ -226,7 +233,8 @@ double compute_optimal_scale(
     }
 
     const double trace_s = singular_value_s[0][0] + singular_value_s[1][1] + singular_value_s[2][2];
-    return (estimated_variance > 0.0) ? (trace_s / estimated_variance) : 1.0;
+    optimal_scale = (estimated_variance > 0.0) ? (trace_s / estimated_variance) : 1.0;
+    return true;
 }
 
 void compute_optimal_translation(
@@ -307,21 +315,26 @@ bool absolute_orientation(
         covariance_matrix
     );
 
-    compute_rotation_matrix(
-        covariance_matrix, 
-        optimal_rotation
-    );
+    if (!compute_rotation_matrix(
+            covariance_matrix,
+            optimal_rotation
+        )) {
+        return false;
+    }
 
-    optimal_scale = compute_optimal_scale(
-        estimated_x,
-        estimated_y,
-        estimated_z,
-        point_count,
-        estimated_centroid_x,
-        estimated_centroid_y,
-        estimated_centroid_z,
-        covariance_matrix
-    );
+    if (!compute_optimal_scale(
+            estimated_x,
+            estimated_y,
+            estimated_z,
+            point_count,
+            estimated_centroid_x,
+            estimated_centroid_y,
+            estimated_centroid_z,
+            covariance_matrix,
+            optimal_scale
+        )) {
+        return false;
+    }
 
     compute_optimal_translation(
         ground_truth_centroid_x,
