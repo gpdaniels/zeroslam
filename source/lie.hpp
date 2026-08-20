@@ -51,6 +51,8 @@ namespace lie {
         static constexpr matrix::matrix<type, 3, 1> generator_field(size_t parameter_index, const matrix::matrix<type, 3, 1>& point);
         static constexpr so3 exp(const matrix::matrix<type, 3, 1>& omega);
         constexpr matrix::matrix<type, 3, 1> log() const;
+        static matrix::matrix<type, 3, 3> left_jacobian(const matrix::matrix<type, 3, 1>& omega);
+        static matrix::matrix<type, 3, 3> left_jacobian_inverse(const matrix::matrix<type, 3, 1>& omega);
         constexpr bool operator==(const so3& rhs) const;
         constexpr bool operator!=(const so3& rhs) const;
         constexpr so3 operator-() const;
@@ -78,6 +80,8 @@ namespace lie {
         static matrix::matrix<type, 4, 1> generator_field(size_t parameter_index, const matrix::matrix<type, 4, 1>& point);
         static se3 exp(const matrix::matrix<type, 6, 1>& omega_upsilon);
         constexpr matrix::matrix<type, 6, 1> log() const;
+        static matrix::matrix<type, 6, 6> left_jacobian(const matrix::matrix<type, 6, 1>& omega_upsilon);
+        static matrix::matrix<type, 6, 6> left_jacobian_inverse(const matrix::matrix<type, 6, 1>& omega_upsilon);
         constexpr bool operator==(const se3& rhs) const;
         constexpr bool operator!=(const se3& rhs) const;
         constexpr se3 operator*(const se3& rhs) const;
@@ -104,6 +108,8 @@ namespace lie {
         static matrix::matrix<type, 4, 1> generator_field(size_t parameter_index, const matrix::matrix<type, 4, 1>& point);
         static sim3 exp(const matrix::matrix<type, 7, 1>& omega_upsilon_sigma);
         constexpr matrix::matrix<type, 7, 1> log() const;
+        static matrix::matrix<type, 7, 7> left_jacobian(const matrix::matrix<type, 7, 1>& omega_upsilon_sigma);
+        static matrix::matrix<type, 7, 7> left_jacobian_inverse(const matrix::matrix<type, 7, 1>& omega_upsilon_sigma);
         constexpr bool operator==(const sim3& rhs) const;
         constexpr bool operator!=(const sim3& rhs) const;
         constexpr sim3 operator*(const sim3& rhs) const;
@@ -275,6 +281,33 @@ namespace lie {
     }
 
     template <typename type>
+    matrix::matrix<type, 3, 3> so3<type>::left_jacobian(const matrix::matrix<type, 3, 1>& omega) {
+        const type theta_squared = omega.get_length_squared();
+        const matrix::matrix<type, 3, 3> omega_hat = { { { 0, -omega[2], omega[1] },
+                                                         { omega[2], 0, -omega[0] },
+                                                         { -omega[1], omega[0], 0 } } };
+        if (theta_squared < 1e-6 * 1e-6) {
+            return matrix::matrix<type, 3, 3>::identity() + (0.5 * omega_hat) + ((1.0 / 6.0) * (omega_hat * omega_hat));
+        }
+        const type theta = math::sqrt(theta_squared);
+        return matrix::matrix<type, 3, 3>::identity() + (((1 - math::cos(theta)) / (theta_squared)) * omega_hat) + (((theta - math::sin(theta)) / (theta_squared * theta)) * (omega_hat * omega_hat));
+    }
+
+    template <typename type>
+    matrix::matrix<type, 3, 3> so3<type>::left_jacobian_inverse(const matrix::matrix<type, 3, 1>& omega) {
+        const type theta_squared = omega.get_length_squared();
+        const matrix::matrix<type, 3, 3> omega_hat = { { { 0, -omega[2], omega[1] },
+                                                         { omega[2], 0, -omega[0] },
+                                                         { -omega[1], omega[0], 0 } } };
+        if (theta_squared < 1e-6 * 1e-6) {
+            return matrix::matrix<type, 3, 3>::identity() - (0.5 * omega_hat) + ((omega_hat * omega_hat) * (1.0 / 12.0));
+        }
+        const type theta = math::sqrt(theta_squared);
+        const type theta_half = 0.5 * theta;
+        return matrix::matrix<type, 3, 3>::identity() - (0.5 * omega_hat) + (((1.0 - theta * math::cos(theta_half) / (2.0 * math::sin(theta_half))) / theta_squared) * (omega_hat * omega_hat));
+    }
+
+    template <typename type>
     constexpr bool so3<type>::operator==(const so3& rhs) const {
         return this->rotation_quaternion[0] == rhs.rotation_quaternion[0] &&
                this->rotation_quaternion[1] == rhs.rotation_quaternion[1] &&
@@ -413,39 +446,65 @@ namespace lie {
     se3<type> se3<type>::exp(const matrix::matrix<type, 6, 1>& omega_upsilon) {
         const matrix::matrix<type, 3, 1> omega = { { omega_upsilon[0], omega_upsilon[1], omega_upsilon[2] } };
         const matrix::matrix<type, 3, 1> upsilon = { { omega_upsilon[3], omega_upsilon[4], omega_upsilon[5] } };
-        const type theta = math::sqrt(omega.get_length_squared());
-        const matrix::matrix<type, 3, 3> omega_hat = { { { 0, -omega[2], omega[1] },
-                                                         { omega[2], 0, -omega[0] },
-                                                         { -omega[1], omega[0], 0 } } };
-        matrix::matrix<type, 3, 3> vee;
-        if (theta < 1e-6) {
-            vee = matrix::matrix<type, 3, 3>::identity() + (0.5 * omega_hat);
-        }
-        else {
-            const type theta_squared = theta * theta;
-            vee = matrix::matrix<type, 3, 3>::identity() + (((1 - math::cos(theta)) / (theta_squared)) * omega_hat) + (((theta - math::sin(theta)) / (theta_squared * theta)) * (omega_hat * omega_hat));
-        }
-        return { so3<type>::exp(omega), vee * upsilon };
+        return { so3<type>::exp(omega), so3<type>::left_jacobian(omega) * upsilon };
     }
 
     template <typename type>
     constexpr matrix::matrix<type, 6, 1> se3<type>::log() const {
         const matrix::matrix<type, 3, 1> omega = this->rotation_so3.log();
-        const type theta_squared = omega.get_length_squared();
-        const type theta = math::sqrt(theta_squared);
-        const matrix::matrix<type, 3, 3> omega_hat{ { { 0, -omega[2], omega[1] },
-                                                      { omega[2], 0, -omega[0] },
-                                                      { -omega[1], omega[0], 0 } } };
-        matrix::matrix<type, 3, 3> inverse_vee;
-        if (math::abs(theta) < 1e-6) {
-            inverse_vee = matrix::matrix<type, 3, 3>::identity() - (0.5 * omega_hat) + ((omega_hat * omega_hat) * (1.0 / 12.0));
-        }
-        else {
-            const type theta_half = 0.5 * theta;
-            inverse_vee = matrix::matrix<type, 3, 3>::identity() - (0.5 * omega_hat) + (((1.0 - theta * math::cos(theta_half) / (2.0 * math::sin(theta_half))) / theta_squared) * (omega_hat * omega_hat));
-        }
-        const matrix::matrix<type, 3, 1> upsilon = inverse_vee * this->translation_vector;
+        const matrix::matrix<type, 3, 1> upsilon = so3<type>::left_jacobian_inverse(omega) * this->translation_vector;
         return { { omega[0], omega[1], omega[2], upsilon[0], upsilon[1], upsilon[2] } };
+    }
+
+    template <typename type>
+    matrix::matrix<type, 6, 6> se3<type>::left_jacobian(const matrix::matrix<type, 6, 1>& omega_upsilon) {
+        matrix::matrix<type, 6, 6> result = matrix::matrix<type, 6, 6>::identity();
+        matrix::matrix<type, 6, 6> adjoint = matrix::matrix<type, 6, 6>::zero();
+
+        const matrix::matrix<type, 3, 3> omega_hat = { { { 0, -omega_upsilon[2], omega_upsilon[1] },
+                                                         { omega_upsilon[2], 0, -omega_upsilon[0] },
+                                                         { -omega_upsilon[1], omega_upsilon[0], 0 } } };
+        const matrix::matrix<type, 3, 3> upsilon_hat = { { { 0, -omega_upsilon[5], omega_upsilon[4] },
+                                                           { omega_upsilon[5], 0, -omega_upsilon[3] },
+                                                           { -omega_upsilon[4], omega_upsilon[3], 0 } } };
+        for (size_t i = 0; i < 3; ++i) {
+            for (size_t j = 0; j < 3; ++j) {
+                adjoint[i][j] = omega_hat[i][j];
+                adjoint[i+3][j] = upsilon_hat[i][j];
+                adjoint[i+3][j+3] = omega_hat[i][j];
+            }
+        }
+        matrix::matrix<type, 6, 6> adjoint_power = adjoint;
+        type factorial = 1.0;
+        for (size_t n = 1; n < 20; ++n) {
+            factorial *= static_cast<type>(n + 1);
+            result = result + (adjoint_power * (1.0 / factorial));
+            if (n < 19) adjoint_power = adjoint_power * adjoint;
+        }
+        return result;
+    }
+
+    template <typename type>
+    matrix::matrix<type, 6, 6> se3<type>::left_jacobian_inverse(const matrix::matrix<type, 6, 1>& omega_upsilon) {
+        const matrix::matrix<type, 3, 1> omega = { { omega_upsilon[0], omega_upsilon[1], omega_upsilon[2] } };
+        const matrix::matrix<type, 3, 3> rotation_jacobian_inverse = so3<type>::left_jacobian_inverse(omega);
+        const matrix::matrix<type, 6, 6> jacobian = left_jacobian(omega_upsilon);
+        matrix::matrix<type, 3, 3> coupling_block;
+        for (size_t i = 0; i < 3; ++i) {
+            for (size_t j = 0; j < 3; ++j) {
+                coupling_block[i][j] = jacobian[i+3][j];
+            }
+        }
+        const matrix::matrix<type, 3, 3> inverse_coupling_block = -(rotation_jacobian_inverse * coupling_block * rotation_jacobian_inverse);
+        matrix::matrix<type, 6, 6> result = matrix::matrix<type, 6, 6>::zero();
+        for (size_t i = 0; i < 3; ++i) {
+            for (size_t j = 0; j < 3; ++j) {
+                result[i][j] = rotation_jacobian_inverse[i][j];
+                result[i+3][j] = inverse_coupling_block[i][j];
+                result[i+3][j+3] = rotation_jacobian_inverse[i][j];
+            }
+        }
+        return result;
     }
 
     template <typename type>
@@ -562,15 +621,17 @@ namespace lie {
         const matrix::matrix<type, 3, 3> omega_hat_squared = omega_hat * omega_hat;
         type a, b, c;
         if (math::abs(sigma) < 1e-6) {
-            c = 1;
+            c = 1 + (0.5 * sigma) + ((sigma * sigma) / 6);
             if (math::abs(theta) < 1e-6) {
-                a = 0.5;
-                b = type(1) / type(6);
+                a = 0.5 + (sigma / 3) + ((sigma * sigma) / 8);
+                b = (type(1) / type(6)) + (sigma / 8) + ((sigma * sigma) / 20);
             }
             else {
                 const type theta_squared = theta * theta;
-                a = (1 - math::cos(theta)) / theta_squared;
-                b = (theta - math::sin(theta)) / (theta_squared * theta);
+                const type sin_theta = math::sin(theta);
+                const type cos_theta = math::cos(theta);
+                a = ((1 - cos_theta) / theta_squared) + (sigma * ((sin_theta - (theta * cos_theta)) / (theta_squared * theta)));
+                b = ((theta - sin_theta) / (theta_squared * theta)) + (sigma * (((0.5 * theta_squared) + 1 - cos_theta - (theta * sin_theta)) / (theta_squared * theta_squared)));
             }
         }
         else {
@@ -608,12 +669,13 @@ namespace lie {
         const type cos_theta = math::cos(theta);
         type a, b, c;
         if (math::abs(sigma * sigma) < 1e-6) {
-            c = 1 - 0.5 * sigma;
-            a = -0.5;
+            c = 1 - (0.5 * sigma) + ((sigma * sigma) / 12);
             if (math::abs(theta_squared) < 1e-6) {
+                a = -0.5 + (sigma / 6);
                 b = type(1) / type(12);
             }
             else {
+                a = -0.5 + (sigma * ((theta - sin_theta) / ((2 * theta) * (1 - cos_theta))));
                 b = (theta * sin_theta + 2 * cos_theta - 2) / (2 * theta_squared * (cos_theta - 1));
             }
         }
@@ -635,6 +697,71 @@ namespace lie {
         const matrix::matrix<type, 3, 3> w_inv = a * omega_hat + b * omega_hat_squared + c * matrix::matrix<type, 3, 3>::identity();
         const matrix::matrix<type, 3, 1> upsilon = w_inv * this->transformation_se3.translation();
         return { { omega[0], omega[1], omega[2], upsilon[0], upsilon[1], upsilon[2], sigma } };
+    }
+
+    template <typename type>
+    matrix::matrix<type, 7, 7> sim3<type>::left_jacobian(const matrix::matrix<type, 7, 1>& omega_upsilon_sigma) {
+        matrix::matrix<type, 7, 7> result = matrix::matrix<type, 7, 7>::identity();
+        matrix::matrix<type, 7, 7> adjoint = matrix::matrix<type, 7, 7>::zero();
+
+        const type sigma = omega_upsilon_sigma[6];
+        const matrix::matrix<type, 3, 3> omega_hat = { { { 0, -omega_upsilon_sigma[2], omega_upsilon_sigma[1] },
+                                                         { omega_upsilon_sigma[2], 0, -omega_upsilon_sigma[0] },
+                                                         { -omega_upsilon_sigma[1], omega_upsilon_sigma[0], 0 } } };
+        const matrix::matrix<type, 3, 3> upsilon_hat = { { { 0, -omega_upsilon_sigma[5], omega_upsilon_sigma[4] },
+                                                           { omega_upsilon_sigma[5], 0, -omega_upsilon_sigma[3] },
+                                                           { -omega_upsilon_sigma[4], omega_upsilon_sigma[3], 0 } } };
+        for (size_t i = 0; i < 3; ++i) {
+            for (size_t j = 0; j < 3; ++j) {
+                adjoint[i][j] = omega_hat[i][j];
+                adjoint[i+3][j] = upsilon_hat[i][j];
+                adjoint[i+3][j+3] = omega_hat[i][j];
+            }
+            adjoint[i+3][i+3] += sigma;
+            adjoint[i+3][6] = -omega_upsilon_sigma[3 + i];
+        }
+        matrix::matrix<type, 7, 7> adjoint_power = adjoint;
+        type factorial = 1.0;
+        for (size_t n = 1; n < 20; ++n) {
+            factorial *= static_cast<type>(n + 1);
+            result = result + (adjoint_power * (1.0 / factorial));
+            if (n < 19) adjoint_power = adjoint_power * adjoint;
+        }
+        return result;
+    }
+
+    template <typename type>
+    matrix::matrix<type, 7, 7> sim3<type>::left_jacobian_inverse(const matrix::matrix<type, 7, 1>& omega_upsilon_sigma) {
+        const matrix::matrix<type, 3, 1> omega = { { omega_upsilon_sigma[0], omega_upsilon_sigma[1], omega_upsilon_sigma[2] } };
+        const matrix::matrix<type, 3, 3> rotation_jacobian_inverse = so3<type>::left_jacobian_inverse(omega);
+        const matrix::matrix<type, 7, 7> jacobian = left_jacobian(omega_upsilon_sigma);
+        matrix::matrix<type, 3, 3> coupling_block;
+        matrix::matrix<type, 3, 3> scaled_rotation_block;
+        matrix::matrix<type, 3, 1> sigma_column;
+        for (size_t i = 0; i < 3; ++i) {
+            for (size_t j = 0; j < 3; ++j) {
+                coupling_block[i][j] = jacobian[i+3][j];
+                scaled_rotation_block[i][j] = jacobian[i+3][j+3];
+            }
+            sigma_column[i] = jacobian[i+3][6];
+        }
+        matrix::matrix<type, 3, 3> scaled_rotation_block_inverse;
+        const bool invertible = matrix::invert(scaled_rotation_block, scaled_rotation_block_inverse);
+        ASSERT(invertible, "The scaled rotation block of the sim3 left jacobian must be invertible.");
+        static_cast<void>(invertible);
+        const matrix::matrix<type, 3, 3> inverse_coupling_block = -(scaled_rotation_block_inverse * coupling_block * rotation_jacobian_inverse);
+        const matrix::matrix<type, 3, 1> inverse_sigma_column = -(scaled_rotation_block_inverse * sigma_column);
+        matrix::matrix<type, 7, 7> result = matrix::matrix<type, 7, 7>::zero();
+        for (size_t i = 0; i < 3; ++i) {
+            for (size_t j = 0; j < 3; ++j) {
+                result[i][j] = rotation_jacobian_inverse[i][j];
+                result[i+3][j] = inverse_coupling_block[i][j];
+                result[i+3][j+3] = scaled_rotation_block_inverse[i][j];
+            }
+            result[i+3][6] = inverse_sigma_column[i];
+        }
+        result[6][6] = 1.0;
+        return result;
     }
 
     template <typename type>

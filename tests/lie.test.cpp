@@ -350,6 +350,31 @@ int main(int argc, char* argv[]) {
             REQUIRE(are_values_approx(so3 * matrix::matrix<double, 3, 1>{ { 1.0, -2.0, 3.0 } }, { { -1.0, 2.0, 3.0 } }, 3, 1e-4));
         }
     }
+    
+    {
+        for (double omega_x = 0.0; omega_x < 0.5+0.01; omega_x += 0.5) {
+            for (double omega_y = 0.0; omega_y > -0.3-0.01; omega_y -= 0.3) {
+                for (double omega_z = 0.0; omega_z < 0.2+0.01; omega_z += 0.2) {
+                    matrix::matrix<double, 3, 1> omega = { { omega_x, omega_y, omega_z } };
+                    matrix::matrix<double, 3, 3> jacobian = lie::so3<double>::left_jacobian(omega);
+                    matrix::matrix<double, 3, 3> jacobian_inverse = lie::so3<double>::left_jacobian_inverse(omega);
+                    matrix::matrix<double, 3, 3> identity_product = jacobian * jacobian_inverse;
+                    REQUIRE(are_values_approx(identity_product.data(), matrix::matrix<double, 3, 3>::identity().data(), 9, 1e-4));
+                    double epsilon = 1e-7;
+                    for (int i = 0; i < 3; ++i) {
+                        matrix::matrix<double, 3, 1> omega_plus = omega;
+                        omega_plus[i] += epsilon;
+                        lie::so3<double> exp_omega = lie::so3<double>::exp(omega);
+                        lie::so3<double> exp_omega_plus = lie::so3<double>::exp(omega_plus);
+                        matrix::matrix<double, 3, 1> delta_omega = (exp_omega_plus * exp_omega.inverse()).log();
+                        for (int j = 0; j < 3; ++j) {
+                            REQUIRE(is_value_approx(delta_omega[j] / epsilon, jacobian[j][i], 1e-4));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     ///////////////////////////////////////////////////////////////////////////////
 
@@ -705,6 +730,30 @@ int main(int argc, char* argv[]) {
             REQUIRE(are_values_approx(se3 * matrix::matrix<double, 3, 1>{ { 0.0, 0.0, 0.0 } }, { { 2.0, 0.0, 0.0 } }, 3, 1e-4));
             REQUIRE(are_values_approx(se3 * matrix::matrix<double, 3, 1>{ { 1.0, -2.0, 3.0 } }, { { 1.0, 2.0, 3.0 } }, 3, 1e-4));
         }
+    }
+    
+    {
+        matrix::matrix<double, 6, 1> tangent = { { 0.5, -0.3, 0.2, 1.0, 2.0, -1.0 } };
+        matrix::matrix<double, 6, 6> jacobian = lie::se3<double>::left_jacobian(tangent);
+        matrix::matrix<double, 6, 6> jacobian_inverse = lie::se3<double>::left_jacobian_inverse(tangent);
+        matrix::matrix<double, 6, 6> identity_product = jacobian * jacobian_inverse;
+        REQUIRE(are_values_approx(identity_product.data(), matrix::matrix<double, 6, 6>::identity().data(), 36, 1e-4));
+        double epsilon = 1e-7;
+        for (int i = 0; i < 6; ++i) {
+            matrix::matrix<double, 6, 1> tangent_plus = tangent;
+            tangent_plus[i] += epsilon;
+            lie::se3<double> exp_tangent = lie::se3<double>::exp(tangent);
+            lie::se3<double> exp_tangent_plus = lie::se3<double>::exp(tangent_plus);
+            matrix::matrix<double, 6, 1> delta_tangent = (exp_tangent_plus * exp_tangent.inverse()).log();
+            for (int j = 0; j < 6; ++j) {
+                REQUIRE(is_value_approx(delta_tangent[j] / epsilon, jacobian[j][i], 1e-3));
+            }
+        }
+        matrix::matrix<double, 6, 1> tangent_small = { { 1e-8, 0, 0, 1e-8, 0, 0 } };
+        matrix::matrix<double, 6, 6> jacobian_small = lie::se3<double>::left_jacobian(tangent_small);
+        matrix::matrix<double, 6, 6> jacobian_inverse_small = lie::se3<double>::left_jacobian_inverse(tangent_small);
+        matrix::matrix<double, 6, 6> identity_product_small = jacobian_small * jacobian_inverse_small;
+        REQUIRE(are_values_approx(identity_product_small.data(), matrix::matrix<double, 6, 6>::identity().data(), 36, 1e-4));
     }
 
     ///////////////////////////////////////////////////////////////////////////////
@@ -1134,6 +1183,32 @@ int main(int argc, char* argv[]) {
             REQUIRE(are_values_approx(sim3 * matrix::matrix<double, 3, 1>{ { 0.0, 0.0, 0.0 } }, { { 3.0, 0.0, 1.0 } }, 3, 1e-4));
             REQUIRE(are_values_approx(sim3 * matrix::matrix<double, 3, 1>{ { 1.0, -2.0, 3.0 } }, { { 1.0, 4.0, 7.0 } }, 3, 1e-4));
         }
+    }
+
+    {
+        for (double sigma = -0.4; sigma < 0.4 + 0.01; sigma += 0.4) {
+            matrix::matrix<double, 7, 1> tangent = { { 0.5, -0.3, 0.2, 1.0, 2.0, -1.0, sigma } };
+            matrix::matrix<double, 7, 7> jacobian = lie::sim3<double>::left_jacobian(tangent);
+            matrix::matrix<double, 7, 7> jacobian_inverse = lie::sim3<double>::left_jacobian_inverse(tangent);
+            matrix::matrix<double, 7, 7> identity_product = jacobian * jacobian_inverse;
+            REQUIRE(are_values_approx(identity_product.data(), matrix::matrix<double, 7, 7>::identity().data(), 49, 1e-4));
+            double epsilon = 1e-7;
+            for (int i = 0; i < 7; ++i) {
+                matrix::matrix<double, 7, 1> tangent_plus = tangent;
+                tangent_plus[i] += epsilon;
+                lie::sim3<double> exp_tangent = lie::sim3<double>::exp(tangent);
+                lie::sim3<double> exp_tangent_plus = lie::sim3<double>::exp(tangent_plus);
+                matrix::matrix<double, 7, 1> delta_tangent = (exp_tangent_plus * exp_tangent.inverse()).log();
+                for (int j = 0; j < 7; ++j) {
+                    REQUIRE(is_value_approx(delta_tangent[j] / epsilon, jacobian[j][i], 1e-3));
+                }
+            }
+        }
+        matrix::matrix<double, 7, 1> tangent_small = { { 1e-8, 0, 0, 1e-8, 0, 0, 1e-8 } };
+        matrix::matrix<double, 7, 7> jacobian_small = lie::sim3<double>::left_jacobian(tangent_small);
+        matrix::matrix<double, 7, 7> jacobian_inverse_small = lie::sim3<double>::left_jacobian_inverse(tangent_small);
+        matrix::matrix<double, 7, 7> identity_product_small = jacobian_small * jacobian_inverse_small;
+        REQUIRE(are_values_approx(identity_product_small.data(), matrix::matrix<double, 7, 7>::identity().data(), 49, 1e-4));
     }
 
     return EXIT_SUCCESS;
