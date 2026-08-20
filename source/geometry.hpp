@@ -47,7 +47,9 @@ namespace geometry {
         double matrix_u[4][4];
         double matrix_s[4][4];
         double matrix_vt[4][4];
-        matrix::decompose_singular_value(&matrix_a[0][0], 4, 4, &matrix_u[0][0], &matrix_s[0][0], &matrix_vt[0][0]);
+        if (!matrix::decompose_singular_value(&matrix_a[0][0], 4, 4, &matrix_u[0][0], &matrix_s[0][0], &matrix_vt[0][0])) {
+            return false;
+        }
 
         // Extract the homographic point from the results.
         const double* point_homography = &matrix_vt[3][0];

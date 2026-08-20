@@ -130,7 +130,9 @@ namespace pose_estimation {
         type u[9][9];
         type s[9][9];
         type vt[9][9];
-        matrix::decompose_singular_value(&block[0][0], 9, 9, &u[0][0], &s[0][0], &vt[0][0]);
+        if (!matrix::decompose_singular_value(&block[0][0], 9, 9, &u[0][0], &s[0][0], &vt[0][0])) {
+            return 0;
+        }
         const type null_space[9][4] = {
             { vt[5][0], vt[6][0], vt[7][0], vt[8][0] },
             { vt[5][1], vt[6][1], vt[7][1], vt[8][1] },
