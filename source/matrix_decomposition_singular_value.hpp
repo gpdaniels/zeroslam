@@ -25,17 +25,19 @@ namespace {
 }
 
 namespace matrix {
-    /// @brief  Compute the singular value decomposition of a matrix.
-    /// @param  matrix_a Input matrix to decompose matrix size (width x height).
-    /// @param  matrix_u Output height x height orthogonal matrix.
-    /// @param  matrix_s Output width x height diagonal matrix.
-    /// @param  matrix_vt Output width x width orthogonal matrix.
+    /// @brief  Compute the singular value decomposition of a matrix, A = U * S * Vt.
+    /// @param  matrix_a Input matrix to decompose, matrix size (width x height), row-major.
+    /// @param  width Number of columns of the input matrix, must be non-zero.
+    /// @param  height Number of rows of the input matrix, must be non-zero.
+    /// @param  matrix_u Output height x height orthogonal matrix. Signs are canonical so repeating the call on the same input reproduces the same factorisation.
+    /// @param  matrix_s Output width x height matrix, zero apart from the leading diagonal with min(width, height) diagonal entries are non-negative and sorted from largest to smallest.
+    /// @param  matrix_vt Output width x width orthogonal matrix. Signs are canonical so repeating the call on the same input reproduces the same factorisation.
     /// @return True if the decomposition is successful, false otherwise.
     template <typename type>
     static bool decompose_singular_value(
         const type* __restrict matrix_a,
-        size_t width,
-        size_t height,
+        const size_t width,
+        const size_t height,
         type* __restrict matrix_u,
         type* __restrict matrix_s,
         type* __restrict matrix_vt
@@ -44,65 +46,82 @@ namespace matrix {
         constexpr static const auto transpose =
             [](
                 type* const __restrict matrix,
-                const size_t width,
-                const size_t height
+                const size_t matrix_columns,
+                const size_t matrix_rows
             ) {
-                for (size_t start_index = 0; start_index <= width * height - 1; ++start_index) {
+                if (matrix_columns == matrix_rows) {
+                    for (size_t row = 0; row < matrix_rows; ++row) {
+                        for (size_t column = row + 1; column < matrix_columns; ++column) {
+                            const type temp = matrix[row * matrix_columns + column];
+                            matrix[row * matrix_columns + column] = matrix[column * matrix_columns + row];
+                            matrix[column * matrix_columns + row] = temp;
+                        }
+                    }
+                    return;
+                }
+                for (size_t start_index = 0; start_index < matrix_columns * matrix_rows; ++start_index) {
                     size_t next_index = start_index;
                     size_t cycle_length = 0;
                     do {
                         ++cycle_length;
-                        next_index = ((next_index % height) * width) + (next_index / height);
+                        next_index = ((next_index % matrix_rows) * matrix_columns) + (next_index / matrix_rows);
                     } while (next_index > start_index);
 
-                    if ((next_index >= start_index) && (cycle_length != 1)) {
+                    if ((next_index == start_index) && (cycle_length != 1)) {
                         const type temp = matrix[start_index];
                         next_index = start_index;
                         do {
-                            cycle_length = ((next_index % height) * width) + (next_index / height);
-                            matrix[next_index] = (cycle_length == start_index) ? temp : matrix[cycle_length];
-                            next_index = cycle_length;
+                            const size_t source_index = ((next_index % matrix_rows) * matrix_columns) + (next_index / matrix_rows);
+                            matrix[next_index] = (source_index == start_index) ? temp : matrix[source_index];
+                            next_index = source_index;
                         } while (next_index > start_index);
                     }
                 }
             };
 
-        // Helper function to apply a left givens rotation to a matrix.
-        constexpr static const auto givens_rotation_left =
-            [](type* const __restrict matrix, const size_t width, const size_t height, const size_t row_index, const type alpha, const type beta) {
-                static_cast<void>(height);
-                const type r = math::pythag(alpha, beta);
-                if (r == 0) {
+        struct givens_rotation {
+            type cosine;
+            type sine;
+            bool active;
+        };
+
+        // Helper function to build the rotation that maps (alpha, beta) onto (hypotenuse, 0).
+        constexpr static const auto givens_build =
+            [](const type alpha, const type beta) -> givens_rotation {
+                const type radius = math::pythag(alpha, beta);
+                // A degenerate rotation is the identity, and is skipped rather than applied.
+                if (radius == type(0)) {
+                    return givens_rotation{ type(1), type(0), false };
+                }
+                const type radius_reciprocal = type(1) / radius;
+                return givens_rotation{ alpha * radius_reciprocal, -beta * radius_reciprocal, true };
+            };
+
+        // Helper function to apply a rotation from the left, mixing rows row_index and row_index + 1.
+        constexpr static const auto rotate_rows =
+            [](type* const __restrict matrix, const size_t matrix_columns, const size_t row_index, const givens_rotation rotation) {
+                if (!rotation.active) {
                     return;
                 }
-                const type c = alpha / r;
-                const type s = -beta / r;
-                for (size_t i = 0; i < width; ++i) {
-                    const type S0 = matrix[(row_index + 0) * width + i];
-                    const type S1 = matrix[(row_index + 1) * width + i];
-                    matrix[(row_index + 0) * width + i] += S0 * (c - 1);
-                    matrix[(row_index + 0) * width + i] += S1 * (0 - s);
-                    matrix[(row_index + 1) * width + i] += S0 * (s - 0);
-                    matrix[(row_index + 1) * width + i] += S1 * (c - 1);
+                for (size_t column = 0; column < matrix_columns; ++column) {
+                    const type upper = matrix[(row_index + 0) * matrix_columns + column];
+                    const type lower = matrix[(row_index + 1) * matrix_columns + column];
+                    matrix[(row_index + 0) * matrix_columns + column] = (rotation.cosine * upper) - (rotation.sine * lower);
+                    matrix[(row_index + 1) * matrix_columns + column] = (rotation.sine * upper) + (rotation.cosine * lower);
                 }
             };
 
-        // Helper function to apply a right givens rotation to a matrix.
-        constexpr static const auto givens_rotation_right =
-            [](type* const __restrict matrix, const size_t width, const size_t height, const size_t column_index, const type alpha, const type beta) {
-                const type r = math::pythag(alpha, beta);
-                if (r == 0) {
+        // Helper function to apply a rotation from the right, mixing columns column_index and column_index + 1.
+        constexpr static const auto rotate_columns =
+            [](type* const __restrict matrix, const size_t matrix_columns, const size_t matrix_rows, const size_t column_index, const givens_rotation rotation) {
+                if (!rotation.active) {
                     return;
                 }
-                const type c = alpha / r;
-                const type s = -beta / r;
-                for (size_t i = 0; i < height; ++i) {
-                    const type S0 = matrix[i * width + (column_index + 0)];
-                    const type S1 = matrix[i * width + (column_index + 1)];
-                    matrix[i * width + (column_index + 0)] += S0 * (c - 1);
-                    matrix[i * width + (column_index + 0)] += S1 * (0 - s);
-                    matrix[i * width + (column_index + 1)] += S0 * (s - 0);
-                    matrix[i * width + (column_index + 1)] += S1 * (c - 1);
+                for (size_t row = 0; row < matrix_rows; ++row) {
+                    const type left = matrix[row * matrix_columns + (column_index + 0)];
+                    const type right = matrix[row * matrix_columns + (column_index + 1)];
+                    matrix[row * matrix_columns + (column_index + 0)] = (rotation.cosine * left) - (rotation.sine * right);
+                    matrix[row * matrix_columns + (column_index + 1)] = (rotation.sine * left) + (rotation.cosine * right);
                 }
             };
 
@@ -111,187 +130,187 @@ namespace matrix {
             return false;
         }
 
+        // Validate the input matrix contents. A non-finite value poisons the shift.
+        for (size_t index = 0; index < width * height; ++index) {
+            if (!math::isfinite(matrix_a[index])) {
+                return false;
+            }
+        }
+
         // Set initial values.
         // - matrix_u = identity
         // - matrix_s = matrix_a
         // - matrix_vt = identity
         for (size_t y = 0; y < height; ++y) {
             for (size_t x = 0; x < height; ++x) {
-                matrix_u[y * height + x] = (y == x);
+                matrix_u[y * height + x] = type(y == x);
             }
         }
-        for (size_t i = 0; i < width * height; ++i) {
-            matrix_s[i] = matrix_a[i];
+        for (size_t index = 0; index < width * height; ++index) {
+            matrix_s[index] = matrix_a[index];
         }
         for (size_t y = 0; y < width; ++y) {
             for (size_t x = 0; x < width; ++x) {
-                matrix_vt[y * width + x] = (y == x);
+                matrix_vt[y * width + x] = type(y == x);
             }
         }
 
         // To decompose square/tall matrices we decompose the matrix: A => U * S * Vt.
         // For wide matrix we tranpose then decompose: At => Vt * St * (Ut)t (Note: matrix multiplication order is reversed).
-        // The pre-decomposition transform is handled here.
         const bool wide_matrix = (height < width);
+        const size_t columns = wide_matrix ? height : width;
+        const size_t rows = wide_matrix ? width : height;
+        type* const __restrict left_factor = wide_matrix ? matrix_vt : matrix_u;
+        type* const __restrict right_factor = wide_matrix ? matrix_u : matrix_vt;
         if (wide_matrix) {
             transpose(matrix_s, width, height);
-            type* temp_ptr = matrix_u;
-            matrix_u = matrix_vt;
-            matrix_vt = temp_ptr;
-            size_t temp_dimension = width;
-            width = height;
-            height = temp_dimension;
         }
 
-        const size_t max_total_iterations = 50 * height;
         constexpr static const type epsilon = math::epsilon<type>() * type(64);
 
         // Bi-diagonalisation.
-        const size_t bidiag_columns = width;
-        type* house_vector = new type[height];
-        for (size_t column_index = 0; column_index < bidiag_columns; ++column_index) {
-            // Column Householder.
+        constexpr static const size_t house_vector_static_size = 64;
+        type house_vector_storage[house_vector_static_size];
+        type* house_vector_heap = nullptr;
+        type* house_vector = house_vector_storage;
+        if (rows > house_vector_static_size) {
+            house_vector_heap = new type[rows];
+            house_vector = house_vector_heap;
+        }
+        for (size_t column_index = 0; column_index < columns; ++column_index) {
+            // Column Householder, zeroing the entries below the diagonal of this column.
             {
-                type lead_value = matrix_s[(column_index)*width + (column_index)];
-                if (lead_value < type(0))
-                    lead_value = -lead_value;
+                const type lead_value = matrix_s[(column_index) * columns + (column_index)];
+                const type lead_magnitude = math::abs(lead_value);
 
-                type inv_norm_squared = 0;
-                for (size_t row = column_index; row < height; ++row) {
-                    const type v = matrix_s[(row)*width + (column_index)];
-                    inv_norm_squared += v * v;
+                type norm_reciprocal = type(0);
+                for (size_t row = column_index; row < rows; ++row) {
+                    const type value = matrix_s[(row) * columns + (column_index)];
+                    norm_reciprocal += value * value;
                 }
-                if (inv_norm_squared > type(0))
-                    inv_norm_squared = type(1) / math::sqrt(inv_norm_squared);
-
-                type house_alpha = math::sqrt(type(1) + lead_value * inv_norm_squared);
-                type house_beta = inv_norm_squared / house_alpha;
-
-                if (inv_norm_squared == type(0)) {
-                    house_alpha = type(0);
+                if (norm_reciprocal > type(0)) {
+                    norm_reciprocal = type(1) / math::sqrt(norm_reciprocal);
                 }
+
+                // An all-zero column needs no reflection, and gives the zero vector, so H = I.
+                const type house_alpha = (norm_reciprocal > type(0)) ? math::sqrt(type(1) + (lead_magnitude * norm_reciprocal)) : type(0);
+                const type house_beta = (house_alpha > type(0)) ? (norm_reciprocal / house_alpha) : type(0);
+                const type tail_sign = (lead_value < type(0)) ? type(1) : type(-1);
 
                 house_vector[column_index] = -house_alpha;
-                for (size_t row = column_index + 1; row < height; ++row) {
-                    house_vector[row] = -house_beta * matrix_s[(row)*width + (column_index)];
-                }
-                if (matrix_s[(column_index)*width + (column_index)] < type(0)) {
-                    for (size_t row = column_index + 1; row < height; ++row) {
-                        house_vector[row] = -house_vector[row];
-                    }
+                for (size_t row = column_index + 1; row < rows; ++row) {
+                    house_vector[row] = tail_sign * house_beta * matrix_s[(row) * columns + (column_index)];
                 }
             }
 
-            for (size_t target_col = column_index; target_col < width; ++target_col) {
-                type dot_prod = type(0);
-                for (size_t row = column_index; row < height; ++row) {
-                    dot_prod += matrix_s[(row)*width + (target_col)] * house_vector[row];
+            for (size_t target_column = column_index; target_column < columns; ++target_column) {
+                type projection = type(0);
+                for (size_t row = column_index; row < rows; ++row) {
+                    projection += matrix_s[(row) * columns + (target_column)] * house_vector[row];
                 }
-                for (size_t row = column_index; row < height; ++row) {
-                    matrix_s[(row)*width + (target_col)] -= dot_prod * house_vector[row];
-                }
-            }
-
-            for (size_t row_index = 0; row_index < height; ++row_index) {
-                type dot_prod = type(0);
-                for (size_t row = column_index; row < height; ++row) {
-                    dot_prod += matrix_u[(row_index)*height + (row)] * house_vector[row];
-                }
-                for (size_t row = column_index; row < height; ++row) {
-                    matrix_u[(row_index)*height + (row)] -= dot_prod * house_vector[row];
+                for (size_t row = column_index; row < rows; ++row) {
+                    matrix_s[(row) * columns + (target_column)] -= projection * house_vector[row];
                 }
             }
 
-            if (column_index >= bidiag_columns - 1) {
+            for (size_t factor_row = 0; factor_row < rows; ++factor_row) {
+                type projection = type(0);
+                for (size_t row = column_index; row < rows; ++row) {
+                    projection += left_factor[(factor_row) * rows + (row)] * house_vector[row];
+                }
+                for (size_t row = column_index; row < rows; ++row) {
+                    left_factor[(factor_row) * rows + (row)] -= projection * house_vector[row];
+                }
+            }
+
+            if (column_index + 1 >= columns) {
                 continue;
             }
 
-            // Row Householder.
+            // Row Householder, zeroing the entries to the right of the superdiagonal of this row.
             {
-                type lead_value = matrix_s[(column_index)*width + (column_index + 1)];
-                if (lead_value < type(0))
-                    lead_value = -lead_value;
+                const type lead_value = matrix_s[(column_index) * columns + (column_index + 1)];
+                const type lead_magnitude = math::abs(lead_value);
 
-                type inv_norm_squared = type(0);
-                for (size_t col = column_index + 1; col < width; ++col) {
-                    const type v = matrix_s[(column_index)*width + (col)];
-                    inv_norm_squared += v * v;
+                type norm_reciprocal = type(0);
+                for (size_t column = column_index + 1; column < columns; ++column) {
+                    const type value = matrix_s[(column_index) * columns + (column)];
+                    norm_reciprocal += value * value;
                 }
-                if (inv_norm_squared > type(0))
-                    inv_norm_squared = type(1) / math::sqrt(inv_norm_squared);
-
-                type house_alpha = math::sqrt(type(1) + lead_value * inv_norm_squared);
-                type house_beta = inv_norm_squared / house_alpha;
-
-                if (inv_norm_squared == type(0)) {
-                    house_alpha = type(0);
+                if (norm_reciprocal > type(0)) {
+                    norm_reciprocal = type(1) / math::sqrt(norm_reciprocal);
                 }
+
+                const type house_alpha = (norm_reciprocal > type(0)) ? math::sqrt(type(1) + (lead_magnitude * norm_reciprocal)) : type(0);
+                const type house_beta = (house_alpha > type(0)) ? (norm_reciprocal / house_alpha) : type(0);
+                const type tail_sign = (lead_value < type(0)) ? type(1) : type(-1);
 
                 house_vector[column_index + 1] = -house_alpha;
-                for (size_t col = column_index + 2; col < width; ++col) {
-                    house_vector[col] = -house_beta * matrix_s[(column_index)*width + (col)];
-                }
-                if (matrix_s[(column_index)*width + (column_index + 1)] < type(0)) {
-                    for (size_t col = column_index + 2; col < width; ++col) {
-                        house_vector[col] = -house_vector[col];
-                    }
+                for (size_t column = column_index + 2; column < columns; ++column) {
+                    house_vector[column] = tail_sign * house_beta * matrix_s[(column_index) * columns + (column)];
                 }
             }
 
-            for (size_t target_row = column_index; target_row < height; ++target_row) {
-                type dot_prod = type(0);
-                for (size_t col = column_index + 1; col < width; ++col) {
-                    dot_prod += matrix_s[(target_row)*width + (col)] * house_vector[col];
+            for (size_t target_row = column_index; target_row < rows; ++target_row) {
+                type projection = type(0);
+                for (size_t column = column_index + 1; column < columns; ++column) {
+                    projection += matrix_s[(target_row) * columns + (column)] * house_vector[column];
                 }
-                for (size_t col = column_index + 1; col < width; ++col) {
-                    matrix_s[(target_row)*width + (col)] -= dot_prod * house_vector[col];
+                for (size_t column = column_index + 1; column < columns; ++column) {
+                    matrix_s[(target_row) * columns + (column)] -= projection * house_vector[column];
                 }
             }
 
-            for (size_t target_col = 0; target_col < width; ++target_col) {
-                type dot_prod = type(0);
-                for (size_t col = column_index + 1; col < width; ++col) {
-                    dot_prod += matrix_vt[(col)*width + (target_col)] * house_vector[col];
+            for (size_t target_column = 0; target_column < columns; ++target_column) {
+                type projection = type(0);
+                for (size_t column = column_index + 1; column < columns; ++column) {
+                    projection += right_factor[(column) * columns + (target_column)] * house_vector[column];
                 }
-                for (size_t col = column_index + 1; col < width; ++col) {
-                    matrix_vt[(col)*width + (target_col)] -= dot_prod * house_vector[col];
+                for (size_t column = column_index + 1; column < columns; ++column) {
+                    right_factor[(column) * columns + (target_column)] -= projection * house_vector[column];
                 }
             }
         }
-        delete[] house_vector;
+        delete[] house_vector_heap;
+        house_vector_heap = nullptr;
+        house_vector = nullptr;
 
         // Diagonalisation.
+        type singular_max = type(0);
+        for (size_t diagonal = 0; diagonal < columns; ++diagonal) {
+            singular_max = math::max(singular_max, math::abs(matrix_s[(diagonal) * columns + (diagonal)]));
+        }
+        for (size_t offset = 0; offset + 1 < columns; ++offset) {
+            singular_max = math::max(singular_max, math::abs(matrix_s[(offset) * columns + (offset + 1)]));
+        }
+        const type tolerance = epsilon * singular_max;
+
+        // The problem being iterated is the columns x columns bidiagonal, so the iteration budget is
+        // set by columns; a very tall matrix does not make the bidiagonal any harder to converge.
+        const size_t max_total_iterations = 50 * columns;
         size_t sweep_start_index = 0;
         size_t total_iterations = 0;
-        while (sweep_start_index < width - 1 && total_iterations < max_total_iterations) {
+        while ((sweep_start_index + 1 < columns) && (total_iterations < max_total_iterations)) {
             ++total_iterations;
 
-            type singular_max = type(0);
-            for (size_t diag = 0; diag < width; ++diag) {
-                singular_max = math::max(singular_max, math::abs(matrix_s[(diag)*width + (diag)]));
-            }
-            for (size_t off = 0; off < width - 1; ++off) {
-                singular_max = math::max(singular_max, math::abs(matrix_s[(off)*width + (off + 1)]));
-            }
-
-            const type tolerance = epsilon * math::max(singular_max, type(1.0));
-
-            while (sweep_start_index < width - 1 && math::abs(matrix_s[(sweep_start_index)*width + (sweep_start_index + 1)]) <= tolerance) {
+            // Deflate any leading superdiagonal entries that have converged.
+            while ((sweep_start_index + 1 < columns) && (math::abs(matrix_s[(sweep_start_index) * columns + (sweep_start_index + 1)]) <= tolerance)) {
+                matrix_s[(sweep_start_index) * columns + (sweep_start_index + 1)] = type(0);
                 ++sweep_start_index;
             }
-
-            if (sweep_start_index == width - 1) {
-                continue;
+            if (sweep_start_index + 1 >= columns) {
+                break;
             }
 
+            // The active block runs to the first superdiagonal entry that has already converged.
             size_t sweep_end_index = sweep_start_index + 2;
-            while (sweep_end_index < width && math::abs(matrix_s[(sweep_end_index - 1) * width + (sweep_end_index)]) > tolerance) {
+            while ((sweep_end_index < columns) && (math::abs(matrix_s[(sweep_end_index - 1) * columns + (sweep_end_index)]) > tolerance)) {
                 ++sweep_end_index;
             }
 
             bool has_small_diagonal = false;
-            for (size_t diag = sweep_start_index; diag < sweep_end_index; ++diag) {
-                if (math::abs(matrix_s[(diag)*width + (diag)]) <= tolerance) {
+            for (size_t diagonal = sweep_start_index; diagonal < sweep_end_index; ++diagonal) {
+                if (math::abs(matrix_s[(diagonal) * columns + (diagonal)]) <= tolerance) {
                     has_small_diagonal = true;
                     break;
                 }
@@ -300,97 +319,80 @@ namespace matrix {
             type bulge_alpha = type(0);
             type bulge_beta = type(0);
 
-            if (sweep_end_index - sweep_start_index == 2 && has_small_diagonal) {
-                bulge_alpha = type(0);
-                bulge_beta = type(1);
+            if (has_small_diagonal) {
+                if (math::abs(matrix_s[(sweep_start_index) * columns + (sweep_start_index)]) <= tolerance) {
+                    bulge_alpha = type(0);
+                    bulge_beta = type(1);
+                }
+                else {
+                    bulge_alpha = matrix_s[(sweep_start_index) * columns + (sweep_start_index)];
+                    bulge_beta = matrix_s[(sweep_start_index) * columns + (sweep_start_index + 1)];
+                }
             }
             else {
-                type C00 = matrix_s[(sweep_end_index - 2) * width + (sweep_end_index - 2)] * matrix_s[(sweep_end_index - 2) * width + (sweep_end_index - 2)];
+                const type diagonal_last = matrix_s[(sweep_end_index - 1) * columns + (sweep_end_index - 1)];
+                const type diagonal_previous = matrix_s[(sweep_end_index - 2) * columns + (sweep_end_index - 2)];
+                const type superdiagonal_last = matrix_s[(sweep_end_index - 2) * columns + (sweep_end_index - 1)];
+                type block_00 = diagonal_previous * diagonal_previous;
                 if (sweep_end_index - sweep_start_index > 2) {
-                    C00 += matrix_s[(sweep_end_index - 3) * width + (sweep_end_index - 2)] * matrix_s[(sweep_end_index - 3) * width + (sweep_end_index - 2)];
+                    const type superdiagonal_previous = matrix_s[(sweep_end_index - 3) * columns + (sweep_end_index - 2)];
+                    block_00 += superdiagonal_previous * superdiagonal_previous;
                 }
-                const type C01 = matrix_s[(sweep_end_index - 2) * width + (sweep_end_index - 2)] * matrix_s[(sweep_end_index - 2) * width + (sweep_end_index - 1)];
-                const type C10 = C01;
-                const type C11 = matrix_s[(sweep_end_index - 1) * width + (sweep_end_index - 1)] * matrix_s[(sweep_end_index - 1) * width + (sweep_end_index - 1)] + matrix_s[(sweep_end_index - 2) * width + (sweep_end_index - 1)] * matrix_s[(sweep_end_index - 2) * width + (sweep_end_index - 1)];
-
-                const type b_val = -(C00 + C11) / type(2);
-                const type c_val = C00 * C11 - C01 * C10;
-
-                type discriminant = type(0);
-                if (b_val * b_val - c_val > type(0)) {
-                    discriminant = math::sqrt(b_val * b_val - c_val);
-                }
-                else {
-                    const type b_alt = (C00 - C11) / type(2);
-                    const type c_alt = -C01 * C10;
-                    if (b_alt * b_alt - c_alt > type(0)) {
-                        discriminant = math::sqrt(b_alt * b_alt - c_alt);
-                    }
-                }
-
-                const type lambda_first = -b_val + discriminant;
-                const type lambda_second = -b_val - discriminant;
-
-                const type delta_first = math::abs(lambda_first - C11);
-                const type delta_second = math::abs(lambda_second - C11);
-                const type selected_mu = (delta_first < delta_second) ? lambda_first : lambda_second;
-
-                bulge_alpha = matrix_s[(sweep_start_index)*width + (sweep_start_index)] * matrix_s[(sweep_start_index)*width + (sweep_start_index)] - selected_mu;
-                bulge_beta = matrix_s[(sweep_start_index)*width + (sweep_start_index + 1)] * matrix_s[(sweep_start_index)*width + (sweep_start_index)];
+                const type block_01 = diagonal_previous * superdiagonal_last;
+                const type block_11 = (diagonal_last * diagonal_last) + (superdiagonal_last * superdiagonal_last);
+                const type block_centre = (block_00 + block_11) / type(2);
+                const type block_half_difference = (block_00 - block_11) / type(2);
+                const type discriminant = math::pythag(block_half_difference, block_01);
+                const type lambda_first = block_centre + discriminant;
+                const type lambda_second = block_centre - discriminant;
+                const type selected_mu = (math::abs(lambda_first - block_11) < math::abs(lambda_second - block_11)) ? lambda_first : lambda_second;
+                const type diagonal_first = matrix_s[(sweep_start_index) * columns + (sweep_start_index)];
+                const type superdiagonal_first = matrix_s[(sweep_start_index) * columns + (sweep_start_index + 1)];
+                bulge_alpha = (diagonal_first * diagonal_first) - selected_mu;
+                bulge_beta = superdiagonal_first * diagonal_first;
             }
 
-            for (size_t sweep_index = sweep_start_index; sweep_index < sweep_end_index - 1; ++sweep_index) {
-                givens_rotation_right(matrix_s, width, height, sweep_index, bulge_alpha, bulge_beta);
-                givens_rotation_left(matrix_vt, width, width, sweep_index, bulge_alpha, bulge_beta);
-                bulge_alpha = matrix_s[(sweep_index)*width + (sweep_index)];
-                bulge_beta = matrix_s[(sweep_index + 1) * width + (sweep_index)];
-                givens_rotation_left(matrix_s, width, height, sweep_index, bulge_alpha, bulge_beta);
-                givens_rotation_right(matrix_u, height, height, sweep_index, bulge_alpha, bulge_beta);
-                bulge_alpha = matrix_s[(sweep_index)*width + (sweep_index + 1)];
-                if (sweep_index + 2 < width) {
-                    bulge_beta = matrix_s[(sweep_index)*width + (sweep_index + 2)];
-                }
-                else {
-                    bulge_beta = type(0);
-                }
+            for (size_t sweep_index = sweep_start_index; sweep_index + 1 < sweep_end_index; ++sweep_index) {
+                const givens_rotation column_rotation = givens_build(bulge_alpha, bulge_beta);
+                rotate_columns(matrix_s, columns, rows, sweep_index, column_rotation);
+                rotate_rows(right_factor, columns, sweep_index, column_rotation);
+                bulge_alpha = matrix_s[(sweep_index) * columns + (sweep_index)];
+                bulge_beta = matrix_s[(sweep_index + 1) * columns + (sweep_index)];
+                const givens_rotation row_rotation = givens_build(bulge_alpha, bulge_beta);
+                rotate_rows(matrix_s, columns, sweep_index, row_rotation);
+                rotate_columns(left_factor, rows, rows, sweep_index, row_rotation);
+                bulge_alpha = matrix_s[(sweep_index) * columns + (sweep_index + 1)];
+                bulge_beta = (sweep_index + 2 < columns) ? matrix_s[(sweep_index) * columns + (sweep_index + 2)] : type(0);
             }
 
-            {
-                for (size_t diag_index = sweep_start_index; diag_index < sweep_end_index - 1; ++diag_index) {
-                    for (size_t col_index = 0; col_index < width; ++col_index) {
-                        if (diag_index > col_index || diag_index + 1 < col_index) {
-                            matrix_s[(diag_index)*width + (col_index)] = type(0);
-                        }
-                    }
+            for (size_t index = sweep_start_index; index + 1 < sweep_end_index; ++index) {
+                matrix_s[(index + 1) * columns + (index)] = type(0);
+                if (index + 2 < columns) {
+                    matrix_s[(index) * columns + (index + 2)] = type(0);
                 }
-                for (size_t row_index = 0; row_index < height; ++row_index) {
-                    for (size_t diag_index = sweep_start_index; diag_index < sweep_end_index - 1; ++diag_index) {
-                        if (row_index > diag_index || row_index + 1 < diag_index) {
-                            matrix_s[(row_index)*width + (diag_index)] = type(0);
-                        }
-                    }
-                }
-                for (size_t off = 0; off < width - 1; ++off) {
-                    if (math::abs(matrix_s[(off)*width + (off + 1)]) <= epsilon * singular_max) {
-                        matrix_s[(off)*width + (off + 1)] = type(0);
-                    }
+                if (math::abs(matrix_s[(index) * columns + (index + 1)]) <= tolerance) {
+                    matrix_s[(index) * columns + (index + 1)] = type(0);
                 }
             }
         }
 
-        // If the total iterations exceeded the max the decomposition failed.
-        if (total_iterations >= max_total_iterations) {
+        // Check for convergence or fail.
+        const bool converged = (sweep_start_index + 1 >= columns);
+        if (!converged) {
             return false;
+        }
+
+        // Ensure off diagonal entries are zero.
+        for (size_t row = 0; row < rows; ++row) {
+            for (size_t column = 0; column < columns; ++column) {
+                if (row != column) {
+                    matrix_s[(row) * columns + (column)] = type(0);
+                }
+            }
         }
 
         // The post-decomposition transform is handled here if the matrix was wide.
         if (wide_matrix) {
-            size_t temp_dimension = width;
-            width = height;
-            height = temp_dimension;
-            type* temp_ptr = matrix_u;
-            matrix_u = matrix_vt;
-            matrix_vt = temp_ptr;
             transpose(matrix_u, height, height);
             transpose(matrix_s, height, width);
             transpose(matrix_vt, width, width);
@@ -404,34 +406,37 @@ namespace matrix {
         const size_t min_dimension = math::min(width, height);
 
         for (size_t diag = 0; diag < min_dimension; ++diag) {
-            const type sign_val = ((type(0) < matrix_s[diag * width + diag]) - (matrix_s[diag * width + diag] < type(0)));
+            const type sign_val = (matrix_s[diag * width + diag] < type(0)) ? type(-1) : type(1);
             matrix_s[diag * width + diag] *= sign_val;
             for (size_t row = 0; row < height; ++row) {
                 matrix_u[row * height + diag] *= sign_val;
             }
         }
 
-        bool performed_swap = true;
-        while (performed_swap) {
-            performed_swap = false;
-            for (size_t diag = 0; diag < min_dimension - 1; ++diag) {
-                if (matrix_s[diag * width + diag] < matrix_s[(diag + 1) * width + (diag + 1)]) {
-                    for (size_t row = 0; row < height; ++row) {
-                        const type temp = matrix_u[row * height + diag];
-                        matrix_u[row * height + diag] = matrix_u[row * height + diag + 1];
-                        matrix_u[row * height + diag + 1] = temp;
-                    }
-                    const type temp = matrix_s[diag * width + diag];
-                    matrix_s[diag * width + diag] = matrix_s[(diag + 1) * width + diag + 1];
-                    matrix_s[(diag + 1) * width + diag + 1] = temp;
-                    for (size_t col = 0; col < width; ++col) {
-                        const type temp = matrix_vt[diag * width + col];
-                        matrix_vt[diag * width + col] = matrix_vt[(diag + 1) * width + col];
-                        matrix_vt[(diag + 1) * width + col] = temp;
-                    }
-                    performed_swap = true;
-                    break;
+        for (size_t target = 0; target + 1 < min_dimension; ++target) {
+            size_t largest = target;
+            for (size_t candidate = target + 1; candidate < min_dimension; ++candidate) {
+                if (matrix_s[candidate * width + candidate] > matrix_s[largest * width + largest]) {
+                    largest = candidate;
                 }
+            }
+            if (largest == target) {
+                continue;
+            }
+            {
+                const type temp = matrix_s[target * width + target];
+                matrix_s[target * width + target] = matrix_s[largest * width + largest];
+                matrix_s[largest * width + largest] = temp;
+            }
+            for (size_t row = 0; row < height; ++row) {
+                const type temp = matrix_u[row * height + target];
+                matrix_u[row * height + target] = matrix_u[row * height + largest];
+                matrix_u[row * height + largest] = temp;
+            }
+            for (size_t column = 0; column < width; ++column) {
+                const type temp = matrix_vt[target * width + column];
+                matrix_vt[target * width + column] = matrix_vt[largest * width + column];
+                matrix_vt[largest * width + column] = temp;
             }
         }
 
@@ -447,7 +452,7 @@ namespace matrix {
                 negative_sign_count += (matrix_vt[diag * width + col] < type(0));
             }
             const bool flip_majority = (positive_sign_count < negative_sign_count);
-            const bool flip_tiebreak = ((positive_sign_count == negative_sign_count) && (matrix_u[diag] > type(0)));
+            const bool flip_tiebreak = ((positive_sign_count == negative_sign_count) && (matrix_u[0 * height + diag] > type(0)));
             if (flip_majority || flip_tiebreak) {
                 for (size_t row = 0; row < height; ++row) {
                     matrix_u[row * height + diag] = -matrix_u[row * height + diag];
@@ -467,7 +472,7 @@ namespace matrix {
                     negative_sign_count += (matrix_u[row * height + diag] < type(0));
                 }
                 const bool flip_majority = (positive_sign_count < negative_sign_count);
-                const bool flip_tiebreak = ((positive_sign_count == negative_sign_count) && (matrix_u[diag] > type(0)));
+                const bool flip_tiebreak = ((positive_sign_count == negative_sign_count) && (matrix_u[0 * height + diag] > type(0)));
                 if (flip_majority || flip_tiebreak) {
                     for (size_t row = 0; row < height; ++row) {
                         matrix_u[row * height + diag] = -matrix_u[row * height + diag];
@@ -484,7 +489,7 @@ namespace matrix {
                     negative_sign_count += (matrix_vt[diag * width + col] < type(0));
                 }
                 const bool flip_majority = (positive_sign_count < negative_sign_count);
-                const bool flip_tiebreak = ((positive_sign_count == negative_sign_count) && (matrix_vt[diag] > type(0)));
+                const bool flip_tiebreak = ((positive_sign_count == negative_sign_count) && (matrix_vt[diag * width + 0] > type(0)));
                 if (flip_majority || flip_tiebreak) {
                     for (size_t col = 0; col < width; ++col) {
                         matrix_vt[diag * width + col] = -matrix_vt[diag * width + col];
