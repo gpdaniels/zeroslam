@@ -16,6 +16,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "slam.hpp"
 
+#include "cdr.hpp"
+#include "file.hpp"
+#include "mcap.hpp"
+
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
@@ -27,6 +31,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -44,94 +49,35 @@ namespace {
     }
 }
 
-inline unsigned char* pgm_load(const char* path, std::size_t& rows, std::size_t& cols) {
-    std::FILE* handle = std::fopen(path, "rb");
-    if (!handle) {
+inline unsigned char* file_load(const char* path, std::size_t& length) {
+    const gtl::file input(path);
+    if (!input.is_open()) {
         return nullptr;
     }
-    char magic[2]{};
-    if (std::fread(&magic[0], sizeof(char), 2, handle) != 2) {
-        std::fclose(handle);
+    gtl::file::size_type size = 0;
+    if ((!input.get_size(size)) || (size <= 0)) {
         return nullptr;
     }
-    if ((magic[0] != 'P') || (magic[1] != '5')) {
-        std::fclose(handle);
+    unsigned char* data = new unsigned char[size];
+    if (!data) {
         return nullptr;
     }
-    for (int c = std::fgetc(handle); true; c = std::fgetc(handle)) {
-        if ((c == EOF) || std::feof(handle) || std::ferror(handle)) {
-            std::fclose(handle);
-            return nullptr;
-        }
-        if ((c != ' ') && (c != '\t') && (c != '\n') && (c != '\r')) {
-            std::ungetc(c, handle);
-            break;
-        }
-    }
-    if (std::fscanf(handle, "%zu %zu", &cols, &rows) != 2) {
-        std::fclose(handle);
-        return nullptr;
-    }
-    if ((cols > 4096) || (rows > 4096)) {
-        std::fclose(handle);
-        return nullptr;
-    }
-    for (int c = std::fgetc(handle); true; c = std::fgetc(handle)) {
-        if ((c == EOF) || std::feof(handle) || std::ferror(handle)) {
-            std::fclose(handle);
-            return nullptr;
-        }
-        if ((c != ' ') && (c != '\t') && (c != '\n') && (c != '\r')) {
-            std::ungetc(c, handle);
-            break;
-        }
-    }
-    int maximum;
-    if (std::fscanf(handle, "%d", &maximum) != 1) {
-        std::fclose(handle);
-        return nullptr;
-    }
-    if ((maximum <= 0) || (maximum > 255)) {
-        std::fprintf(stderr, "Unsupported PGM maxval %d: only 8-bit binary PGM (P5, maxval 1..255) is supported.\n", maximum);
-        std::fclose(handle);
-        return nullptr;
-    }
-    const std::size_t size = cols * rows;
-    if (size > 4096 * 4096) {
-        std::fclose(handle);
-        return nullptr;
-    }
-    int c = std::fgetc(handle);
-    if ((c == EOF) || std::feof(handle) || std::ferror(handle) || (c != ' ' && c != '\t' && c != '\n' && c != '\r')) {
-        std::fclose(handle);
-        return nullptr;
-    }
-    unsigned char* pixels = new unsigned char[size];
-    std::size_t index = 0;
-    std::size_t attempts = 10;
+    gtl::file::size_type index = 0;
     while (index < size) {
-        const std::size_t delta = std::fread(&pixels[index], sizeof(char), size - index, handle);
-        if ((delta == 0) || std::feof(handle) || std::ferror(handle)) {
-            if (std::feof(handle) || std::ferror(handle) || (attempts-- == 0)) {
-                std::fclose(handle);
-                delete[] pixels;
-                return nullptr;
-            }
+        gtl::file::size_type delta = size - index;
+        if ((!input.read(reinterpret_cast<char*>(&data[index]), delta)) || (delta == 0)) {
+            delete[] data;
+            return nullptr;
         }
         index += delta;
     }
-    if (index != size) {
-        std::fclose(handle);
-        delete[] pixels;
-        return nullptr;
-    }
-    std::fclose(handle);
-    return pixels;
+    length = static_cast<std::size_t>(size);
+    return data;
 }
 
-inline bool save_trajectory_as_txt(const char* path, const map::map& reconstruction) {
-    std::FILE* handle = std::fopen(path, "wb");
-    if (!handle) {
+inline bool save_trajectory_as_txt(const char* path, const map::map& reconstruction, const std::vector<long long>& timestamps) {
+    gtl::file output(path, gtl::file::access_type::write_only, gtl::file::creation_type::create_or_open, gtl::file::cursor_type::start_of_truncated);
+    if (!output.is_open()) {
         return false;
     }
 
@@ -147,11 +93,23 @@ inline bool save_trajectory_as_txt(const char* path, const map::map& reconstruct
         matrix::matrix<double, 4, 1> rotation = lie::so3<double>(R).get_quaternion();
 
         // Write camera pose.
+        if ((id < 0) || (static_cast<size_t>(id) >= timestamps.size())) {
+            continue;
+        }
+        const long long timestamp = timestamps[static_cast<std::size_t>(id)];
+        const cdr::time stamp = cdr::time::from_nanoseconds(timestamp);
+        char line[512];
         // Note: Format is one pose per line as "timestamp x y z q_x q_y q_z q_w\n"
-        std::fprintf(handle, "%d %f %f %f %f %f %f %f\n", id, centre[0], centre[1], centre[2], rotation[1], rotation[2], rotation[3], rotation[0]);
+        const int characters = std::snprintf(line, sizeof(line), "%d.%09u %.17g %.17g %.17g %.17g %.17g %.17g %.17g\n", stamp.sec, stamp.nanosec, centre[0], centre[1], centre[2], rotation[1], rotation[2], rotation[3], rotation[0]);
+        if ((characters <= 0) || (static_cast<size_t>(characters) >= sizeof(line))) {
+            return false;
+        }
+        gtl::file::size_type length = static_cast<gtl::file::size_type>(characters);
+        if (!output.write(line, length)) {
+            return false;
+        }
     }
 
-    std::fclose(handle);
     return true;
 }
 
@@ -166,8 +124,8 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
     constexpr static const size_t vertices_per_camera = 5; // 1 centre + 4 corners
     constexpr static const size_t edges_per_camera = 8;    // 4 from centre to corners + 4 rectangle edges
 
-    std::FILE* handle = std::fopen(path, "wb");
-    if (!handle) {
+    gtl::file output(path, gtl::file::access_type::write_only, gtl::file::creation_type::create_or_open, gtl::file::cursor_type::start_of_truncated);
+    if (!output.is_open()) {
         return false;
     }
 
@@ -177,35 +135,56 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
     const size_t total_edges = num_cameras * edges_per_camera;
 
     // Write PLY header.
-    std::fprintf(handle, "ply\n");
-    std::fprintf(handle, "format binary_little_endian 1.0\n");
-    std::fprintf(handle, "comment Created using ZeroSLAM by Geoffrey Daniels\n");
-    std::fprintf(handle, "element vertex %zu\n", total_vertices);
-    std::fprintf(handle, "property float x\n");
-    std::fprintf(handle, "property float y\n");
-    std::fprintf(handle, "property float z\n");
-    std::fprintf(handle, "property uchar red\n");
-    std::fprintf(handle, "property uchar green\n");
-    std::fprintf(handle, "property uchar blue\n");
-    std::fprintf(handle, "element edge %zu\n", total_edges);
-    std::fprintf(handle, "property int vertex1\n");
-    std::fprintf(handle, "property int vertex2\n");
-    std::fprintf(handle, "end_header\n");
+    char header[512];
+    const int characters = std::snprintf(
+        header, sizeof(header),
+        "ply\n"
+        "format binary_little_endian 1.0\n"
+        "comment Created using ZeroSLAM by Geoffrey Daniels\n"
+        "element vertex %zu\n"
+        "property float x\n"
+        "property float y\n"
+        "property float z\n"
+        "property uchar red\n"
+        "property uchar green\n"
+        "property uchar blue\n"
+        "element edge %zu\n"
+        "property int vertex1\n"
+        "property int vertex2\n"
+        "end_header\n",
+        total_vertices,
+        total_edges
+    );
+    if ((characters <= 0) || (static_cast<size_t>(characters) >= sizeof(header))) {
+        return false;
+    }
+    gtl::file::size_type length = static_cast<gtl::file::size_type>(characters);
+    if (!output.write(header, length)) {
+        return false;
+    }
 
     // Helper lambda to write vertex.
-    constexpr static const auto write_vertex = [](std::FILE* handle, float x, float y, float z, unsigned char r, unsigned char g, unsigned char b) {
-        std::fwrite(&x, sizeof(float), 1, handle);
-        std::fwrite(&y, sizeof(float), 1, handle);
-        std::fwrite(&z, sizeof(float), 1, handle);
-        std::fwrite(&r, sizeof(unsigned char), 1, handle);
-        std::fwrite(&g, sizeof(unsigned char), 1, handle);
-        std::fwrite(&b, sizeof(unsigned char), 1, handle);
+    constexpr static const auto write_vertex = [](const gtl::file& output, float x, float y, float z, unsigned char r, unsigned char g, unsigned char b) {
+        gtl::file::size_type length = sizeof(float);
+        output.write(reinterpret_cast<const char*>(&x), length);
+        length = sizeof(float);
+        output.write(reinterpret_cast<const char*>(&y), length);
+        length = sizeof(float);
+        output.write(reinterpret_cast<const char*>(&z), length);
+        length = sizeof(unsigned char);
+        output.write(reinterpret_cast<const char*>(&r), length);
+        length = sizeof(unsigned char);
+        output.write(reinterpret_cast<const char*>(&g), length);
+        length = sizeof(unsigned char);
+        output.write(reinterpret_cast<const char*>(&b), length);
     };
 
     // Helper lambda to write edge.
-    constexpr static const auto write_edge = [](std::FILE* handle, int v1, int v2) {
-        std::fwrite(&v1, sizeof(int), 1, handle);
-        std::fwrite(&v2, sizeof(int), 1, handle);
+    constexpr static const auto write_edge = [](const gtl::file& output, int v1, int v2) {
+        gtl::file::size_type length = sizeof(int);
+        output.write(reinterpret_cast<const char*>(&v1), length);
+        length = sizeof(int);
+        output.write(reinterpret_cast<const char*>(&v2), length);
     };
 
     // Write landmark vertices.
@@ -213,7 +192,7 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
         const auto& pos = landmark.location;
         const auto& colour = landmark.colour;
         write_vertex(
-            handle,
+            output,
             static_cast<float>(pos[0]),
             static_cast<float>(pos[1]),
             static_cast<float>(pos[2]),
@@ -248,7 +227,7 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
 
         // Write camera centre.
         write_vertex(
-            handle,
+            output,
             static_cast<float>(centre[0]),
             static_cast<float>(centre[1]),
             static_cast<float>(centre[2]),
@@ -260,7 +239,7 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
         // Write frustum corners.
         for (int i = 0; i < 4; ++i) {
             write_vertex(
-                handle,
+                output,
                 static_cast<float>(world_corners[i][0]),
                 static_cast<float>(world_corners[i][1]),
                 static_cast<float>(world_corners[i][2]),
@@ -276,161 +255,252 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
         const int camera_index = num_landmarks + i * vertices_per_camera;
         // Edges from centre to corners.
         for (int j = 0; j < 4; ++j) {
-            write_edge(handle, camera_index, camera_index + 1 + j);
+            write_edge(output, camera_index, camera_index + 1 + j);
         }
         // Rectangle edges connecting corners.
         for (int j = 0; j < 4; ++j) {
-            write_edge(handle, camera_index + 1 + j, camera_index + 1 + ((j + 1) % 4));
+            write_edge(output, camera_index + 1 + j, camera_index + 1 + ((j + 1) % 4));
         }
     }
 
-    std::fclose(handle);
     return true;
 }
 
 int main(int argc, char* argv[]) {
-    std::printf(".-----------------------------------------------.\n");
-    std::printf("|   _____             _____ __    _____ _____   |\n");
-    std::printf("|  |__   |___ ___ ___|   __|  |  |  _  |     |  |\n");
-    std::printf("|  |   __| -_|  _| . |__   |  |__|     | | | |  |\n");
-    std::printf("|  |_____|___|_| |___|_____|_____|__|__|_|_|_|  |\n");
-    std::printf("|                                               |\n");
-    std::printf("| This software is a:                           |\n");
-    std::printf("|  |- simple                                    |\n");
-    std::printf("|  |- minimal                                   |\n");
-    std::printf("|  |- indirect                                  |\n");
-    std::printf("|  |- monocular                                 |\n");
-    std::printf("|  |- factor-graph                              |\n");
-    std::printf("|  |- deterministic                             |\n");
-    std::printf("|  |- dependency-free                           |\n");
-    std::printf("|  '- visual SLAM system written in pure C++.   |\n");
-    std::printf("|                                               |\n");
-    std::printf("| No external libraries. No frills. Just SLAM.  |\n");
-    std::printf("|                                               |\n");
-    std::printf("| >   https://github.com/gpdaniels/zeroslam   < |\n");
-    std::printf("|                                               |\n");
-    std::printf("| Licensed under GPLv3                          |\n");
-    std::printf("| Get in touch for commercial licensing.        |\n");
-    std::printf("'-----------------------------------------------'\n");
-    std::printf("\n");
-    std::fflush(stdout);
+    // Extract the optional --frames and --verbose limits, leaving the positional arguments in place.
+    size_t frame_limit = static_cast<size_t>(-1);
+    int verbose = 0;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--frames") == 0) {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "Missing value for option: --frames\n");
+                return EXIT_FAILURE;
+            }
+            char* end_pointer = nullptr;
+            const unsigned long value = std::strtoul(argv[i + 1], &end_pointer, 10);
+            if ((end_pointer == argv[i + 1]) || (*end_pointer != 0) || (value < 2)) {
+                std::fprintf(stderr, "Invalid value for --frames: '%s' (at least 2 frames are needed).\n", argv[i + 1]);
+                return EXIT_FAILURE;
+            }
+            frame_limit = static_cast<size_t>(value);
+            for (int j = i; j + 2 < argc; ++j) {
+                argv[j] = argv[j + 2];
+            }
+            argc -= 2;
+            --i;
+        }
+        else if (std::strcmp(argv[i], "--verbose") == 0) {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "Missing value for option: --verbose\n");
+                return EXIT_FAILURE;
+            }
+            char* end_pointer = nullptr;
+            const long value = std::strtol(argv[i + 1], &end_pointer, 10);
+            if ((end_pointer == argv[i + 1]) || (*end_pointer != 0) || (value < 0) || (value > 2)) {
+                std::fprintf(stderr, "Invalid value for --verbose: '%s' (must be 0, 1, or 2).\n", argv[i + 1]);
+                return EXIT_FAILURE;
+            }
+            verbose = static_cast<int>(value);
+            for (int j = i; j + 2 < argc; ++j) {
+                argv[j] = argv[j + 2];
+            }
+            argc -= 2;
+            --i;
+        }
+    }
 
-    if (argc < 6) {
-        std::printf("Usage %s [video] [fx] [fy] [cx] [cy]\n", argv[0]);
-        std::printf("    video - A directory path containing same-sized undistorted greyscale frames in pgm format named: 000.pgm, 001.pgm, ...\n");
-        std::printf("    fx    - The horizontal focal length of the camera in pixels.\n");
-        std::printf("    fy    - The vertical focal length of the camera in pixels.\n");
-        std::printf("    cx    - The horizontal centre pixel location in pixels.\n");
-        std::printf("    cy    - The vertical centre pixel location in pixels.\n");
+    if (argc < 2) {
+        std::printf("Usage %s [scene] [--frames count] [--verbose level]\n", argv[0]);
+        std::printf("    scene     - Scene mcap file path.\n");
+        std::printf("    --frames  - Optional limit, process only the first [count] frames.\n");
+        std::printf("    --verbose - Optional verbosity level (0=quiet, 1=progress, 2=detailed), default is 0.\n");
         return EXIT_SUCCESS;
     }
 
-    std::printf("Provided arguments...\n");
-    std::printf("    video:    %s\n", argv[1]);
-    std::printf("    fx:       %s\n", argv[2]);
-    std::printf("    fy:       %s\n", argv[3]);
-    std::printf("    cx:       %s\n", argv[4]);
-    std::printf("    cy:       %s\n", argv[5]);
-
-    std::printf("Loading video...\n");
-    char path[2048];
-    const size_t start_filename = std::strlen(argv[1]);
-    if (start_filename >= 2000) {
-        std::fprintf(stderr, "Invalid video directory path, too long.\n");
+    if (verbose >= 2) {
+        std::printf("Provided arguments...\n");
+        std::printf("    scene:    %s\n", argv[1]);
+        if (frame_limit != static_cast<size_t>(-1)) {
+            std::printf("    limit:    %zu frames\n", frame_limit);
+        }
+        std::printf("Loading scene...\n");
+    }
+    std::size_t file_length = 0;
+    unsigned char* file_data = file_load(argv[1], file_length);
+    if (file_data == nullptr) {
+        std::fprintf(stderr, "Failed to load the scene file '%s', the input must be an mcap file.\n", argv[1]);
         return EXIT_FAILURE;
     }
-    std::memcpy(&path[0], argv[1], start_filename + 1);
-
-    size_t frames = 0;
-    size_t rows = 0;
-    size_t cols = 0;
-    unsigned char** data = new unsigned char*[1000];
-    for (size_t i = 0; i < 1000; ++i) {
-        path[start_filename + 0] = '/';
-        path[start_filename + 1] = '0' + ((i / 100) % 10);
-        path[start_filename + 2] = '0' + ((i / 10) % 10);
-        path[start_filename + 3] = '0' + ((i / 1) % 10);
-        path[start_filename + 4] = '.';
-        path[start_filename + 5] = 'p';
-        path[start_filename + 6] = 'g';
-        path[start_filename + 7] = 'm';
-        path[start_filename + 8] = 0;
-        size_t temp_rows = 0;
-        size_t temp_cols = 0;
-        data[i] = pgm_load(path, temp_rows, temp_cols);
-        if (data[i] == nullptr) {
-            frames = i;
-            break;
-        }
-        if (i == 0) {
-            rows = temp_rows;
-            cols = temp_cols;
-        }
-        else {
-            if ((rows != temp_rows) || (cols != temp_cols)) {
-                std::fprintf(stderr, "Mismatching image sizes, image %zu is different from ones before it.\n", i);
-                delete[] data;
-                return EXIT_FAILURE;
-            }
-        }
-    }
-    if (frames == 0) {
-        std::fprintf(stderr, "Failed to load any frames.\n");
-        delete[] data;
+    mcap reader;
+    std::string error;
+    if (!reader.parse(file_data, file_length, error)) {
+        std::fprintf(stderr, "Failed to parse the scene file '%s' as mcap: %s.\n", argv[1], error.c_str());
+        delete[] file_data;
         return EXIT_FAILURE;
     }
-    if (frames < 2) {
-        std::fprintf(stderr, "At least two frames must be provided to create a map.\n");
-        delete[] data;
+    const mcap::channel_type* image_channel = nullptr;
+    const mcap::channel_type* info_channel = nullptr;
+    for (const mcap::channel_type& channel : reader.get_channels()) {
+        const mcap::schema_type* schema = reader.find_schema(channel.schema_id);
+        if (schema == nullptr) {
+            continue;
+        }
+        if ((schema->name == "sensor_msgs/msg/Image") && (image_channel == nullptr)) {
+            image_channel = &channel;
+        }
+        else if ((schema->name == "sensor_msgs/msg/CameraInfo") && (info_channel == nullptr)) {
+            info_channel = &channel;
+        }
+    }
+    if (image_channel == nullptr) {
+        std::fprintf(stderr, "The scene has no raw image channel.\n");
+        delete[] file_data;
         return EXIT_FAILURE;
     }
-    std::printf("    frames:   %zu (000.pgm -> %03zu.pgm)\n", frames, frames - 1);
-    std::printf("    width:    %zu\n", cols);
-    std::printf("    height:   %zu\n", rows);
+    if (info_channel == nullptr) {
+        std::fprintf(stderr, "The scene has no camera info channel for the intrinsics.\n");
+        delete[] file_data;
+        return EXIT_FAILURE;
+    }
 
-    const double fx = std::strtod(argv[2], nullptr);
-    const double fy = std::strtod(argv[3], nullptr);
-    const double cx = std::strtod(argv[4], nullptr);
-    const double cy = std::strtod(argv[5], nullptr);
-    matrix::matrix<double, 3, 3> intrinsic = { { { fx, 0.0, cx },
-                                                 { 0.0, fy, cy },
-                                                 { 0.0, 0.0, 1.0 } } };
-
-    std::printf("Loading slam system...\n");
+    if (verbose >= 2) {
+        std::printf("Loading slam system...\n");
+    }
     std::signal(SIGINT, signal_handler);
     slam slam;
 
-    std::printf("Converting images...\n");
-    // Convert raw data into image type.
-    image::image images[1000];
-    for (size_t i = 0; i < frames; ++i) {
-        images[i] = image::image(rows, cols, data[i]);
-        delete[] data[i];
-        data[i] = nullptr;
+    if (verbose >= 2) {
+        std::printf("Ready.\n");
+        std::printf("\n");
+        std::printf("Processing frames...\n");
     }
-    delete[] data;
+    size_t frames = 0;
+    size_t rows = 0;
+    size_t cols = 0;
+    std::vector<long long> timestamps;
+    double fx = 0.0;
+    double fy = 0.0;
+    double cx = 0.0;
+    double cy = 0.0;
 
-    std::printf("Ready.\n");
-    std::printf("\n");
+    std::vector<const mcap::message_type*> image_messages;
+    long long current_timestamp = -1;
 
-    std::printf("Processing frames...\n");
-    for (size_t i = 0; i < frames; ++i) {
+    const size_t total_messages = reader.get_messages().size();
+    size_t processed_messages = 0;
+
+    auto process_buffered_images = [&]() {
+        for (const mcap::message_type* img_msg : image_messages) {
+            if (frames >= frame_limit) {
+                break;
+            }
+            if ((fx <= 0.0) || (fy <= 0.0)) {
+                std::fprintf(stderr, "Image message %zu arrived before valid camera intrinsics.\n", frames);
+                return false;
+            }
+            cdr::image image;
+            if (!cdr::read_image(img_msg->data, img_msg->length, image)) {
+                std::fprintf(stderr, "Image message %zu does not decode.\n", frames);
+                return false;
+            }
+            const bool consistent = (image.encoding == "mono8") && (image.width > 0) && (image.height > 0) && (image.width <= 4096) && (image.height <= 4096) && (image.step == image.width) && (image.data.size() == static_cast<std::size_t>(image.width) * image.height);
+            const bool matching = (frames == 0) || ((image.width == cols) && (image.height == rows));
+            if (!consistent || !matching) {
+                std::fprintf(stderr, "Image message %zu is not a consistent mono8 image.\n", frames);
+                return false;
+            }
+            cols = image.width;
+            rows = image.height;
+            timestamps.push_back(static_cast<long long>(img_msg->log_time));
+            if (verbose >= 2) {
+                std::printf("\n");
+                std::printf("Starting frame %zu\n", frames + 1);
+            }
+            std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+            matrix::matrix<double, 3, 3> intrinsic = { { { fx, 0.0, cx },
+                                                         { 0.0, fy, cy },
+                                                         { 0.0, 0.0, 1.0 } } };
+            image::image frame(rows, cols, image.data.data());
+            slam.process_frame(intrinsic, frame);
+            std::chrono::duration<double> frame_duration = std::chrono::steady_clock::now() - start;
+            if (verbose >= 2) {
+                std::printf("Finished frame %zu, took: %f seconds\n", frames + 1, frame_duration.count());
+                std::fflush(stdout);
+            }
+            ++frames;
+        }
+        image_messages.clear();
+        return true;
+    };
+
+    for (const mcap::message_type& message : reader.get_messages()) {
+        ++processed_messages;
+        if (verbose == 1) {
+            if (frame_limit != static_cast<size_t>(-1)) {
+                std::printf("\rProcessing: %3zu%% (%zu / %zu frames)", (frames * 100) / frame_limit, frames, frame_limit);
+            }
+            else {
+                std::printf("\rProcessing: %3zu%% (%zu / %zu messages)", (processed_messages * 100) / (total_messages == 0 ? 1 : total_messages), processed_messages, total_messages);
+            }
+            std::fflush(stdout);
+        }
+
         if (shutdown_requested) {
-            std::printf("Interrupt received, stopping...\n");
+            if (verbose >= 1) std::printf("\nInterrupt received, stopping...\n");
             break;
         }
-        std::printf("\n");
-        std::printf("Starting frame %zu/%zu\n", i + 1, frames);
-        std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-        slam.process_frame(intrinsic, images[i]);
-        std::chrono::duration<double> frame_duration = std::chrono::steady_clock::now() - start;
-        std::printf("Finished frame %zu/%zu, took: %f seconds\n", i + 1, frames, frame_duration.count());
-        std::fflush(stdout);
+
+        const long long message_time = static_cast<long long>(message.log_time);
+        if ((current_timestamp != -1) && (message_time != current_timestamp)) {
+            if (!process_buffered_images()) {
+                delete[] file_data;
+                return EXIT_FAILURE;
+            }
+            if (frames >= frame_limit) {
+                break;
+            }
+        }
+        current_timestamp = message_time;
+
+        if (message.channel_id == info_channel->id) {
+            cdr::camera_info information;
+            if (cdr::read_camera_info(message.data, message.length, information)) {
+                fx = information.k[0];
+                fy = information.k[4];
+                cx = information.k[2];
+                cy = information.k[5];
+            }
+        }
+        else if (message.channel_id == image_channel->id) {
+            image_messages.push_back(&message);
+        }
     }
 
-    std::printf("Saving map and camera trajectory...\n");
+    if (!process_buffered_images()) {
+        delete[] file_data;
+        return EXIT_FAILURE;
+    }
+    delete[] file_data;
+
+    if (verbose == 1) {
+        if (frame_limit != static_cast<size_t>(-1)) {
+            std::printf("\rProcessing: %3zu%% (%zu / %zu frames)", (frames * 100) / frame_limit, frames, frame_limit);
+        }
+        std::printf("\n");
+    }
+
+    if (frames < 2) {
+        std::fprintf(stderr, "At least two frames must be provided to create a map.\n");
+        return EXIT_FAILURE;
+    }
+
+    if (verbose >= 2) {
+        std::printf("\n");
+        std::printf("Saving map and camera trajectory...\n");
+    }
+
     // Note: This can be easily plotted using evo: `evo_traj tum trajectory.txt -p`.
-    if (!save_trajectory_as_txt("trajectory.txt", slam.reconstruction)) {
+    if (!save_trajectory_as_txt("trajectory.txt", slam.reconstruction, timestamps)) {
         std::fprintf(stderr, "Failed to save camera trajectory to txt file.\n");
     }
     // Note: This can be easily visualised using meshlab.
@@ -438,5 +508,7 @@ int main(int argc, char* argv[]) {
         std::fprintf(stderr, "Failed to save map and camera trajectory to ply file.\n");
     }
 
-    std::printf("Done.\n");
+    if (verbose >= 2) {
+        std::printf("Done.\n");
+    }
 }
