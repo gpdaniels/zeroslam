@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef TRAJECTORY_ALIGNMENT_ABSOLUTE_ORIENTATION_HPP
-#define TRAJECTORY_ALIGNMENT_ABSOLUTE_ORIENTATION_HPP
+#ifndef ZEROSLAM_EVALUATE_ABSOLUTE_ORIENTATION_HPP
+#define ZEROSLAM_EVALUATE_ABSOLUTE_ORIENTATION_HPP
 
 #include "matrix_decomposition_singular_value.hpp"
 
@@ -351,5 +351,5 @@ bool absolute_orientation(
     return true;
 }
 
-#endif
+#endif // ZEROSLAM_EVALUATE_ABSOLUTE_ORIENTATION_HPP
 

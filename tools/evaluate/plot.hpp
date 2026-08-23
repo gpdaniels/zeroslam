@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef TRAJECTORY_ALIGNMENT_PLOT_HPP
-#define TRAJECTORY_ALIGNMENT_PLOT_HPP
+#ifndef ZEROSLAM_EVALUATE_PLOT_HPP
+#define ZEROSLAM_EVALUATE_PLOT_HPP
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -490,4 +490,4 @@ void draw_plot(
     delete[] image_buffer;
 }
 
-#endif
+#endif // ZEROSLAM_EVALUATE_PLOT_HPP
