@@ -50,10 +50,14 @@ mkdir -p data
 ffmpeg -i video.mp4 -start_number 0 -frames:v 10 'data/%03d.pgm'
 ```
 
-Next run the system on the data. The usage of the program is `zeroslam [video] [fx] [fy] [cx] [cy]`
+Next run the system on the data. The usage of the program is `zeroslam-process [video] [fx] [fy] [cx] [cy]`
 ```
+# Build the tool.
 cd build
-./runtime/Release/zeroslam ./data 525 525 320 240
+cmake --build . --parallel 4 --target zeroslam-process
+
+# Process a dataset.
+./runtime/Release/zeroslam-process ./data 525 525 320 240
 ```
 
 The program will output a trajectory file in TUM format and a ply pointcloud file.
