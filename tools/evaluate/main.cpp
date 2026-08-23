@@ -27,6 +27,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <limits>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -34,7 +35,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 struct pose {
-    double timestamp;
+    long long timestamp_nanoseconds;
     double x_coordinate;
     double y_coordinate;
     double z_coordinate;
@@ -44,6 +45,50 @@ struct pose {
     double quaternion_w;
 };
 
+bool parse_timestamp_nanoseconds(const char* const text, long long& timestamp_nanoseconds) {
+    if (text == nullptr || *text == '\0') {
+        return false;
+    }
+    const char* position = text;
+    if (*position < '0' || *position > '9') {
+        return false;
+    }
+    long long seconds = 0;
+    while (*position >= '0' && *position <= '9') {
+        const int digit = *position - '0';
+        if (seconds > (std::numeric_limits<long long>::max() - digit) / 10) {
+            return false;
+        }
+        seconds = seconds * 10 + digit;
+        ++position;
+    }
+    long long nanoseconds = 0;
+    if (*position == '.') {
+        ++position;
+        int fractional_digits = 0;
+        while (*position >= '0' && *position <= '9') {
+            if (fractional_digits < 9) {
+                nanoseconds =
+                    nanoseconds * 10 + (*position - '0');
+                ++fractional_digits;
+            }
+            ++position;
+        }
+        while (fractional_digits < 9) {
+            nanoseconds *= 10;
+            ++fractional_digits;
+        }
+    }
+    if (*position != '\0') {
+        return false;
+    }
+    if (seconds > (std::numeric_limits<long long>::max() - nanoseconds) / 1000000000LL) {
+        return false;
+    }
+    timestamp_nanoseconds = seconds * 1000000000LL + nanoseconds;
+    return true;
+}
+
 bool load_trajectory(const char* const filename, std::vector<pose>& trajectory) {
     std::FILE* const file_handle = std::fopen(filename, "r");
     if (file_handle == nullptr) {
@@ -52,11 +97,25 @@ bool load_trajectory(const char* const filename, std::vector<pose>& trajectory) 
     }
     char line_buffer[256];
     while (std::fgets(line_buffer, sizeof(line_buffer), file_handle) != nullptr) {
-        pose point;
+        char* timestamp_end = line_buffer;
+        while (*timestamp_end != '\0' &&
+               *timestamp_end != ' ' &&
+               *timestamp_end != '\t' &&
+               *timestamp_end != '\n' &&
+               *timestamp_end != '\r') {
+            ++timestamp_end;
+        }
+        const char saved_character = *timestamp_end;
+        *timestamp_end = '\0';
+        pose point{};
+        if (!parse_timestamp_nanoseconds(line_buffer, point.timestamp_nanoseconds)) {
+            *timestamp_end = saved_character;
+            continue;
+        }
+        *timestamp_end = saved_character;
         const int items_scanned = std::sscanf(
-            line_buffer,
-            "%lf %lf %lf %lf %lf %lf %lf %lf",
-            &point.timestamp,
+            timestamp_end,
+            "%lf %lf %lf %lf %lf %lf %lf",
             &point.x_coordinate,
             &point.y_coordinate,
             &point.z_coordinate,
@@ -65,7 +124,7 @@ bool load_trajectory(const char* const filename, std::vector<pose>& trajectory) 
             &point.quaternion_z,
             &point.quaternion_w
         );
-        if (items_scanned == 8) {
+        if (items_scanned == 7) {
             trajectory.push_back(point);
         }
     }
