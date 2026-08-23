@@ -15,6 +15,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #include "absolute_orientation.hpp"
+#include "dataset.hpp"
 #include "plot.hpp"
 
 #if defined(_MSC_VER)
@@ -27,110 +28,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <limits>
 #include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
-
-struct pose {
-    long long timestamp_nanoseconds;
-    double x_coordinate;
-    double y_coordinate;
-    double z_coordinate;
-    double quaternion_x;
-    double quaternion_y;
-    double quaternion_z;
-    double quaternion_w;
-};
-
-bool parse_timestamp_nanoseconds(const char* const text, long long& timestamp_nanoseconds) {
-    if (text == nullptr || *text == '\0') {
-        return false;
-    }
-    const char* position = text;
-    if (*position < '0' || *position > '9') {
-        return false;
-    }
-    long long seconds = 0;
-    while (*position >= '0' && *position <= '9') {
-        const int digit = *position - '0';
-        if (seconds > (std::numeric_limits<long long>::max() - digit) / 10) {
-            return false;
-        }
-        seconds = seconds * 10 + digit;
-        ++position;
-    }
-    long long nanoseconds = 0;
-    if (*position == '.') {
-        ++position;
-        int fractional_digits = 0;
-        while (*position >= '0' && *position <= '9') {
-            if (fractional_digits < 9) {
-                nanoseconds =
-                    nanoseconds * 10 + (*position - '0');
-                ++fractional_digits;
-            }
-            ++position;
-        }
-        while (fractional_digits < 9) {
-            nanoseconds *= 10;
-            ++fractional_digits;
-        }
-    }
-    if (*position != '\0') {
-        return false;
-    }
-    if (seconds > (std::numeric_limits<long long>::max() - nanoseconds) / 1000000000LL) {
-        return false;
-    }
-    timestamp_nanoseconds = seconds * 1000000000LL + nanoseconds;
-    return true;
-}
-
-bool load_trajectory(const char* const filename, std::vector<pose>& trajectory) {
-    std::FILE* const file_handle = std::fopen(filename, "r");
-    if (file_handle == nullptr) {
-        std::fprintf(stderr, "Failed to open file: %s\n", filename);
-        return false;
-    }
-    char line_buffer[256];
-    while (std::fgets(line_buffer, sizeof(line_buffer), file_handle) != nullptr) {
-        char* timestamp_end = line_buffer;
-        while (*timestamp_end != '\0' &&
-               *timestamp_end != ' ' &&
-               *timestamp_end != '\t' &&
-               *timestamp_end != '\n' &&
-               *timestamp_end != '\r') {
-            ++timestamp_end;
-        }
-        const char saved_character = *timestamp_end;
-        *timestamp_end = '\0';
-        pose point{};
-        if (!parse_timestamp_nanoseconds(line_buffer, point.timestamp_nanoseconds)) {
-            *timestamp_end = saved_character;
-            continue;
-        }
-        *timestamp_end = saved_character;
-        const int items_scanned = std::sscanf(
-            timestamp_end,
-            "%lf %lf %lf %lf %lf %lf %lf",
-            &point.x_coordinate,
-            &point.y_coordinate,
-            &point.z_coordinate,
-            &point.quaternion_x,
-            &point.quaternion_y,
-            &point.quaternion_z,
-            &point.quaternion_w
-        );
-        if (items_scanned == 7) {
-            trajectory.push_back(point);
-        }
-    }
-    std::fclose(file_handle);
-    return true;
-}
 
 void print_usage(const char* const program_name) {
     const char* const usage_string = "Usage: %s <ground_truth.txt> [est1.txt] [est2.txt] [--first] [--plot|-p <axes>]...\n";
@@ -220,8 +122,8 @@ int main(const int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    std::vector<pose> ground_truth_trajectory;
-    if (!load_trajectory(ground_truth_filename.c_str(), ground_truth_trajectory)) {
+    std::vector<dataset::trajectory_pose> ground_truth_trajectory;
+    if (!dataset::load_trajectory(ground_truth_filename, ground_truth_trajectory)) {
         std::fprintf(stderr, "Failed to load ground truth: %s\n", ground_truth_filename.c_str());
         return EXIT_FAILURE;
     }
@@ -241,8 +143,8 @@ int main(const int argc, char* argv[]) {
     for (int f = 0; f < estimated_file_count; ++f) {
         std::printf("\n");
 
-        std::vector<pose> estimated_trajectory;
-        if (!load_trajectory(estimated_filenames[f], estimated_trajectory)) {
+        std::vector<dataset::trajectory_pose> estimated_trajectory;
+        if (!dataset::load_trajectory(estimated_filenames[f], estimated_trajectory)) {
             std::fprintf(stderr, "Failed to load: %s\n", estimated_filenames[f]);
             return EXIT_FAILURE;
         }
