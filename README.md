@@ -69,46 +69,46 @@ scene/
 
 ## Processing a scene ##
 
-The tools directory contains a tool directory called `process`, target/binary is `zeroslam-process`.
+The tools directory contains a tool directory called `process`, target/binary is `zeroslam-process`, run as `zeroslam process`.
 This tool takes a scene mcap and runs the SLAM system on it outputting a trajectory file and pointcloud for evaluation.
 ```
-# Build the tool.
+# Build the tools.
 cd build
-cmake --build . --parallel 4 --target zeroslam-process
+cmake --build . --parallel 4
 
 # Process a scene.
-./runtime/Release/zeroslam-process ../datasets/freiburg/xyz.mcap
+./runtime/Release/zeroslam process ../datasets/freiburg/xyz.mcap
 ```
 
 The program will output a trajectory file in TUM format and a ply pointcloud file.
 
 ## Evaluating a trajectory ##
 
-The tools directory contains a tool directory called `evaluate`, target/binary is `zeroslam-evaluate`.
+The tools directory contains a tool directory called `evaluate`, target/binary is `zeroslam-evaluate`, run as `zeroslam evaluate`.
 This tool aligns trajectories in the TUM format and returns the error after scaling and alignment.
 
 Usage:
 ```
-# Build the tool.
+# Build the tools.
 cd build
-cmake --build . --parallel 4 --target zeroslam-evaluate
+cmake --build . --parallel 4
 
 # Evaluate a trajectory with a ground truth.
-./runtime/Release/zeroslam-evaluate trajectory_gt.txt trajectory_eval_1.txt
+./runtime/Release/zeroslam evaluate trajectory_gt.txt trajectory_eval_1.txt
 
 # Evaluate two trajectories against a ground truth.
-./runtime/Release/zeroslam-evaluate trajectory_gt.txt trajectory_eval_1.txt trajectory_eval_2.txt
+./runtime/Release/zeroslam evaluate trajectory_gt.txt trajectory_eval_1.txt trajectory_eval_2.txt
 
 # Ensure the first pose is aligned.
-./runtime/Release/zeroslam-evaluate trajectory_gt.txt trajectory_eval_1.txt --first
+./runtime/Release/zeroslam evaluate trajectory_gt.txt trajectory_eval_1.txt --first
 
 # Plot the trajectories from each of the x, y, or z, planes.
-./runtime/Release/zeroslam-evaluate trajectory_gt.txt trajectory_eval_1.txt --plot xyz
+./runtime/Release/zeroslam evaluate trajectory_gt.txt trajectory_eval_1.txt --plot xyz
 ```
 
 ## Fetching datasets ##
 
-The tools directory contains a tool directory called `dataset`, target/binary is `zeroslam-dataset`.
+The tools directory contains a tool directory called `dataset`, target/binary is `zeroslam-dataset`, run as `zeroslam dataset`.
 This tool can list, download, validate, expand, and collapse, dataset scenes hosted at [gpdaniels/slam-datasets](https://huggingface.co/datasets/gpdaniels/slam-datasets).
 By default the datasets directory is assumed to be next to the tool executable (`./datasets` when that cannot be determined) override with `--datasets`.
 
@@ -122,39 +122,39 @@ Usage:
 ```
 # Build the tool.
 cd build
-cmake --build . --parallel 4 --target zeroslam-dataset
+cmake --build . --parallel 4
 
 # List, download, and validate a scene.
-./runtime/Release/zeroslam-dataset list
-./runtime/Release/zeroslam-dataset get freiburg/xyz
-./runtime/Release/zeroslam-dataset validate freiburg/xyz
+./runtime/Release/zeroslam dataset list
+./runtime/Release/zeroslam dataset get freiburg/xyz
+./runtime/Release/zeroslam dataset validate freiburg/xyz
 
 # Unpack a scene for inspection or editing, and pack it back.
-./runtime/Release/zeroslam-dataset expand ../datasets/freiburg/xyz.mcap ./xyz-expanded
-./runtime/Release/zeroslam-dataset collapse ./xyz-expanded ../datasets/freiburg/xyz.mcap
+./runtime/Release/zeroslam dataset expand ../datasets/freiburg/xyz.mcap ./xyz-expanded
+./runtime/Release/zeroslam dataset collapse ./xyz-expanded ../datasets/freiburg/xyz.mcap
 ```
 
 ## Tracking accuracy over time ##
 
-The tools directory contains a tool directory called `regression`, target/binary is `zeroslam-regression`.
+The tools directory contains a tool directory called `regression`, target/binary is `zeroslam-regression`, run as `zeroslam regression`.
 This tool downloads (if not downloaded), validates a scene, runs the SLAM system on it, and evaluates the recorded trajectory against a ground truth.
 
 The recorded metrics never fail the run. The exit code only reflects operational failures, as interpreting metric changes depends on the code changes.
 
 Usage:
 ```
-# Build the tool.
+# Build the tools.
 cd build
-cmake --build . --parallel 4 --target zeroslam-regression
+cmake --build . --parallel 4
 
 # Download (if not downloaded) and benchmark a scene in the datasets directory.
-./runtime/Release/zeroslam-regression freiburg/xyz
+./runtime/Release/zeroslam regression freiburg/xyz
 
 # Benchmark only the first 150 frames of an mcap file scene.
-./runtime/Release/zeroslam-regression ../datasets/freiburg/xyz.mcap --frames 150
+./runtime/Release/zeroslam regression ../datasets/freiburg/xyz.mcap --frames 150
 
 # Benchmark and evaluate against a custom ground truth.
-./runtime/Release/zeroslam-regression ../datasets/freiburg/xyz.mcap --ground-truth trajectory.txt
+./runtime/Release/zeroslam regression ../datasets/freiburg/xyz.mcap --ground-truth trajectory.txt
 ```
 
 ## License ##
