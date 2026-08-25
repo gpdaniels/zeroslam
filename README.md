@@ -106,6 +106,34 @@ cmake --build . --parallel 4 --target zeroslam-evaluate
 ./runtime/Release/zeroslam-evaluate trajectory_gt.txt trajectory_eval_1.txt --plot xyz
 ```
 
+## Fetching datasets ##
+
+The tools directory contains a tool directory called `dataset`, target/binary is `zeroslam-dataset`.
+This tool can list, download, validate, expand, and collapse, dataset scenes hosted at [gpdaniels/slam-datasets](https://huggingface.co/datasets/gpdaniels/slam-datasets).
+By default the datasets directory is assumed to be next to the tool executable (`./datasets` when that cannot be determined) override with `--datasets`.
+
+**Note: Downloading datasets with this tool requires that the `curl` executable is installed and reachable.**
+
+Scenes are stored as one mcap file each, `[dataset]/[scene].mcap`, and `get` accepts a whole dataset (`freiburg`) or a single scene (`freiburg/xyz`).
+Downloads stream to a `.part` file renamed into place after a size check, so interrupted downloads are detectable and rerunning a download completes or repairs the files (`--force` redownloads).
+Private repositories are reached with `--token` or the `HF_TOKEN` environment variable, and `--repo` selects another hub repository (huggingface only).
+
+Usage:
+```
+# Build the tool.
+cd build
+cmake --build . --parallel 4 --target zeroslam-dataset
+
+# List, download, and validate a scene.
+./runtime/Release/zeroslam-dataset list
+./runtime/Release/zeroslam-dataset get freiburg/xyz
+./runtime/Release/zeroslam-dataset validate freiburg/xyz
+
+# Unpack a scene for inspection or editing, and pack it back.
+./runtime/Release/zeroslam-dataset expand ../datasets/freiburg/xyz.mcap ./xyz-expanded
+./runtime/Release/zeroslam-dataset collapse ./xyz-expanded ../datasets/freiburg/xyz.mcap
+```
+
 ## License ##
 
 Copyright (C) 2026 Geoffrey Daniels. https://gpdaniels.com/
