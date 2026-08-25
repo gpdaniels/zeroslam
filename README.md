@@ -134,6 +134,29 @@ cmake --build . --parallel 4 --target zeroslam-dataset
 ./runtime/Release/zeroslam-dataset collapse ./xyz-expanded ../datasets/freiburg/xyz.mcap
 ```
 
+## Tracking accuracy over time ##
+
+The tools directory contains a tool directory called `regression`, target/binary is `zeroslam-regression`.
+This tool downloads (if not downloaded), validates a scene, runs the SLAM system on it, and evaluates the recorded trajectory against a ground truth.
+
+The recorded metrics never fail the run. The exit code only reflects operational failures, as interpreting metric changes depends on the code changes.
+
+Usage:
+```
+# Build the tool.
+cd build
+cmake --build . --parallel 4 --target zeroslam-regression
+
+# Download (if not downloaded) and benchmark a scene in the datasets directory.
+./runtime/Release/zeroslam-regression freiburg/xyz
+
+# Benchmark only the first 150 frames of an mcap file scene.
+./runtime/Release/zeroslam-regression ../datasets/freiburg/xyz.mcap --frames 150
+
+# Benchmark and evaluate against a custom ground truth.
+./runtime/Release/zeroslam-regression ../datasets/freiburg/xyz.mcap --ground-truth trajectory.txt
+```
+
 ## License ##
 
 Copyright (C) 2026 Geoffrey Daniels. https://gpdaniels.com/
