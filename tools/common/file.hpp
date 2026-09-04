@@ -26,6 +26,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define GTL_IO_FILE_ALIAS(name)
 #endif
 
+// Local fix: glibc declares lseek as noexcept (via __THROW) and clang requires this redeclaration to match it.
+#if defined(__linux__)
+#define GTL_IO_FILE_NOEXCEPT noexcept
+#else
+#define GTL_IO_FILE_NOEXCEPT
+#endif
+
 namespace {
     using size_t = decltype(sizeof(0));
     using ssize_t = decltype(static_cast<char*>(nullptr) - static_cast<char*>(nullptr));
@@ -38,12 +45,13 @@ namespace {
 
     extern "C" int open(const char* path, int flags, ...) GTL_IO_FILE_ALIAS(open);
     extern "C" int close(int handle) GTL_IO_FILE_ALIAS(close);
-    extern "C" off_t lseek(int handle, off_t offset, int whence);
+    extern "C" off_t lseek(int handle, off_t offset, int whence) GTL_IO_FILE_NOEXCEPT;
     extern "C" ssize_t read(int handle, void* buffer, size_t count) GTL_IO_FILE_ALIAS(read);
     extern "C" ssize_t write(int handle, const void* buffer, size_t count) GTL_IO_FILE_ALIAS(write);
 }
 
 #undef GTL_IO_FILE_ALIAS
+#undef GTL_IO_FILE_NOEXCEPT
 
 namespace gtl {
     /// @brief A class to hold an RAII file handle and provide member functions to operate on it.

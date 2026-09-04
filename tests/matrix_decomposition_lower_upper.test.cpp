@@ -47,8 +47,16 @@ static inline bool is_value_approx(double lhs, double rhs, double epsilon = 1e-8
     return (std::abs(lhs - rhs) <= (epsilon * (std::abs(lhs) + std::abs(rhs))) + epsilon);
 }
 
+static inline bool is_value_approx(float lhs, float rhs, double epsilon = 1e-8) {
+    return is_value_approx(static_cast<double>(lhs), static_cast<double>(rhs), epsilon);
+}
+
 static inline bool is_value_equal(double lhs, double rhs) {
     return lhs == rhs;
+}
+
+static inline bool is_value_equal(float lhs, float rhs) {
+    return is_value_equal(static_cast<double>(lhs), static_cast<double>(rhs));
 }
 
 void matrix_multiply(const double* lhs, int lhs_width, int lhs_height, const double* rhs, int rhs_width, int rhs_height, double* result);
@@ -206,10 +214,10 @@ int main(int argc, char* argv[]) {
         float result[4];
         REQUIRE(matrix::solve_lower_upper<float>(&A[0][0], &B[0], 4, 4, &result[0]));
 
-        REQUIRE(is_value_approx(result[0], 1.0f, 1e-6f));
-        REQUIRE(is_value_approx(result[1], 0.0f, 1e-6f));
-        REQUIRE(is_value_approx(result[2], -1.0f, 1e-6f));
-        REQUIRE(is_value_approx(result[3], 2.0f, 1e-6f));
+        REQUIRE(is_value_approx(result[0], 1.0f, 1e-6));
+        REQUIRE(is_value_approx(result[1], 0.0f, 1e-6));
+        REQUIRE(is_value_approx(result[2], -1.0f, 1e-6));
+        REQUIRE(is_value_approx(result[3], 2.0f, 1e-6));
 
         float A2[2][2] = {
             { 0.0f, 2.0f },
@@ -237,8 +245,8 @@ int main(int argc, char* argv[]) {
         float result3[2];
         REQUIRE(matrix::solve_lower_upper<float>(&A3[0][0], &B3[0], 2, 2, &result3[0]));
 
-        REQUIRE(is_value_approx(result3[0], 0.0f, 1e-6f));
-        REQUIRE(is_value_approx(result3[1], 4.0f, 1e-6f));
+        REQUIRE(is_value_approx(result3[0], 0.0f, 1e-6));
+        REQUIRE(is_value_approx(result3[1], 4.0f, 1e-6));
     }
 
     {
@@ -387,7 +395,7 @@ int main(int argc, char* argv[]) {
                 unsigned long long int state_previous = this->state;
                 this->state = state_previous * 0x5851F42D4C957F2Dull + this->increment;
                 unsigned int state_shift_xor_shift = static_cast<unsigned int>(((state_previous >> 18u) ^ state_previous) >> 27u);
-                int rotation = state_previous >> 59u;
+                const int rotation = static_cast<int>(state_previous >> 59u);
                 return (state_shift_xor_shift >> rotation) | (state_shift_xor_shift << ((-rotation) & 31));
             }
 

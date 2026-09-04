@@ -47,6 +47,10 @@ static inline bool is_value_approx(double lhs, double rhs, double epsilon = 1e-8
     return (std::abs(lhs - rhs) <= (epsilon * (std::abs(lhs) + std::abs(rhs))) + epsilon);
 }
 
+static inline bool is_value_approx(float lhs, float rhs, double epsilon = 1e-8) {
+    return is_value_approx(static_cast<double>(lhs), static_cast<double>(rhs), epsilon);
+}
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
@@ -92,7 +96,7 @@ int main(int argc, char* argv[]) {
                 unsigned long long int state_previous = this->state;
                 this->state = state_previous * 0x5851F42D4C957F2Dull + this->increment;
                 unsigned int state_shift_xor_shift = static_cast<unsigned int>(((state_previous >> 18u) ^ state_previous) >> 27u);
-                int rotation = state_previous >> 59u;
+                const int rotation = static_cast<int>(state_previous >> 59u);
                 return (state_shift_xor_shift >> rotation) | (state_shift_xor_shift << ((-rotation) & 31));
             }
 
@@ -147,9 +151,9 @@ int main(int argc, char* argv[]) {
         line best_model;
         REQUIRE(consensus.estimate(data, data_size, residuals, inliers, inliers_size, best_model));
 
-        REQUIRE(is_value_approx(best_model.gradient, gradient, 0.05f));
-        REQUIRE(is_value_approx(best_model.intercept, intercept, 0.05f));
-        REQUIRE(is_value_approx(inliers_size, data_size / 2, static_cast<std::size_t>(data_size * 0.01f)));
+        REQUIRE(is_value_approx(best_model.gradient, gradient, 0.05));
+        REQUIRE(is_value_approx(best_model.intercept, intercept, 0.05));
+        REQUIRE(is_value_approx(static_cast<double>(inliers_size), static_cast<double>(data_size / 2), static_cast<double>(static_cast<std::size_t>(data_size * 0.01f))));
 
         // Estimating a second time with the same consensus object must not inherit a collapsed
         // iteration budget from the first call, and must behave like a fresh object on the same data.
@@ -159,9 +163,9 @@ int main(int argc, char* argv[]) {
         line best_model_repeat;
         REQUIRE(consensus.estimate(data, data_size, residuals_repeat, inliers_repeat, inliers_size_repeat, best_model_repeat));
 
-        REQUIRE(is_value_approx(best_model_repeat.gradient, gradient, 0.05f));
-        REQUIRE(is_value_approx(best_model_repeat.intercept, intercept, 0.05f));
-        REQUIRE(is_value_approx(inliers_size_repeat, data_size / 2, static_cast<std::size_t>(data_size * 0.01f)));
+        REQUIRE(is_value_approx(best_model_repeat.gradient, gradient, 0.05));
+        REQUIRE(is_value_approx(best_model_repeat.intercept, intercept, 0.05));
+        REQUIRE(is_value_approx(static_cast<double>(inliers_size_repeat), static_cast<double>(data_size / 2), static_cast<double>(static_cast<std::size_t>(data_size * 0.01f))));
 
         decltype(consensus) consensus_fresh(
             random,
@@ -184,9 +188,9 @@ int main(int argc, char* argv[]) {
         REQUIRE(inliers_size_fresh == inliers_size);
 
         // The second call of the original object must find an equivalent model to the fresh object.
-        REQUIRE(is_value_approx(best_model_repeat.gradient, best_model_fresh.gradient, 0.05f));
-        REQUIRE(is_value_approx(best_model_repeat.intercept, best_model_fresh.intercept, 0.05f));
-        REQUIRE(is_value_approx(inliers_size_repeat, inliers_size_fresh, static_cast<std::size_t>(data_size * 0.01f)));
+        REQUIRE(is_value_approx(best_model_repeat.gradient, best_model_fresh.gradient, 0.05));
+        REQUIRE(is_value_approx(best_model_repeat.intercept, best_model_fresh.intercept, 0.05));
+        REQUIRE(is_value_approx(static_cast<double>(inliers_size_repeat), static_cast<double>(inliers_size_fresh), static_cast<double>(static_cast<std::size_t>(data_size * 0.01f))));
     }
 
     {

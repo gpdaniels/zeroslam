@@ -25,6 +25,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -340,8 +341,12 @@ private:
                     reached_end = true;
                     return true;
                 } break;
-                default: {
-                    // Unknown and index records are skipped.
+                case opcode::message_index:
+                case opcode::chunk_index:
+                case opcode::attachment_index:
+                case opcode::statistics:
+                case opcode::summary_offset: {
+                    // Index and statistics records are skipped, as are unknown opcodes that match no case.
                 } break;
             }
             index += record_length;
@@ -364,7 +369,7 @@ public:
             error = "too short to be an mcap file";
             return false;
         }
-        for (int i = 0; i < 8; ++i) {
+        for (size_t i = 0; i < 8; ++i) {
             if ((data[i] != magic[i]) || (data[length - 8 + i] != magic[i])) {
                 error = "not an mcap file";
                 return false;

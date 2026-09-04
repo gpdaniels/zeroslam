@@ -69,7 +69,7 @@ void check_decomposition(const double* A, int width, int height, double toleranc
     double* s = new double[static_cast<unsigned int>(height * width)];
     double* vt = new double[static_cast<unsigned int>(width * width)];
 
-    REQUIRE(matrix::decompose_singular_value(A, width, height, u, s, vt));
+    REQUIRE(matrix::decompose_singular_value(A, static_cast<size_t>(width), static_cast<size_t>(height), u, s, vt));
 
     double scale = 0.0;
     for (int i = 0; i < (width * height); ++i) {
@@ -396,7 +396,7 @@ int main(int argc, char* argv[]) {
                 unsigned long long int state_previous = this->state;
                 this->state = state_previous * 0x5851F42D4C957F2Dull + this->increment;
                 unsigned int state_shift_xor_shift = static_cast<unsigned int>(((state_previous >> 18u) ^ state_previous) >> 27u);
-                int rotation = state_previous >> 59u;
+                const int rotation = static_cast<int>(state_previous >> 59u);
                 return (state_shift_xor_shift >> rotation) | (state_shift_xor_shift << ((-rotation) & 31));
             }
 
@@ -410,22 +410,22 @@ int main(int argc, char* argv[]) {
 
         for (int width = 1; width < 20; ++width) {
             for (int height = 1; height < 20; ++height) {
-                double* A = new double[height * width];
+                double* A = new double[static_cast<size_t>(height * width)];
                 for (int i = 0; i < height; ++i) {
                     for (int j = 0; j < width; ++j) {
                         A[i * width + j] = (20.0 * rng.get_random_exclusive_top()) - 10.0;
                     }
                 }
 
-                double* u = new double[height * height];
-                double* s = new double[height * width];
-                double* vt = new double[width * width];
+                double* u = new double[static_cast<size_t>(height * height)];
+                double* s = new double[static_cast<size_t>(height * width)];
+                double* vt = new double[static_cast<size_t>(width * width)];
 
-                REQUIRE(matrix::decompose_singular_value(A, width, height, u, s, vt));
+                REQUIRE(matrix::decompose_singular_value(A, static_cast<size_t>(width), static_cast<size_t>(height), u, s, vt));
 
-                double* t = new double[height * width];
+                double* t = new double[static_cast<size_t>(height * width)];
                 matrix_multiply(u, height, height, s, width, height, t);
-                double* a = new double[height * width];
+                double* a = new double[static_cast<size_t>(height * width)];
                 matrix_multiply(t, width, height, vt, width, width, a);
                 delete[] t;
 
@@ -528,7 +528,7 @@ int main(int argc, char* argv[]) {
                 unsigned long long int state_previous = this->state;
                 this->state = state_previous * 0x5851F42D4C957F2Dull + this->increment;
                 unsigned int state_shift_xor_shift = static_cast<unsigned int>(((state_previous >> 18u) ^ state_previous) >> 27u);
-                int rotation = state_previous >> 59u;
+                const int rotation = static_cast<int>(state_previous >> 59u);
                 return (state_shift_xor_shift >> rotation) | (state_shift_xor_shift << ((-rotation) & 31));
             }
 
@@ -633,7 +633,7 @@ int main(int argc, char* argv[]) {
                 unsigned long long int state_previous = this->state;
                 this->state = state_previous * 0x5851F42D4C957F2Dull + this->increment;
                 unsigned int state_shift_xor_shift = static_cast<unsigned int>(((state_previous >> 18u) ^ state_previous) >> 27u);
-                int rotation = state_previous >> 59u;
+                const int rotation = static_cast<int>(state_previous >> 59u);
                 return (state_shift_xor_shift >> rotation) | (state_shift_xor_shift << ((-rotation) & 31));
             }
 
@@ -664,7 +664,7 @@ int main(int argc, char* argv[]) {
                     float* s = new float[static_cast<unsigned int>(height * width)];
                     float* vt = new float[static_cast<unsigned int>(width * width)];
 
-                    REQUIRE(matrix::decompose_singular_value(A, width, height, u, s, vt));
+                    REQUIRE(matrix::decompose_singular_value(A, static_cast<size_t>(width), static_cast<size_t>(height), u, s, vt));
 
                     for (int i = 0; i < height; ++i) {
                         for (int j = 0; j < height; ++j) {

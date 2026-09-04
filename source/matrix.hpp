@@ -632,8 +632,8 @@ namespace matrix {
         ASSERT(value.cols() > 0, "Matrix must have cols to have an inverse.");
         ASSERT(value.rows() == value.cols(), "Matrix must be square to have an inverse.");
         // Generic NxN inversion using Gauss-Jordan.
-        matrix working(value);
-        matrix augmented = matrix<type, size, size>::identity(value.rows(), value.cols());
+        matrix<type, size, size> working(value);
+        matrix<type, size, size> augmented = matrix<type, size, size>::identity(value.rows(), value.cols());
         // Pivots must be significant relative to the scale of the matrix elements, otherwise the matrix is treated as singular.
         type scale = 0;
         for (size_t i = 0; i < value.rows(); ++i) {
@@ -722,7 +722,7 @@ namespace matrix {
             out = matrix<type, 1, 1>::zero();
             return false;
         }
-        const type determinant_inverse = 1.0 / determinant;
+        const type determinant_inverse = type(1) / determinant;
         out = { { determinant_inverse } };
         return true;
     }
@@ -740,7 +740,7 @@ namespace matrix {
             out = matrix<type, 2, 2>::zero();
             return false;
         }
-        const type determinant_inverse = 1.0 / determinant;
+        const type determinant_inverse = type(1) / determinant;
         out = { { { +value[1][1] * determinant_inverse, -value[0][1] * determinant_inverse },
                   { -value[1][0] * determinant_inverse, +value[0][0] * determinant_inverse } } };
         return true;
@@ -760,7 +760,7 @@ namespace matrix {
             out = matrix<type, 3, 3>::zero();
             return false;
         }
-        const type determinant_inverse = 1.0 / determinant;
+        const type determinant_inverse = type(1) / determinant;
         out = { { { (value[1][1] * value[2][2] - value[2][1] * value[1][2]) * determinant_inverse,
                     (value[0][2] * value[2][1] - value[0][1] * value[2][2]) * determinant_inverse,
                     (value[0][1] * value[1][2] - value[0][2] * value[1][1]) * determinant_inverse },

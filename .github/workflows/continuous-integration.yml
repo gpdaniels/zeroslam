@@ -10,17 +10,26 @@ on:
 jobs:
   build-and-test:
     strategy:
+      fail-fast: false
       matrix:
-        compiler_version: ['default']
-        #os: ['windows-latest', 'macOS-latest', 'ubuntu-latest']
-        os: ['ubuntu-latest']
-        #config: ['Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel']
-        config: ['Release']
-    name: Build on ${{ matrix.os }} in ${{ matrix.config }} with ${{ matrix.compiler_version }}
+        os: ['ubuntu-latest', 'macos-latest', 'windows-latest']
+        config: ['Debug', 'Release']
+    name: Build on ${{ matrix.os }} in ${{ matrix.config }}
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
     steps:
     - name: Checkout repository.
       uses: actions/checkout@v7
+    - name: Install tools.
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" == "Linux" ]; then
+          sudo pip3 install --break-system-packages clang-format==21.1.2
+          clang-format --version
+          echo "ZEROSLAM_REQUIRE_CLANG_FORMAT=1" >> "$GITHUB_ENV"
+        else
+          echo "Nothing to install for $RUNNER_OS."
+        fi
     - name: Build and test in ${{ matrix.config }}.
       shell: bash
       run: |
@@ -28,6 +37,30 @@ jobs:
         if [ "$RUNNER_OS" == "Windows" ]; then
           CMAKE_GENERATOR_PLATFORM_ARG="-DCMAKE_GENERATOR_PLATFORM=x64"
         fi
-        cmake -S. -Bbuild/${{ matrix.config }} -DCMAKE_BUILD_TYPE=${{ matrix.config }} ${CMAKE_GENERATOR_PLATFORM_ARG}
-        cmake --build build/${{ matrix.config }} --config ${{ matrix.config }} --parallel 4 --target test
+        cmake -S. -Bbuild/${{ matrix.config }} -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DZEROSLAM_WERROR=ON ${CMAKE_GENERATOR_PLATFORM_ARG}
+        cmake --build build/${{ matrix.config }} --config ${{ matrix.config }} --parallel 4
+        ctest --test-dir build/${{ matrix.config }} --build-config ${{ matrix.config }} --output-on-failure --parallel 4
         rm -rf build/${{ matrix.config }}
+
+  sanitize:
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: ['address-undefined', 'thread']
+    name: Sanitize (${{ matrix.sanitizer }}) on ubuntu-latest
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository.
+      uses: actions/checkout@v7
+    - name: Build and test with the ${{ matrix.sanitizer }} sanitizer.
+      shell: bash
+      run: |
+        if [ "${{ matrix.sanitizer }}" == "address-undefined" ]; then
+          SANITIZER_ARGS="-DZEROSLAM_SANITIZE_ADDRESS=ON -DZEROSLAM_SANITIZE_UNDEFINED=ON"
+        else
+          SANITIZER_ARGS="-DZEROSLAM_SANITIZE_THREAD=ON"
+        fi
+        cmake -S. -Bbuild/${{ matrix.sanitizer }} -DCMAKE_BUILD_TYPE=RelWithDebInfo -DZEROSLAM_WERROR=ON -DZEROSLAM_CHECKS=OFF ${SANITIZER_ARGS}
+        cmake --build build/${{ matrix.sanitizer }} --parallel 4
+        ctest --test-dir build/${{ matrix.sanitizer }} --output-on-failure --parallel 4
+        rm -rf build/${{ matrix.sanitizer }}

@@ -18,6 +18,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef ZEROSLAM_MATH_HPP
 #define ZEROSLAM_MATH_HPP
 
+// MSVC does not provide __has_builtin, treat every builtin as unavailable there so the fallback implementations are used.
+#ifndef __has_builtin
+#define __has_builtin(builtin) 0
+#endif
+
 namespace {
     using size_t = decltype(sizeof(0));
 
@@ -85,6 +90,8 @@ namespace math {
     constexpr static inline type sin(type value);
     template <typename type>
     constexpr static inline type cos(type value);
+    template <typename type>
+    constexpr static inline void sincos(type value, type& sine, type& cosine);
 
     template <typename type>
     constexpr static inline type asin(type value);
@@ -97,12 +104,12 @@ namespace math {
 namespace math {
     template <typename type>
     constexpr static inline type pi() {
-        return 3.14159265358979323846264338327950288419716939937510582097494459230781640628;
+        return static_cast<type>(3.14159265358979323846264338327950288419716939937510582097494459230781640628);
     }
 
     template <typename type>
     constexpr static inline type e() {
-        return 2.71828182845904523536028747135266249775724709369995957496696762772407663035;
+        return static_cast<type>(2.71828182845904523536028747135266249775724709369995957496696762772407663035);
     }
 
     template <typename type>
@@ -116,32 +123,40 @@ namespace math {
 
     template <typename type>
     constexpr static inline type nan() {
-#if __has_builtin(__builtin_nanf)
+        static_assert(is_same_type<type, float>::value || is_same_type<type, double>::value, "Only float and double are supported.");
         if constexpr (is_same_type<type, float>::value) {
+#if __has_builtin(__builtin_nanf)
             return __builtin_nanf("0");
-        }
+#else
+            return __builtin_bit_cast(float, 0x7FC00000u);
 #endif
+        }
+        else {
 #if __has_builtin(__builtin_nan)
-        if constexpr (is_same_type<type, double>::value) {
             return __builtin_nan("0");
-        }
+#else
+            return __builtin_bit_cast(double, 0x7FF8000000000000ull);
 #endif
-        __builtin_trap();
+        }
     }
 
     template <typename type>
     constexpr static inline type inf() {
-#if __has_builtin(__builtin_inff)
+        static_assert(is_same_type<type, float>::value || is_same_type<type, double>::value, "Only float and double are supported.");
         if constexpr (is_same_type<type, float>::value) {
+#if __has_builtin(__builtin_inff)
             return __builtin_inff();
-        }
+#else
+            return __builtin_bit_cast(float, 0x7F800000u);
 #endif
+        }
+        else {
 #if __has_builtin(__builtin_inf)
-        if constexpr (is_same_type<type, double>::value) {
             return __builtin_inf();
-        }
+#else
+            return __builtin_bit_cast(double, 0x7FF0000000000000ull);
 #endif
-        __builtin_trap();
+        }
     }
 
     template <typename type>
@@ -171,13 +186,7 @@ namespace math {
             return __builtin_isinf(value);
         }
 #endif
-        if (isnan(value))
-            return false;
-        if ((value > 0) && ((value / value) != (value / value)))
-            return true;
-        if ((value < 0) && ((value / value) != (value / value)))
-            return true;
-        return false;
+        return abs(value) == inf<type>();
     }
 
     template <typename type>
@@ -192,17 +201,12 @@ namespace math {
             return __builtin_isfinite(value);
         }
 #endif
-        if (isnan(value))
-            return false;
-        if ((value > 0) && ((value / value) != (value / value)))
-            return false;
-        if ((value < 0) && ((value / value) != (value / value)))
-            return false;
-        return true;
+        return !isnan(value) && !isinf(value);
     }
 
     template <typename type>
     constexpr static inline type copysign(type magnitude, type sign) {
+        static_assert(is_same_type<type, float>::value || is_same_type<type, double>::value, "Only float and double are supported.");
 #if __has_builtin(__builtin_copysignf)
         if constexpr (is_same_type<type, float>::value) {
             return __builtin_copysignf(magnitude, sign);
@@ -213,17 +217,17 @@ namespace math {
             return __builtin_copysign(magnitude, sign);
         }
 #endif
-        if (isnan(magnitude))
-            return nan<type>();
-        if (isnan(sign))
-            sign = type(1);
-        if ((sign == 0) && (type(1) / sign) < 0)
-            sign = type(-1);
-        return (sign >= 0 ? (magnitude >= 0 ? magnitude : -magnitude) : (magnitude >= 0 ? -magnitude : magnitude));
+        if constexpr (is_same_type<type, float>::value) {
+            return __builtin_bit_cast(float, (__builtin_bit_cast(unsigned int, magnitude) & 0x7FFFFFFFu) | (__builtin_bit_cast(unsigned int, sign) & 0x80000000u));
+        }
+        else {
+            return __builtin_bit_cast(double, (__builtin_bit_cast(unsigned long long int, magnitude) & 0x7FFFFFFFFFFFFFFFull) | (__builtin_bit_cast(unsigned long long int, sign) & 0x8000000000000000ull));
+        }
     }
 
     template <typename type>
     constexpr static inline bool signbit(type value) {
+        static_assert(is_same_type<type, float>::value || is_same_type<type, double>::value, "Only float and double are supported.");
 #if __has_builtin(__builtin_signbitf)
         if constexpr (is_same_type<type, float>::value) {
             return __builtin_signbitf(value);
@@ -234,7 +238,12 @@ namespace math {
             return __builtin_signbit(value);
         }
 #endif
-        return copysign(type(1), value) < 0;
+        if constexpr (is_same_type<type, float>::value) {
+            return (__builtin_bit_cast(unsigned int, value) >> 31u) != 0u;
+        }
+        else {
+            return (__builtin_bit_cast(unsigned long long int, value) >> 63u) != 0u;
+        }
     }
 
     template <typename type>
@@ -249,10 +258,15 @@ namespace math {
             return __builtin_fabs(value);
         }
 #endif
-        if ((value + type(0)) < type(0)) {
-            return -value;
+        if constexpr (is_same_type<type, float>::value) {
+            return __builtin_bit_cast(float, __builtin_bit_cast(unsigned int, value) & 0x7FFFFFFFu);
         }
-        return value;
+        else if constexpr (is_same_type<type, double>::value) {
+            return __builtin_bit_cast(double, __builtin_bit_cast(unsigned long long int, value) & 0x7FFFFFFFFFFFFFFFull);
+        }
+        else {
+            return (value < 0) ? -value : value;
+        }
     }
 
     template <typename type>
@@ -279,13 +293,13 @@ namespace math {
 #endif
         constexpr const long long int max_integer = static_cast<long long int>(static_cast<unsigned long long int>(-1) >> 1);
         constexpr const long long int min_integer = -max_integer - 1;
-        constexpr const double max_integer_as_double = static_cast<double>(max_integer / 2) * type(2);
-        constexpr const double min_integer_as_double = static_cast<double>(min_integer);
-        if ((value >= max_integer_as_double) || (value <= min_integer_as_double) || isnan(value)) {
+        constexpr const type max_integer_as_type = static_cast<type>(max_integer / 2) * type(2);
+        constexpr const type min_integer_as_type = static_cast<type>(min_integer);
+        if ((value >= max_integer_as_type) || (value <= min_integer_as_type) || isnan(value)) {
             return value;
         }
         const long long int casted = static_cast<long long int>(value);
-        const double rounded = static_cast<double>(casted);
+        const type rounded = static_cast<type>(casted);
         return ((rounded == value) || (value >= 0)) ? rounded : rounded - 1;
     }
 
@@ -303,28 +317,38 @@ namespace math {
 #endif
         constexpr const long long int max_integer = static_cast<long long int>(static_cast<unsigned long long int>(-1) >> 1);
         constexpr const long long int min_integer = -max_integer - 1;
-        constexpr const double max_integer_as_double = static_cast<double>(max_integer / 2) * type(2);
-        constexpr const double min_integer_as_double = static_cast<double>(min_integer);
-        if ((value >= max_integer_as_double) || (value <= min_integer_as_double) || isnan(value)) {
+        constexpr const type max_integer_as_type = static_cast<type>(max_integer / 2) * type(2);
+        constexpr const type min_integer_as_type = static_cast<type>(min_integer);
+        if ((value >= max_integer_as_type) || (value <= min_integer_as_type) || isnan(value)) {
             return value;
         }
         const long long int casted = static_cast<long long int>(value);
-        const double rounded = static_cast<double>(casted);
+        const type rounded = static_cast<type>(casted);
         return ((rounded == value) || (value <= 0)) ? rounded : rounded + 1;
     }
 
     constexpr static inline int round(float value) {
-#if __has_builtin(__builtin_roundf)
-        return static_cast<int>(__builtin_roundf(value));
+#if __has_builtin(__builtin_roundf) && __has_builtin(__builtin_is_constant_evaluated)
+        // The rounding builtin is not usable in constant expressions on every compiler, so only use it at runtime.
+        if (!__builtin_is_constant_evaluated()) {
+            return static_cast<int>(__builtin_roundf(value));
+        }
 #endif
-        return (value > 0.0f) ? static_cast<int>(value + 0.5f) : static_cast<int>(value - 0.5f);
+        const int truncated = static_cast<int>(value);
+        const float remainder = value - static_cast<float>(truncated);
+        return truncated + ((remainder >= 0.5f) ? 1 : ((remainder <= -0.5f) ? -1 : 0));
     }
 
     constexpr static inline long long int round(double value) {
-#if __has_builtin(__builtin_round)
-        return static_cast<long long int>(__builtin_round(value));
+#if __has_builtin(__builtin_round) && __has_builtin(__builtin_is_constant_evaluated)
+        // The rounding builtin is not usable in constant expressions on every compiler, so only use it at runtime.
+        if (!__builtin_is_constant_evaluated()) {
+            return static_cast<long long int>(__builtin_round(value));
+        }
 #endif
-        return (value > 0.0) ? static_cast<long long int>(value + 0.5) : static_cast<long long int>(value - 0.5);
+        const long long int truncated = static_cast<long long int>(value);
+        const double remainder = value - static_cast<double>(truncated);
+        return truncated + ((remainder >= 0.5) ? 1 : ((remainder <= -0.5) ? -1 : 0));
     }
 
     template <typename type>
@@ -382,17 +406,16 @@ namespace math {
             return nan<type>();
         if ((value == 0) || isinf(value))
             return value;
-        unsigned long long int bits = 0;
-        __builtin_memcpy(&bits, &value, sizeof(bits));
-        bits = (bits >> 1) + 0x1FF7A3BEA91D9B1BULL;
-        double estimate = 0;
-        __builtin_memcpy(&estimate, &bits, sizeof(estimate));
-        double previous = 0;
-        while (estimate != previous) {
+        const double value_as_double = static_cast<double>(value);
+        const unsigned long long int bits = (__builtin_bit_cast(unsigned long long int, value_as_double) >> 1) + 0x1FF7A3BEA91D9B1BULL;
+        double estimate = __builtin_bit_cast(double, bits);
+        estimate = 0.5 * (estimate + value_as_double / estimate);
+        double previous = estimate;
+        do {
             previous = estimate;
-            estimate = 0.5 * (estimate + value / estimate);
-        }
-        return estimate;
+            estimate = 0.5 * (estimate + value_as_double / estimate);
+        } while (estimate < previous);
+        return static_cast<type>(previous);
     }
 
     template <typename type>
@@ -400,12 +423,12 @@ namespace math {
         const type abs_a = abs(a);
         const type abs_b = abs(b);
         if (abs_a > abs_b) {
-            return abs_a * sqrt(1.0 + sqr(abs_b / abs_a));
+            return abs_a * sqrt(type(1) + sqr(abs_b / abs_a));
         }
         if (abs_b == 0) {
             return 0;
         }
-        return abs_b * sqrt(1.0 + sqr(abs_a / abs_b));
+        return abs_b * sqrt(type(1) + sqr(abs_a / abs_b));
     }
 
     template <typename type>
@@ -428,16 +451,42 @@ namespace math {
             return 0;
         if ((value > 0) && isinf(value))
             return inf<type>();
-        constexpr const double epsilon = 1e-9;
-        const double abs_value = abs(value);
-        int order = 0;
+        const double value_as_double = static_cast<double>(value);
+        if (value_as_double > 709.782712893384)
+            return inf<type>();
+        if (value_as_double < -745.1332191019412)
+            return 0;
+        constexpr const double ln2 = 6.93147180559945309417e-01;
+        constexpr const double ln2_hi = 6.93147180369123816490e-01;
+        constexpr const double ln2_lo = 1.90821492927058770002e-10;
+        const long long int k = round(value_as_double / ln2);
+        const double k_as_double = static_cast<double>(k);
+        const double r = (value_as_double - k_as_double * ln2_hi) - k_as_double * ln2_lo;
         double term = 1.0;
-        double sum = term;
-        while ((term > epsilon) && (isfinite(sum))) {
-            term = (term * abs_value) / static_cast<double>(++order);
+        double sum = 1.0;
+        for (int n = 1; n < 40; ++n) {
+            term *= r / static_cast<double>(n);
             sum += term;
+            if (abs(term) <= sum * 1e-20) {
+                break;
+            }
         }
-        return (value < 0) ? 1.0 / sum : sum;
+        int exponent = static_cast<int>(k);
+        while (exponent > 1023) {
+            sum *= __builtin_bit_cast(double, 0x7FE0000000000000ull); // 2^1023
+            exponent -= 1023;
+        }
+        while (exponent < -1022) {
+            sum *= __builtin_bit_cast(double, 0x0010000000000000ull); // 2^-1022
+            exponent += 1022;
+        }
+        const double result = sum * __builtin_bit_cast(double, static_cast<unsigned long long int>(exponent + 1023) << 52u);
+        if constexpr (is_same_type<type, float>::value) {
+            if (result > 3.4028235677973366e+38) {
+                return inf<float>();
+            }
+        }
+        return static_cast<type>(result);
     }
 
     template <typename type>
@@ -460,31 +509,32 @@ namespace math {
             return 0;
         if (isinf(value))
             return inf<type>();
-        constexpr const double epsilon = 1e-9;
-        // Normalize the value and count how many times we divide by e.
-        double working_value = (value < 1.0) ? (1.0 / value) : value;
-        unsigned int exponent_count = 0;
-        while ((working_value /= e<type>()) > 1.0) {
-            ++exponent_count;
+        constexpr const double ln2 = 6.93147180559945309417e-01;
+        unsigned long long int value_bits = __builtin_bit_cast(unsigned long long int, static_cast<double>(value));
+        int exponent = 0;
+        if ((value_bits & 0x7FF0000000000000ull) == 0ull) {
+            value_bits = __builtin_bit_cast(unsigned long long int, static_cast<double>(value) * 18014398509481984.0); // 2^54
+            exponent = -54;
         }
-        // Prepare for series expansion.
-        working_value = 1.0 / (working_value * e<type>() - 1.0);
-        working_value = 2.0 * working_value + 1.0;
-        const double squared_working_value = working_value * working_value;
-        // Iteratively compute using a Taylor-like series until convergence.
-        unsigned int denominator = 1;
-        double term_accumulator = 0.0;
-        double previous_accumulator = 0.0;
-        working_value /= 2.0;
-        do {
-            previous_accumulator = term_accumulator;
-            term_accumulator += 1.0 / (denominator * working_value);
-            denominator += 2;
-            working_value *= squared_working_value;
-        } while ((term_accumulator - previous_accumulator) > epsilon);
-        // Apply sign correction for values less than one.
-        const double result = exponent_count + term_accumulator;
-        return (value < 1.0) ? -result : result;
+        exponent += static_cast<int>((value_bits >> 52u) & 0x7FFull) - 1023;
+        double mantissa = __builtin_bit_cast(double, (value_bits & 0x000FFFFFFFFFFFFFull) | 0x3FF0000000000000ull);
+        if (mantissa > 1.4142135623730951) {
+            mantissa *= 0.5;
+            exponent += 1;
+        }
+        const double s = (mantissa - 1.0) / (mantissa + 1.0);
+        const double s2 = s * s;
+        double power = s;
+        double sum = s;
+        for (int n = 3; n < 80; n += 2) {
+            power *= s2;
+            const double term = power / static_cast<double>(n);
+            sum += term;
+            if (abs(term) <= abs(sum) * 1e-19) {
+                break;
+            }
+        }
+        return static_cast<type>(static_cast<double>(exponent) * ln2 + 2.0 * sum);
     }
 
     template <typename type>
@@ -499,64 +549,41 @@ namespace math {
             return __builtin_pow(value, exponent);
         }
 #endif
-        const bool is_value_positive = !signbit(value);
-        const double value_as_absolute = abs(value);
-        const bool is_value_inf = isinf(value);
-        const bool is_exponent_positive = !signbit(exponent);
-        const long long int exponent_as_integer = round(exponent);
-        const bool is_exponent_integer = (static_cast<double>(exponent_as_integer) == exponent);
-        const bool is_exponent_even = (exponent_as_integer != 0) && ((exponent_as_integer & 1) == 0);
-        const bool is_exponent_odd = (exponent_as_integer != 0) && ((exponent_as_integer & 1) == 1);
-        const bool is_exponent_inf = isinf(exponent) || (abs(exponent) > 1024);
-        if (value == 1.0)
-            return 1.0;
-        if (exponent == 0.0)
-            return 1.0;
-        if (exponent == 1.0)
-            return value;
-        if (exponent == -1.0)
-            return 1.0 / value;
-        if (isnan(value) || isnan(exponent))
+        const double x = static_cast<double>(value);
+        const double y = static_cast<double>(exponent);
+        if ((y == 0.0) || (x == 1.0))
+            return type(1);
+        if (isnan(x) || isnan(y))
             return nan<type>();
-        if (value == 0.0 && is_value_positive && !is_exponent_positive && is_exponent_integer && is_exponent_odd)
-            return inf<type>();
-        if (value == 0.0 && !is_value_positive && !is_exponent_positive && is_exponent_integer && is_exponent_odd)
-            return -inf<type>();
-        if (value == 0.0 && !is_exponent_positive && !is_exponent_inf && ((is_exponent_integer && is_exponent_even) || (!is_exponent_integer)))
-            return inf<type>();
-        if (value == 0.0 && !is_exponent_positive && is_exponent_inf)
-            return inf<type>();
-        if (value == 0.0 && is_value_positive && is_exponent_positive && is_exponent_integer && is_exponent_odd)
-            return +0.0;
-        if (value == 0.0 && !is_value_positive && is_exponent_positive && is_exponent_integer && is_exponent_odd)
-            return -0.0;
-        if (value == 0.0 && is_exponent_positive && (!is_exponent_integer || (is_exponent_integer && is_exponent_even)))
-            return +0.0;
-        if (value == -1.0 && is_exponent_inf)
-            return 1.0;
-        if (!is_value_inf && !is_value_positive && !is_exponent_inf && !is_exponent_integer)
+        const double x_as_absolute = abs(x);
+        const bool y_is_integer = isfinite(y) && ((abs(y) >= 9007199254740992.0) || (static_cast<double>(round(y)) == y));
+        const bool y_is_odd_integer = y_is_integer && (abs(y) < 9007199254740992.0) && ((round(y) & 1) != 0);
+        if (x == 0.0) {
+            if (y < 0.0)
+                return y_is_odd_integer ? copysign(inf<type>(), value) : inf<type>();
+            return y_is_odd_integer ? value : type(0);
+        }
+        if (isinf(y)) {
+            if (x_as_absolute == 1.0)
+                return type(1);
+            return ((x_as_absolute < 1.0) == (y < 0.0)) ? inf<type>() : type(0);
+        }
+        if (isinf(x)) {
+            if (x > 0.0)
+                return (y < 0.0) ? type(0) : inf<type>();
+            if (y < 0.0)
+                return y_is_odd_integer ? type(-0.0) : type(0);
+            return y_is_odd_integer ? -inf<type>() : inf<type>();
+        }
+        if ((x < 0.0) && !y_is_integer)
             return nan<type>();
-        if (value_as_absolute < 1.0 && !is_exponent_positive && is_exponent_inf)
-            return inf<type>();
-        if (value_as_absolute > 1.0 && !is_exponent_positive && is_exponent_inf)
-            return +0.0;
-        if (value_as_absolute < 1.0 && is_exponent_positive && is_exponent_inf)
-            return +0.0;
-        if (value_as_absolute > 1.0 && is_exponent_positive && is_exponent_inf)
-            return inf<type>();
-        if (!is_value_positive && is_value_inf && !is_exponent_positive && is_exponent_integer && is_exponent_odd)
-            return -0.0;
-        if (!is_value_positive && is_value_inf && !is_exponent_positive && (!is_exponent_integer || (is_exponent_integer && is_exponent_even)))
-            return +0.0;
-        if (!is_value_positive && is_value_inf && is_exponent_positive && is_exponent_integer && is_exponent_odd)
-            return -inf<type>();
-        if (!is_value_positive && is_value_inf && is_exponent_positive && (!is_exponent_integer || (is_exponent_integer && is_exponent_even)))
-            return inf<type>();
-        if (is_value_positive && is_value_inf && !is_exponent_positive)
-            return +0.0;
-        if (is_value_positive && is_value_inf && is_exponent_positive)
-            return inf<type>();
-        return (value < 0) ? (exp(log(-value) * exponent) * (-1 + 2 * is_exponent_even)) : (exp(log(value) * exponent));
+        const double result = exp(y * log(x_as_absolute));
+        if constexpr (is_same_type<type, float>::value) {
+            if (result > 3.4028235677973366e+38) {
+                return ((x < 0.0) && y_is_odd_integer) ? -inf<float>() : inf<float>();
+            }
+        }
+        return static_cast<type>(((x < 0.0) && y_is_odd_integer) ? -result : result);
     }
 
     template <typename type>
@@ -571,44 +598,10 @@ namespace math {
             return __builtin_sin(value);
         }
 #endif
-        if (value == type(0))
-            return copysign(type(0), value);
-        if (!isfinite(value))
-            return nan<type>();
-        const type angle = fmod(abs(value), (pi<type>() * type(2)));
-        const type sign = (angle <= pi<type>()) ? (type(1) - type(2) * signbit(value)) : (type(-1) + type(2) * signbit(value));
-        const type remapped = (angle > (pi<type>() * type(1.5))) ? ((pi<type>() * type(2)) - angle) : (angle > (pi<type>()))           ? angle - pi<type>()
-                                                                                                  : (angle > (pi<type>() * type(0.5))) ? pi<type>() - angle
-                                                                                                                                       : angle;
-        const type remapped2 = remapped * remapped;
-        type polynomial = 0;
-        if constexpr (is_same_type<type, double>::value) {
-            polynomial = type(1) / type(51090942171709440000.0);
-            polynomial *= remapped2;
-            polynomial -= type(1) / type(121645100408832000.0);
-            polynomial *= remapped2;
-            polynomial += type(1) / type(355687428096000.0);
-            polynomial *= remapped2;
-            polynomial -= type(1) / type(1307674368000.0);
-            polynomial *= remapped2;
-            polynomial += type(1) / type(6227020800.0);
-            polynomial *= remapped2;
-            polynomial -= type(1) / type(39916800.0);
-        }
-        else if constexpr (is_same_type<type, float>::value) {
-            polynomial = type(1) / type(39916800.0);
-        }
-        polynomial *= remapped2;
-        polynomial += type(1) / type(362880.0);
-        polynomial *= remapped2;
-        polynomial -= type(1) / type(5040.0);
-        polynomial *= remapped2;
-        polynomial += type(1) / type(120.0);
-        polynomial *= remapped2;
-        polynomial -= type(1) / type(6.0);
-        polynomial *= remapped2;
-        polynomial += type(1);
-        return sign * remapped * polynomial;
+        double sine = 0.0;
+        double cosine = 0.0;
+        sincos(static_cast<double>(value), sine, cosine);
+        return static_cast<type>(sine);
     }
 
     template <typename type>
@@ -623,45 +616,10 @@ namespace math {
             return __builtin_cos(value);
         }
 #endif
-        if (value == type(0))
-            return type(1);
-        if (!isfinite(value))
-            return nan<type>();
-        const type angle = fmod(abs(value), (pi<type>() * type(2)));
-        const type sign = (angle > (pi<type>() * type(1.5))) ? type(1) : (angle > (pi<type>() * type(0.5))) ? -type(1)
-                                                                                                            : type(1);
-        const type remapped = (angle > (pi<type>() * type(1.5))) ? ((pi<type>() * type(2)) - angle) : (angle > (pi<type>()))           ? angle - pi<type>()
-                                                                                                  : (angle > (pi<type>() * type(0.5))) ? pi<type>() - angle
-                                                                                                                                       : angle;
-        const type remapped2 = remapped * remapped;
-        type polynomial = 0;
-        if constexpr (is_same_type<type, double>::value) {
-            polynomial = type(1) / type(2432902008176640000.0);
-            polynomial *= remapped2;
-            polynomial -= type(1) / type(6402373705728000.0);
-            polynomial *= remapped2;
-            polynomial += type(1) / type(20922789888000.0);
-            polynomial *= remapped2;
-            polynomial -= type(1) / type(87178291200.0);
-            polynomial *= remapped2;
-            polynomial += type(1) / type(479001600.0);
-        }
-        else if constexpr (is_same_type<type, float>::value) {
-            polynomial = type(1) / type(479001600.0);
-        }
-        polynomial *= remapped2;
-        polynomial -= type(1) / type(3628800.0);
-        polynomial *= remapped2;
-        polynomial += type(1) / type(40320.0);
-        polynomial *= remapped2;
-        polynomial -= type(1) / type(720.0);
-        polynomial *= remapped2;
-        polynomial += type(1) / type(24.0);
-        polynomial *= remapped2;
-        polynomial -= type(1) / type(2.0);
-        polynomial *= remapped2;
-        polynomial += type(1);
-        return sign * polynomial;
+        double sine = 0.0;
+        double cosine = 0.0;
+        sincos(static_cast<double>(value), sine, cosine);
+        return static_cast<type>(cosine);
     }
 
     template <typename type>
@@ -686,67 +644,57 @@ namespace math {
             cosine = nan<type>();
             return;
         }
-        const type angle = fmod(abs(value), (pi<type>() * type(2)));
-        const type sign_sin = (angle <= pi<type>()) ? (type(1) - type(2) * signbit(value)) : (type(-1) + type(2) * signbit(value));
-        const type sign_cos = (angle > (pi<type>() * type(1.5))) ? type(1) : (angle > (pi<type>()))           ? type(-1)
-                                                                         : (angle > (pi<type>() * type(0.5))) ? type(-1)
-                                                                                                              : type(1);
-        const type remapped = (angle > (pi<type>() * type(1.5))) ? ((pi<type>() * type(2)) - angle) : (angle > (pi<type>()))           ? angle - pi<type>()
-                                                                                                  : (angle > (pi<type>() * type(0.5))) ? pi<type>() - angle
-                                                                                                                                       : angle;
-        const type remapped2 = remapped * remapped;
-        type polynomial_sin = 0;
-        type polynomial_cos = 0;
-        if constexpr (is_same_type<type, double>::value) {
-            polynomial_sin = type(1) / type(51090942171709440000.0);
-            polynomial_sin *= remapped2;
-            polynomial_sin -= type(1) / type(121645100408832000.0);
-            polynomial_sin *= remapped2;
-            polynomial_sin += type(1) / type(355687428096000.0);
-            polynomial_sin *= remapped2;
-            polynomial_sin -= type(1) / type(1307674368000.0);
-            polynomial_sin *= remapped2;
-            polynomial_sin += type(1) / type(6227020800.0);
-            polynomial_sin *= remapped2;
-            polynomial_sin -= type(1) / type(39916800.0);
-            polynomial_cos = type(1) / type(2432902008176640000.0);
-            polynomial_cos *= remapped2;
-            polynomial_cos -= type(1) / type(6402373705728000.0);
-            polynomial_cos *= remapped2;
-            polynomial_cos += type(1) / type(20922789888000.0);
-            polynomial_cos *= remapped2;
-            polynomial_cos -= type(1) / type(87178291200.0);
-            polynomial_cos *= remapped2;
-            polynomial_cos += type(1) / type(479001600.0);
+        constexpr const double two_over_pi = 6.36619772367581382433e-01;
+        constexpr const double two_pi = 6.28318530717958647693e+00;
+        constexpr const double pio2_1 = 1.57079632673412561417e+00;
+        constexpr const double pio2_2 = 6.07710050630396597660e-11;
+        constexpr const double pio2_3 = 2.02226624879595063154e-21;
+        const double value_as_double = static_cast<double>(value);
+        const double reduced = (abs(value_as_double) < 1.5e6) ? value_as_double : fmod(value_as_double, two_pi);
+        const long long int k = round(reduced * two_over_pi);
+        const double k_as_double = static_cast<double>(k);
+        const double r = ((reduced - k_as_double * pio2_1) - k_as_double * pio2_2) - k_as_double * pio2_3;
+        const double r2 = r * r;
+        double s = 1.0 / 51090942171709440000.0;
+        s = s * r2 - 1.0 / 121645100408832000.0;
+        s = s * r2 + 1.0 / 355687428096000.0;
+        s = s * r2 - 1.0 / 1307674368000.0;
+        s = s * r2 + 1.0 / 6227020800.0;
+        s = s * r2 - 1.0 / 39916800.0;
+        s = s * r2 + 1.0 / 362880.0;
+        s = s * r2 - 1.0 / 5040.0;
+        s = s * r2 + 1.0 / 120.0;
+        s = s * r2 - 1.0 / 6.0;
+        s = s * r2 + 1.0;
+        s = s * r;
+        double c = 1.0 / 2432902008176640000.0;
+        c = c * r2 - 1.0 / 6402373705728000.0;
+        c = c * r2 + 1.0 / 20922789888000.0;
+        c = c * r2 - 1.0 / 87178291200.0;
+        c = c * r2 + 1.0 / 479001600.0;
+        c = c * r2 - 1.0 / 3628800.0;
+        c = c * r2 + 1.0 / 40320.0;
+        c = c * r2 - 1.0 / 720.0;
+        c = c * r2 + 1.0 / 24.0;
+        c = c * r2 - 1.0 / 2.0;
+        c = c * r2 + 1.0;
+        const long long int quadrant = k & 3;
+        if (quadrant == 0) {
+            sine = static_cast<type>(s);
+            cosine = static_cast<type>(c);
         }
-        else if constexpr (is_same_type<type, float>::value) {
-            polynomial_sin = type(1) / type(39916800.0);
-            polynomial_cos = type(1) / type(479001600.0);
+        else if (quadrant == 1) {
+            sine = static_cast<type>(c);
+            cosine = static_cast<type>(-s);
         }
-        polynomial_sin *= remapped2;
-        polynomial_sin += type(1) / type(362880.0);
-        polynomial_sin *= remapped2;
-        polynomial_sin -= type(1) / type(5040.0);
-        polynomial_sin *= remapped2;
-        polynomial_sin += type(1) / type(120.0);
-        polynomial_sin *= remapped2;
-        polynomial_sin -= type(1) / type(6.0);
-        polynomial_sin *= remapped2;
-        polynomial_sin += type(1);
-        polynomial_cos *= remapped2;
-        polynomial_cos -= type(1) / type(3628800.0);
-        polynomial_cos *= remapped2;
-        polynomial_cos += type(1) / type(40320.0);
-        polynomial_cos *= remapped2;
-        polynomial_cos -= type(1) / type(720.0);
-        polynomial_cos *= remapped2;
-        polynomial_cos += type(1) / type(24.0);
-        polynomial_cos *= remapped2;
-        polynomial_cos -= type(1) / type(2.0);
-        polynomial_cos *= remapped2;
-        polynomial_cos += type(1);
-        sine = sign_sin * remapped * polynomial_sin;
-        cosine = sign_cos * polynomial_cos;
+        else if (quadrant == 2) {
+            sine = static_cast<type>(-s);
+            cosine = static_cast<type>(-c);
+        }
+        else {
+            sine = static_cast<type>(-c);
+            cosine = static_cast<type>(s);
+        }
     }
 
     template <typename type>
@@ -761,35 +709,12 @@ namespace math {
             return __builtin_asin(value);
         }
 #endif
-        if (value == 0.0)
+        if (value == type(0))
             return value;
-        if ((value < -1.0) || (value > 1.0) || isnan(value))
+        if ((value < type(-1)) || (value > type(1)) || isnan(value))
             return nan<type>();
-        const double sign = (value < 0.0) ? -1.0 : 1.0;
-        const double value_as_absolute = abs(value);
-        double angle = -0.0187293;
-        angle *= value_as_absolute;
-        angle += 0.0742610;
-        angle *= value_as_absolute;
-        angle -= 0.2121144;
-        angle *= value_as_absolute;
-        angle += 1.5707288;
-        angle *= sqrt(1.0 - value_as_absolute);
-        angle = (pi<type>() * 0.5) - angle;
-        if (value_as_absolute < 1.0) {
-            if (value_as_absolute <= 0.70710678118654752) {
-                for (int iteration = 0; iteration < 4; ++iteration) {
-                    angle -= (sin(angle) - value_as_absolute) / cos(angle);
-                }
-            }
-            else {
-                const double cosine_target = sqrt((1.0 - value_as_absolute) * (1.0 + value_as_absolute));
-                for (int iteration = 0; iteration < 4; ++iteration) {
-                    angle += (cos(angle) - cosine_target) / sin(angle);
-                }
-            }
-        }
-        return sign * angle;
+        const double value_as_double = static_cast<double>(value);
+        return static_cast<type>(atan2(value_as_double, sqrt((1.0 - value_as_double) * (1.0 + value_as_double))));
     }
 
     template <typename type>
@@ -804,34 +729,12 @@ namespace math {
             return __builtin_acos(value);
         }
 #endif
-        if (value == 1.0)
-            return 0.0;
-        if ((value < -1.0) || (value > 1.0) || isnan(value))
+        if (value == type(1))
+            return type(0);
+        if ((value < type(-1)) || (value > type(1)) || isnan(value))
             return nan<type>();
-        const double sign = (value < 0.0) ? -1.0 : 1.0;
-        const double value_as_absolute = abs(value);
-        double angle = -0.0187293;
-        angle *= value_as_absolute;
-        angle += 0.0742610;
-        angle *= value_as_absolute;
-        angle -= 0.2121144;
-        angle *= value_as_absolute;
-        angle += 1.5707288;
-        angle *= sqrt(1.0 - value_as_absolute);
-        if (value_as_absolute < 1.0) {
-            if (value_as_absolute <= 0.70710678118654752) {
-                for (int iteration = 0; iteration < 4; ++iteration) {
-                    angle += (cos(angle) - value_as_absolute) / sin(angle);
-                }
-            }
-            else {
-                const double sine_target = sqrt((1.0 - value_as_absolute) * (1.0 + value_as_absolute));
-                for (int iteration = 0; iteration < 4; ++iteration) {
-                    angle -= (sin(angle) - sine_target) / cos(angle);
-                }
-            }
-        }
-        return (value < 0.0) ? (pi<type>() + sign * angle) : (sign * angle);
+        const double value_as_double = static_cast<double>(value);
+        return static_cast<type>(atan2(sqrt((1.0 - value_as_double) * (1.0 + value_as_double)), value_as_double));
     }
 
     template <typename type>
@@ -857,46 +760,44 @@ namespace math {
         if (isinf(y) && isinf(x) && !signbit(x))
             return copysign(pi<type>() * type(0.25), y);
         if ((x == 0) && (y < 0))
-            return -pi<type>() * 0.5;
+            return -pi<type>() * type(0.5);
         if ((x == 0) && (y > 0))
-            return +pi<type>() * 0.5;
+            return +pi<type>() * type(0.5);
         if (isinf(x) && signbit(x) && isfinite(y) && (y > 0))
             return +pi<type>();
         if (isinf(x) && signbit(x) && isfinite(y) && (y < 0))
             return -pi<type>();
         if (isinf(x) && !signbit(x) && isfinite(y) && (y > 0))
-            return +0.0;
+            return type(+0.0);
         if (isinf(x) && !signbit(x) && isfinite(y) && (y < 0))
-            return -0.0;
+            return type(-0.0);
         if (isnan(x) || isnan(y))
             return nan<type>();
-        const bool swap = abs(x) < abs(y);
-        const double ratio = ((swap ? x : y) / (swap ? y : x));
-        const double ratio2 = ratio * ratio;
-        double angle = -0.01172120;
-        angle *= ratio2;
-        angle += 0.05265332;
-        angle *= ratio2;
-        angle -= 0.11643287;
-        angle *= ratio2;
-        angle += 0.19354346;
-        angle *= ratio2;
-        angle -= 0.33262347;
-        angle *= ratio2;
-        angle += 0.99997726;
-        angle *= ratio;
-        angle = swap ? ((((ratio > 0.0) || ((ratio == 0.0) && !signbit(ratio))) ? (+pi<type>() * 0.5) : (-pi<type>() * 0.5)) - angle) : angle;
-        if ((x >= 0.0) && (y >= 0.0)) {
+        const double y_as_absolute = static_cast<double>(abs(y));
+        const double x_as_absolute = static_cast<double>(abs(x));
+        const bool swap = y_as_absolute > x_as_absolute;
+        const double ratio = swap ? (x_as_absolute / y_as_absolute) : (y_as_absolute / x_as_absolute);
+        const double t1 = ratio / (1.0 + sqrt(1.0 + ratio * ratio));
+        const double t2 = t1 / (1.0 + sqrt(1.0 + t1 * t1));
+        const double t2_2 = t2 * t2;
+        double power = t2;
+        double sum = t2;
+        for (int n = 3; n < 100; n += 2) {
+            power *= -t2_2;
+            const double term = power / static_cast<double>(n);
+            sum += term;
+            if (abs(term) <= abs(sum) * 1e-19) {
+                break;
+            }
         }
-        else if ((x < 0.0) && (y >= 0.0)) {
-            angle = +pi<type>() + angle;
+        double angle = 4.0 * sum;
+        if (swap) {
+            angle = pi<double>() * 0.5 - angle;
         }
-        else if ((x < 0.0) && (y < 0.0)) {
-            angle = -pi<type>() + angle;
+        if (x < 0) {
+            angle = pi<double>() - angle;
         }
-        else if ((x >= 0.0) && (y < 0.0)) {
-        }
-        return angle;
+        return static_cast<type>(signbit(y) ? -angle : angle);
     }
 }
 

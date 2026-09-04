@@ -26,6 +26,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <unordered_map>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -84,7 +85,7 @@ namespace matrix {
             ASSERT(rhs_vector.rows() == this->cols(), "RHS Vector must be same height as diagonal matrix.");
             matrix<double, 0, 0> result = matrix<double, 0, 0>::zero(this->sparse_blocks_diagonal.size() * sparse_block_diagonal::block_size, 1);
             for (size_t index = 0; index < this->sparse_blocks_diagonal.size(); ++index) {
-                const int offset = index * sparse_block_diagonal::block_size;
+                const size_t offset = index * sparse_block_diagonal::block_size;
                 const block_type& block = this->sparse_blocks_diagonal[index];
                 set_block(result, offset, 0, get_block(result, offset, 0, sparse_block_diagonal::block_size, 1) + block * get_block(rhs_vector, offset, 0, sparse_block_diagonal::block_size, 1));
             }
@@ -96,7 +97,7 @@ namespace matrix {
             ASSERT(lhs_vector.rows() == 1, "LHS Vector must be of height 1.");
             matrix<double, 0, 0> result = matrix<double, 0, 0>::zero(1, this->sparse_blocks_diagonal.size() * sparse_block_diagonal::block_size);
             for (size_t index = 0; index < this->sparse_blocks_diagonal.size(); ++index) {
-                const int offset = index * sparse_block_diagonal::block_size;
+                const size_t offset = index * sparse_block_diagonal::block_size;
                 const block_type& block = this->sparse_blocks_diagonal[index];
                 set_block(result, 0, offset, get_block(result, 0, offset, 1, sparse_block_diagonal::block_size) + get_block(lhs_vector, 0, offset, 1, sparse_block_diagonal::block_size) * block);
             }

@@ -403,7 +403,7 @@ namespace lie {
 
     template <typename type>
     constexpr se3<type> se3<type>::inverse() const {
-        const so3 rotation_so3_inverse = this->rotation_so3.inverse();
+        const so3<type> rotation_so3_inverse = this->rotation_so3.inverse();
         return { rotation_so3_inverse, -(rotation_so3_inverse * this->translation_vector) };
     }
 

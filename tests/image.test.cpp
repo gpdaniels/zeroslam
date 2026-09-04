@@ -48,7 +48,7 @@ int main(int argc, char* argv[]) {
         image::image image(10, 20);
         for (size_t i = 0; i < image.get_rows(); ++i) {
             for (size_t j = 0; j < image.get_cols(); ++j) {
-                image.get_data()[i * image.get_cols() + j] = i * image.get_cols() + j;
+                image.get_data()[i * image.get_cols() + j] = static_cast<unsigned char>(i * image.get_cols() + j);
             }
         }
         for (size_t i = 0; i < image.get_rows(); ++i) {
@@ -81,11 +81,11 @@ int main(int argc, char* argv[]) {
         image::image image(10, 20);
         for (size_t i = 0; i < image.get_rows(); ++i) {
             for (size_t j = 0; j < image.get_cols(); ++j) {
-                image.get_data()[i * image.get_cols() + j] = (((i % 2) == 0) ^ ((j % 2) == 0)) * 100;
+                image.get_data()[i * image.get_cols() + j] = static_cast<unsigned char>((((i % 2) == 0) ^ ((j % 2) == 0)) * 100);
             }
         }
         image::image blurred(image.get_rows(), 20);
-        image::blur(image.get_data(), image.get_cols(), image.get_rows(), image.get_cols(), blurred.get_data());
+        image::blur(image.get_data(), static_cast<int>(image.get_cols()), static_cast<int>(image.get_rows()), static_cast<int>(image.get_cols()), blurred.get_data());
         for (size_t i = 0; i < blurred.get_rows(); ++i) {
             for (size_t j = 0; j < blurred.get_cols(); ++j) {
                 if ((i < 3) || (i >= blurred.get_rows() - 3) || (j < 3) || (j >= blurred.get_cols() - 3)) {
@@ -140,7 +140,7 @@ int main(int argc, char* argv[]) {
         image::image image(10, 20);
         for (size_t i = 0; i < image.get_rows(); ++i) {
             for (size_t j = 0; j < image.get_cols(); ++j) {
-                image.get_data()[i * image.get_cols() + j] = (((i % 2) == 0) ^ ((j % 2) == 0)) * 100;
+                image.get_data()[i * image.get_cols() + j] = static_cast<unsigned char>((((i % 2) == 0) ^ ((j % 2) == 0)) * 100);
             }
         }
         image::image resized(5, 10);
@@ -156,7 +156,7 @@ int main(int argc, char* argv[]) {
         image::image image(8, 8);
         for (size_t i = 0; i < image.get_rows(); ++i) {
             for (size_t j = 0; j < image.get_cols(); ++j) {
-                image.get_data()[i * image.get_cols() + j] = i * image.get_cols() + j;
+                image.get_data()[i * image.get_cols() + j] = static_cast<unsigned char>(i * image.get_cols() + j);
             }
         }
         image::image resized(16, 16);
@@ -197,7 +197,7 @@ int main(int argc, char* argv[]) {
         }
         image::image bigger(10, 20);
         for (size_t i = 0; i < bigger.get_rows() * bigger.get_cols(); ++i) {
-            bigger.get_data()[i] = i;
+            bigger.get_data()[i] = static_cast<unsigned char>(i);
         }
         smaller = bigger;
         REQUIRE(smaller.get_rows() == 10);
@@ -215,7 +215,7 @@ int main(int argc, char* argv[]) {
         }
         image::image smaller(5, 10);
         for (size_t i = 0; i < smaller.get_rows() * smaller.get_cols(); ++i) {
-            smaller.get_data()[i] = i;
+            smaller.get_data()[i] = static_cast<unsigned char>(i);
         }
         bigger = smaller;
         REQUIRE(bigger.get_rows() == 5);
@@ -238,7 +238,7 @@ int main(int argc, char* argv[]) {
         // Self-assignment.
         image::image image(10, 20);
         for (size_t i = 0; i < image.get_rows() * image.get_cols(); ++i) {
-            image.get_data()[i] = i;
+            image.get_data()[i] = static_cast<unsigned char>(i);
         }
         image::image& self = image;
         image = self;
@@ -252,7 +252,7 @@ int main(int argc, char* argv[]) {
         // Move-assignment onto a differently-sized non-empty image.
         image::image source(10, 20);
         for (size_t i = 0; i < source.get_rows() * source.get_cols(); ++i) {
-            source.get_data()[i] = i;
+            source.get_data()[i] = static_cast<unsigned char>(i);
         }
         unsigned char* source_data = source.get_data();
         image::image target(5, 10);

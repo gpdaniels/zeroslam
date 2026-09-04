@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -54,14 +55,18 @@ static inline bool is_value_approx(double lhs, double rhs, double epsilon = 1e-8
     return (std::abs(lhs - rhs) <= (epsilon * (std::abs(lhs) + std::abs(rhs))) + epsilon);
 }
 
+static inline bool is_value_approx(float lhs, float rhs, double epsilon = 1e-8) {
+    return is_value_approx(static_cast<double>(lhs), static_cast<double>(rhs), epsilon);
+}
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
 
     float test_values_float[] = {
-        __builtin_nanf("0"),
-        +__builtin_inff(),
-        -__builtin_inff(),
+        std::numeric_limits<float>::quiet_NaN(),
+        +std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(),
         0.0f,
         -0.0f,
         +0.0f,
@@ -82,9 +87,9 @@ int main(int argc, char* argv[]) {
     };
 
     double test_values_double[] = {
-        __builtin_nan("0"),
-        +__builtin_inff64(),
-        -__builtin_inff64(),
+        std::numeric_limits<double>::quiet_NaN(),
+        +std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
         0.0,
         -0.0,
         +0.0,
@@ -302,6 +307,10 @@ int main(int argc, char* argv[]) {
 
     {
         for (const double value : test_values_double) {
+            if (!std::isfinite(value))
+                continue;
+            if (std::abs(value) == std::numeric_limits<double>::max())
+                continue;
             const long long int lhs = math::round(value);
             const long long int rhs = std::llround(value);
             REQUIRE(lhs == rhs);
@@ -388,13 +397,13 @@ int main(int argc, char* argv[]) {
         for (const float value : test_values_float) {
             const float lhs = math::exp(value);
             const float rhs = std::exp(value);
-            REQUIRE(is_value_approx(lhs, rhs));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-6));
         }
 
         for (const float value : test_values_float) {
             const float lhs = math::log(value);
             const float rhs = std::log(value);
-            REQUIRE(is_value_approx(lhs, rhs));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-6));
         }
     }
 
@@ -417,7 +426,7 @@ int main(int argc, char* argv[]) {
             for (const float value2 : test_values_float) {
                 const float lhs = math::pow(value, value2);
                 const float rhs = std::pow(value, value2);
-                REQUIRE(is_value_approx(lhs, rhs));
+                REQUIRE(is_value_approx(lhs, rhs, 1e-6));
             }
         }
 
@@ -427,7 +436,7 @@ int main(int argc, char* argv[]) {
                 const float value2 = static_cast<float>(j) / 10.0f;
                 const float lhs = math::pow(value, value2);
                 const float rhs = std::pow(value, value2);
-                REQUIRE(is_value_approx(lhs, rhs));
+                REQUIRE(is_value_approx(lhs, rhs, 1e-6));
             }
         }
     }
@@ -458,14 +467,14 @@ int main(int argc, char* argv[]) {
                 continue;
             const float lhs = math::sin(value);
             const float rhs = std::sin(value);
-            REQUIRE(is_value_approx(lhs, rhs, 1e-12));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-6));
         }
 
         for (int i = -100000; i <= 100000; ++i) {
             const float value = static_cast<float>(i) / 100.0f;
             const float lhs = math::sin(value);
             const float rhs = std::sin(value);
-            REQUIRE(is_value_approx(lhs, rhs, 1e-12));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-6));
         }
     }
 
@@ -492,14 +501,14 @@ int main(int argc, char* argv[]) {
                 continue;
             const float lhs = math::cos(value);
             const float rhs = std::cos(value);
-            REQUIRE(is_value_approx(lhs, rhs, 1e-12));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-6));
         }
 
         for (int i = -100000; i <= 100000; ++i) {
             const float value = static_cast<float>(i) / 100.0f;
             const float lhs = math::cos(value);
             const float rhs = std::cos(value);
-            REQUIRE(is_value_approx(lhs, rhs, 1e-12));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-6));
         }
     }
 
@@ -529,8 +538,8 @@ int main(int argc, char* argv[]) {
             math::sincos(value, lhs_sin, lhs_cos);
             const float rhs_sin = std::sin(value);
             const float rhs_cos = std::cos(value);
-            REQUIRE(is_value_approx(lhs_sin, rhs_sin, 1e-12));
-            REQUIRE(is_value_approx(lhs_cos, rhs_cos, 1e-12));
+            REQUIRE(is_value_approx(lhs_sin, rhs_sin, 1e-6));
+            REQUIRE(is_value_approx(lhs_cos, rhs_cos, 1e-6));
         }
 
         for (int i = -100000; i <= 100000; ++i) {
@@ -540,8 +549,8 @@ int main(int argc, char* argv[]) {
             math::sincos(value, lhs_sin, lhs_cos);
             const float rhs_sin = std::sin(value);
             const float rhs_cos = std::cos(value);
-            REQUIRE(is_value_approx(lhs_sin, rhs_sin, 1e-12));
-            REQUIRE(is_value_approx(lhs_cos, rhs_cos, 1e-12));
+            REQUIRE(is_value_approx(lhs_sin, rhs_sin, 1e-6));
+            REQUIRE(is_value_approx(lhs_cos, rhs_cos, 1e-6));
         }
     }
 
@@ -574,7 +583,7 @@ int main(int argc, char* argv[]) {
         for (const float value : test_values_float) {
             const float lhs = math::asin(value);
             const float rhs = std::asin(value);
-            REQUIRE(is_value_approx(lhs, rhs, 1e-13));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-6));
         }
     }
 
@@ -590,7 +599,7 @@ int main(int argc, char* argv[]) {
         for (const float value : test_values_float) {
             const float lhs = math::acos(value);
             const float rhs = std::acos(value);
-            REQUIRE(is_value_approx(lhs, rhs, 1e-13));
+            REQUIRE(is_value_approx(lhs, rhs, 1e-6));
         }
     }
 

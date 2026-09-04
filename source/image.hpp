@@ -216,7 +216,7 @@ namespace image {
     ) {
         const int nearest_x = math::max(0, math::min(math::round(offset_x), static_cast<int>(source_width) - 1));
         const int nearest_y = math::max(0, math::min(math::round(offset_y), static_cast<int>(source_height) - 1));
-        return data[nearest_y * source_width + nearest_x];
+        return data[static_cast<size_t>(nearest_y) * source_width + static_cast<size_t>(nearest_x)];
     }
 
     static inline unsigned char interpolate_linear(
@@ -234,10 +234,10 @@ namespace image {
         const float weight_y = math::max(0.0f, math::min(offset_y - static_cast<float>(floor_y), 1.0f));
         return static_cast<unsigned char>(
             math::round(
-                static_cast<float>(data[floor_y * source_width + floor_x]) * (1.0f - weight_x) * (1.0f - weight_y) +
-                static_cast<float>(data[floor_y * source_width + ceil_x]) * (weight_x) * (1.0f - weight_y) +
-                static_cast<float>(data[ceil_y * source_width + floor_x]) * (1.0f - weight_x) * (weight_y) +
-                static_cast<float>(data[ceil_y * source_width + ceil_x]) * (weight_x) * (weight_y)
+                static_cast<float>(data[static_cast<size_t>(floor_y) * source_width + static_cast<size_t>(floor_x)]) * (1.0f - weight_x) * (1.0f - weight_y) +
+                static_cast<float>(data[static_cast<size_t>(floor_y) * source_width + static_cast<size_t>(ceil_x)]) * (weight_x) * (1.0f - weight_y) +
+                static_cast<float>(data[static_cast<size_t>(ceil_y) * source_width + static_cast<size_t>(floor_x)]) * (1.0f - weight_x) * (weight_y) +
+                static_cast<float>(data[static_cast<size_t>(ceil_y) * source_width + static_cast<size_t>(ceil_x)]) * (weight_x) * (weight_y)
             )
         );
     }

@@ -202,7 +202,7 @@ namespace platform {
         }
         exit_code = status;
 #else
-        const int status = ::pclose(pipe);
+        int status = ::pclose(pipe);
         if (status == -1) {
             return false;
         }

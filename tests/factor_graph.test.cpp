@@ -23,8 +23,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -77,7 +79,7 @@ int main(int argc, char* argv[]) {
                 this->state = state_previous * 0x5851F42D4C957F2Dull + this->increment;
                 // Calculate output function.
                 unsigned int state_shift_xor_shift = static_cast<unsigned int>(((state_previous >> 18u) ^ state_previous) >> 27u);
-                int rotation = state_previous >> 59u;
+                const int rotation = static_cast<int>(state_previous >> 59u);
                 return (state_shift_xor_shift >> rotation) | (state_shift_xor_shift << ((-rotation) & 31));
             }
         };
@@ -123,7 +125,7 @@ int main(int argc, char* argv[]) {
         for (size_t i = 0; i < landmarks.size(); ++i) {
             landmark_vertexes.push_back(std::make_unique<factor_graph::vertex_point_xyz>());
             for (size_t j = 0; j < 3; ++j) {
-                noisy_landmarks[i][j] = landmarks[i][j] + (static_cast<double>((int)(rng.get_random_raw() % 10) - 5) * 0.01);
+                noisy_landmarks[i][j] = landmarks[i][j] + (static_cast<double>(static_cast<int>(rng.get_random_raw() % 10) - 5) * 0.01);
                 auto parameters = landmark_vertexes[i]->get_parameters();
                 parameters[j][0] = noisy_landmarks[i][j];
                 landmark_vertexes[i]->set_parameters(parameters);
@@ -143,9 +145,9 @@ int main(int argc, char* argv[]) {
                 REQUIRE(camera_model.project(world_point.data(), point.data()));
                 camera::pinhole edge_camera(camera_parameters, 4);
                 std::unique_ptr<factor_graph::edge_base> m = std::make_unique<factor_graph::edge_reprojection<camera::pinhole>>(edge_camera);
-                m->set_observation(matrix::matrix<double, 0, 0>(2, 1, matrix::matrix<double, 2, 1>{ { point[0] + (static_cast<double>((int)(rng.get_random_raw() % 10) - 5) * 0.0001), point[1] + (static_cast<double>((int)(rng.get_random_raw() % 10) - 5) * 0.0001) } }.data()));
-                m->add_vertex(camera_vertexes[camera_id].get());
-                m->add_vertex(landmark_vertexes[landmark_id].get());
+                m->set_observation(matrix::matrix<double, 0, 0>(2, 1, matrix::matrix<double, 2, 1>{ { point[0] + (static_cast<double>(static_cast<int>(rng.get_random_raw() % 10) - 5) * 0.0001), point[1] + (static_cast<double>(static_cast<int>(rng.get_random_raw() % 10) - 5) * 0.0001) } }.data()));
+                m->add_vertex(camera_vertexes[static_cast<size_t>(camera_id)].get());
+                m->add_vertex(landmark_vertexes[static_cast<size_t>(landmark_id)].get());
                 factor_graph.add_edge(m.get());
                 std::fprintf(stdout, "POINT [%d]: % f % f\n", camera_id, m->get_observation()[0][0], m->get_observation()[1][0]);
                 observation_edges.emplace_back(std::move(m));
@@ -218,7 +220,7 @@ int main(int argc, char* argv[]) {
         const matrix::matrix<double, 0, 0>& optimised_parameters = free_camera_vertex->get_parameters();
         REQUIRE(optimised_parameters.rows() == 7);
         REQUIRE(optimised_parameters.cols() == 1);
-        for (int i = 0; i < 7; ++i) {
+        for (size_t i = 0; i < 7; ++i) {
             REQUIRE(std::isfinite(optimised_parameters[i][0]));
         }
     }
@@ -257,8 +259,8 @@ int main(int argc, char* argv[]) {
                 { 0.0, -1.0, 0.0, -1.0, 0.0, 0.0 },
                 { 1.0, 0.0, 0.0, 0.0, -1.0, 0.0 }
             };
-            for (int r = 0; r < 2; ++r) {
-                for (int c = 0; c < 6; ++c) {
+            for (size_t r = 0; r < 2; ++r) {
+                for (size_t c = 0; c < 6; ++c) {
                     REQUIRE(jacobian_pose[r][c] == expected_pose[r][c]);
                 }
             }
@@ -268,8 +270,8 @@ int main(int argc, char* argv[]) {
                 { -1.0, 0.0, 0.0 },
                 { 0.0, -1.0, 0.0 }
             };
-            for (int r = 0; r < 2; ++r) {
-                for (int c = 0; c < 3; ++c) {
+            for (size_t r = 0; r < 2; ++r) {
+                for (size_t c = 0; c < 3; ++c) {
                     REQUIRE(jacobian_landmark[r][c] == expected_landmark[r][c]);
                 }
             }
@@ -303,15 +305,15 @@ int main(int argc, char* argv[]) {
             const matrix::matrix<double, 0, 0>& jacobian_landmark = edge->get_jacobians()[1];
 
             bool jacobian_pose_nonzero = false;
-            for (int r = 0; r < 2; ++r) {
-                for (int c = 0; c < 6; ++c) {
+            for (size_t r = 0; r < 2; ++r) {
+                for (size_t c = 0; c < 6; ++c) {
                     REQUIRE(std::isfinite(jacobian_pose[r][c]));
                     jacobian_pose_nonzero = jacobian_pose_nonzero || (jacobian_pose[r][c] != 0.0);
                 }
             }
             bool jacobian_landmark_nonzero = false;
-            for (int r = 0; r < 2; ++r) {
-                for (int c = 0; c < 3; ++c) {
+            for (size_t r = 0; r < 2; ++r) {
+                for (size_t c = 0; c < 3; ++c) {
                     REQUIRE(std::isfinite(jacobian_landmark[r][c]));
                     jacobian_landmark_nonzero = jacobian_landmark_nonzero || (jacobian_landmark[r][c] != 0.0);
                 }

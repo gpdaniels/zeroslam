@@ -55,10 +55,10 @@ namespace matrix {
         };
 
         // Working arrays.
-        type* working_matrix = new type[size * size]{};
-        complex_number* eigenvalues = new complex_number[size];
-        type* scaling = new type[size];
-        int* permutation = new int[size];
+        type* working_matrix = new type[static_cast<size_t>(size * size)]{};
+        complex_number* eigenvalues = new complex_number[static_cast<size_t>(size)];
+        type* scaling = new type[static_cast<size_t>(size)];
+        int* permutation = new int[static_cast<size_t>(size)];
 
         // Copy input matrix into working matrix.
         for (int row = 0; row < size; ++row) {
@@ -92,7 +92,7 @@ namespace matrix {
                 // Only balance if both row and column have non-zero elements.
                 // Note: Assuming `type` is a binary type and therefore its radix is 2.
                 // Note: This should be true for all standard float and double types.
-                if ((col_sum != 0.0) && (row_sum != 0.0)) {
+                if ((col_sum != type(0)) && (row_sum != type(0))) {
                     const type original_sum = col_sum + row_sum;
                     type scale_factor = 1;
                     type col_sum_scaled = col_sum;
@@ -112,7 +112,7 @@ namespace matrix {
                     }
 
                     // Apply scaling if it provides sufficient improvement.
-                    if (((col_sum_scaled + row_sum) / scale_factor) < (0.95 * original_sum)) {
+                    if (((col_sum_scaled + row_sum) / scale_factor) < (type(0.95) * original_sum)) {
                         converged = false;
                         const type inverse_scale = type(1) / scale_factor;
                         scaling[row_index] *= scale_factor;
@@ -154,10 +154,10 @@ namespace matrix {
                     working_matrix[row * size + m] = temp;
                 }
             }
-            if (pivot_abs_max != 0.0) {
+            if (pivot_abs_max != type(0)) {
                 for (int row = m + 1; row < size; ++row) {
                     type multiplier = working_matrix[row * size + (m - 1)];
-                    if (multiplier != 0.0) {
+                    if (multiplier != type(0)) {
                         multiplier /= pivot_abs_max;
                         working_matrix[row * size + (m - 1)] = multiplier;
                         for (int col = m; col < size; ++col) {
@@ -219,7 +219,7 @@ namespace matrix {
                     split_index = 0;
                     for (int l = current_dimension; l > 0; --l) {
                         const type diagonal_sum = math::abs(working_matrix[(l - 1) * size + (l - 1)]) + math::abs(working_matrix[l * size + l]);
-                        const type threshold = (diagonal_sum == 0.0) ? working_matrix_norm : diagonal_sum;
+                        const type threshold = (diagonal_sum == type(0)) ? working_matrix_norm : diagonal_sum;
 
                         if (math::abs(working_matrix[l * size + (l - 1)]) <= epsilon * threshold) {
                             working_matrix[l * size + (l - 1)] = 0.0;
@@ -242,7 +242,7 @@ namespace matrix {
 
                         // Case 2: 2x2 block converged.
                         if (split_index == current_dimension - 1) {
-                            const type half_trace_diff = 0.5 * (prev_diagonal - diagonal_element);
+                            const type half_trace_diff = type(0.5) * (prev_diagonal - diagonal_element);
                             const type discriminant = half_trace_diff * half_trace_diff + subdiagonal_product;
                             const type sqrt_abs_discriminant = math::sqrt(math::abs(discriminant));
                             const type shifted_diagonal = diagonal_element + cumulative_shift;
@@ -250,12 +250,12 @@ namespace matrix {
                             working_matrix[current_dimension * size + current_dimension] = shifted_diagonal;
                             working_matrix[(current_dimension - 1) * size + (current_dimension - 1)] = prev_diagonal + cumulative_shift;
 
-                            if (discriminant >= 0.0) {
+                            if (discriminant >= type(0)) {
                                 // Real eigenvalues.
                                 const type eigenvalue_sum = half_trace_diff + math::copysign(sqrt_abs_discriminant, half_trace_diff);
                                 eigenvalues[current_dimension - 1] = eigenvalues[current_dimension] = shifted_diagonal + eigenvalue_sum;
 
-                                if (eigenvalue_sum != 0.0) {
+                                if (eigenvalue_sum != type(0)) {
                                     eigenvalues[current_dimension] = shifted_diagonal - subdiagonal_product / eigenvalue_sum;
                                 }
 
@@ -320,8 +320,8 @@ namespace matrix {
 
                                 const type shift_scale = math::abs(working_matrix[current_dimension * size + (current_dimension - 1)]) +
                                                          math::abs(working_matrix[(current_dimension - 1) * size + (current_dimension - 2)]);
-                                x_shift = y_shift = 0.75 * shift_scale;
-                                w_shift = -0.4375 * shift_scale * shift_scale;
+                                x_shift = y_shift = type(0.75) * shift_scale;
+                                w_shift = type(-0.4375) * shift_scale * shift_scale;
                             }
 
                             ++iteration_count;
@@ -371,10 +371,10 @@ namespace matrix {
                                 if (k != bulge_start) {
                                     p_coef = working_matrix[k * size + (k - 1)];
                                     q_coef = working_matrix[(k + 1) * size + (k - 1)];
-                                    r_coef = (k + 1 != current_dimension) ? working_matrix[(k + 2) * size + (k - 1)] : 0.0;
+                                    r_coef = (k + 1 != current_dimension) ? working_matrix[(k + 2) * size + (k - 1)] : type(0);
 
                                     const type coef_norm = math::abs(p_coef) + math::abs(q_coef) + math::abs(r_coef);
-                                    if (coef_norm != 0.0) {
+                                    if (coef_norm != type(0)) {
                                         p_coef /= coef_norm;
                                         q_coef /= coef_norm;
                                         r_coef /= coef_norm;
@@ -398,7 +398,7 @@ namespace matrix {
 
                                 const type householder_norm = math::copysign(math::sqrt(p_coef * p_coef + q_coef * q_coef + r_coef * r_coef), p_coef);
 
-                                if (householder_norm != 0.0) {
+                                if (householder_norm != type(0)) {
                                     if (k == bulge_start) {
                                         if (split_index != bulge_start) {
                                             working_matrix[k * size + (k - 1)] = -working_matrix[k * size + (k - 1)];
@@ -406,7 +406,7 @@ namespace matrix {
                                     }
                                     else {
                                         const type original_norm = math::abs(working_matrix[k * size + (k - 1)]) + math::abs(working_matrix[(k + 1) * size + (k - 1)]) +
-                                                                   ((k + 1 != current_dimension) ? math::abs(working_matrix[(k + 2) * size + (k - 1)]) : 0.0);
+                                                                   ((k + 1 != current_dimension) ? math::abs(working_matrix[(k + 2) * size + (k - 1)]) : type(0));
                                         working_matrix[k * size + (k - 1)] = -householder_norm * original_norm;
                                     }
 
@@ -459,14 +459,14 @@ namespace matrix {
 
             // Back substitution to find vectors.
             if constexpr (extract_eigenvectors) {
-                if (working_matrix_norm != 0.0) {
+                if (working_matrix_norm != type(0)) {
                     // Back-substitute to compute eigenvectors.
                     for (int vec_index = size - 1; vec_index >= 0; --vec_index) {
                         const type eigenvalue_real = eigenvalues[vec_index].real;
                         const type eigenvalue_imag = eigenvalues[vec_index].imaginary;
 
                         // Real eigenvalue: compute real eigenvector.
-                        if (eigenvalue_imag == 0.0) {
+                        if (eigenvalue_imag == type(0)) {
                             int row_start = vec_index;
                             working_matrix[vec_index * size + vec_index] = 1.0;
 
@@ -482,7 +482,7 @@ namespace matrix {
                                     accumulator += working_matrix[i * size + j] * working_matrix[j * size + vec_index];
                                 }
 
-                                if (eigenvalues[i].imaginary < 0.0) {
+                                if (eigenvalues[i].imaginary < type(0)) {
                                     // Store for use with complex conjugate pair in next iteration.
                                     prev_diagonal_diff = diagonal_diff;
                                     prev_accumulator = accumulator;
@@ -490,9 +490,9 @@ namespace matrix {
                                 else {
                                     row_start = i;
 
-                                    if (eigenvalues[i].imaginary == 0.0) {
+                                    if (eigenvalues[i].imaginary == type(0)) {
                                         // Simple real eigenvalue case.
-                                        const type divisor = (diagonal_diff != 0.0) ? diagonal_diff : epsilon * working_matrix_norm;
+                                        const type divisor = (diagonal_diff != type(0)) ? diagonal_diff : epsilon * working_matrix_norm;
                                         working_matrix[i * size + vec_index] = -accumulator / divisor;
                                     }
                                     else {
@@ -523,7 +523,7 @@ namespace matrix {
                             }
                         }
                         // Complex eigenvalue: compute complex eigenvector (stored as two real columns).
-                        else if (eigenvalue_imag < 0.0) {
+                        else if (eigenvalue_imag < type(0)) {
                             const int prev_col = vec_index - 1;
                             int row_start = prev_col;
 
@@ -557,7 +557,7 @@ namespace matrix {
                                     imag_accumulator += working_matrix[i * size + j] * working_matrix[j * size + vec_index];
                                 }
 
-                                if (eigenvalues[i].imaginary < 0.0) {
+                                if (eigenvalues[i].imaginary < type(0)) {
                                     // Store for use in next iteration.
                                     prev_diagonal_diff = diagonal_diff;
                                     prev_real_accum = real_accumulator;
@@ -566,7 +566,7 @@ namespace matrix {
                                 else {
                                     row_start = i;
 
-                                    if (eigenvalues[i].imaginary == 0.0) {
+                                    if (eigenvalues[i].imaginary == type(0)) {
                                         // Real eigenvalue in complex eigenvector computation.
                                         const complex_number solution = complex_number(-real_accumulator, -imag_accumulator) /
                                                                         complex_number(diagonal_diff, eigenvalue_imag);
@@ -579,10 +579,10 @@ namespace matrix {
                                         const type y_elem = working_matrix[(i + 1) * size + i];
 
                                         type vr = math::sqr(eigenvalues[i].real - eigenvalue_real) + math::sqr(eigenvalues[i].imaginary) - eigenvalue_imag * eigenvalue_imag;
-                                        type vi = 2.0 * eigenvalue_imag * (eigenvalues[i].real - eigenvalue_real);
+                                        type vi = type(2) * eigenvalue_imag * (eigenvalues[i].real - eigenvalue_real);
 
                                         // Regularize if denominator is too small.
-                                        if (vr == 0.0 && vi == 0.0) {
+                                        if (vr == type(0) && vi == type(0)) {
                                             vr = epsilon * working_matrix_norm * (math::abs(diagonal_diff) + math::abs(eigenvalue_imag) + math::abs(x_elem) + math::abs(y_elem) + math::abs(prev_diagonal_diff));
                                         }
 

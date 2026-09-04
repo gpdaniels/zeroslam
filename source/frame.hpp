@@ -27,6 +27,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <utility>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -70,28 +71,30 @@ namespace frame {
             // Note: We subtract five levels to ensure the smalles image size has a minimum dimension of at least 32 pixels.
             // Note: The clamp to a minimum of one guarantees that at least the base level (level 0) is always processed, even for tiny images whose smaller dimension is under 64 pixels (which would otherwise yield a non-positive octave count).
             const int octaves = math::max(1, static_cast<int>(math::floor(math::log(static_cast<double>(math::min(input_image_grey.get_cols(), input_image_grey.get_rows()))) / math::log(2.0))) - 5);
-            this->image_pyramid.reserve(octaves);
-            this->keypoint_pyramid.reserve(octaves);
-            this->descriptor_pyramid.reserve(octaves);
+            this->image_pyramid.reserve(static_cast<size_t>(octaves));
+            this->keypoint_pyramid.reserve(static_cast<size_t>(octaves));
+            this->descriptor_pyramid.reserve(static_cast<size_t>(octaves));
             this->image_pyramid.push_back(input_image_grey);
             for (int o = 0; o < octaves; ++o) {
                 if (o > 0) {
                     // Copy, blur, resize.
                     const image::image& previous = this->image_pyramid.back();
                     image::image blurred(previous.get_rows(), previous.get_cols());
-                    image::blur(previous.get_data(), previous.get_cols(), previous.get_rows(), previous.get_cols(), blurred.get_data());
+                    image::blur(previous.get_data(), static_cast<int>(previous.get_cols()), static_cast<int>(previous.get_rows()), static_cast<int>(previous.get_cols()), blurred.get_data());
                     image::image next(previous.get_rows() / 2, previous.get_cols() / 2);
                     image::resize(blurred.get_data(), blurred.get_cols(), blurred.get_rows(), next.get_cols(), next.get_rows(), next.get_data());
                     this->image_pyramid.push_back(next);
                 }
 
                 const image::image& image_grey = this->image_pyramid.back();
+                const int image_cols = static_cast<int>(image_grey.get_cols());
+                const int image_rows = static_cast<int>(image_grey.get_rows());
 
                 // Detect features.
                 std::vector<feature::point> kps;
                 kps.resize(50000);
-                const int feature_count = feature::detect(image_grey.get_data(), image_grey.get_cols(), image_grey.get_rows(), image_grey.get_cols(), 7, static_cast<int>(kps.size()), kps.data());
-                kps.resize(static_cast<size_t>(feature_count));
+                const size_t feature_count = feature::detect(image_grey.get_data(), image_cols, image_rows, image_cols, 7, kps.size(), kps.data());
+                kps.resize(feature_count);
 
                 // Prune edge features.
                 // Note: The border must cover all sampling performed around a keypoint:
@@ -99,15 +102,15 @@ namespace frame {
                 // - The subpixel patch samples up to 20 (patch radius) + 4 (maximum accepted refinement offset) + 1 (bilinear interpolation) = 25 pixels from the feature.
                 constexpr static const int border = 25;
                 size_t prune_edge_count = kps.size();
-                prune(kps.data(), prune_edge_count, [&image_grey](const feature::point& feature) {
-                    return (feature.x < border) || (feature.x >= static_cast<int>(image_grey.get_cols()) - border) || (feature.y < border) || (feature.y >= static_cast<int>(image_grey.get_rows()) - border);
+                prune(kps.data(), prune_edge_count, [image_cols, image_rows](const feature::point& feature) {
+                    return (feature.x < border) || (feature.x >= static_cast<float>(image_cols - border)) || (feature.y < border) || (feature.y >= static_cast<float>(image_rows - border));
                 });
                 kps.resize(static_cast<size_t>(prune_edge_count));
 
                 // Score features.
                 for (size_t i = 0; i < kps.size(); ++i) {
                     const unsigned char* feature = image_grey.get_data() + static_cast<size_t>(kps[i].y) * image_grey.get_cols() + static_cast<size_t>(kps[i].x);
-                    const float response = feature::score(feature, image_grey.get_cols());
+                    const float response = feature::score(feature, image_cols);
                     kps[i].response = response;
                 }
 
@@ -124,7 +127,7 @@ namespace frame {
                     return lhs.y == rhs.y ? lhs.x < rhs.x : lhs.y < rhs.y;
                 });
                 std::vector<feature::point> features_suppressed(kps.size());
-                const int suppressed_count = feature::suppress(kps.data(), kps.size(), image_grey.get_rows(), features_suppressed.data());
+                const size_t suppressed_count = feature::suppress(kps.data(), kps.size(), image_grey.get_rows(), features_suppressed.data());
                 features_suppressed.resize(suppressed_count);
                 kps = std::move(features_suppressed);
 
@@ -140,7 +143,7 @@ namespace frame {
                     return lhs.x > rhs.x;
                 });
                 std::vector<feature::point> features_distributed(2000);
-                const int distributed_count = distribute(kps.data(), static_cast<int>(kps.size()), image_grey.get_cols(), image_grey.get_rows(), 500, static_cast<int>(features_distributed.size()), features_distributed.data());
+                const int distributed_count = distribute(kps.data(), static_cast<int>(kps.size()), image_cols, image_rows, 500, static_cast<int>(features_distributed.size()), features_distributed.data());
                 features_distributed.resize(static_cast<size_t>(distributed_count));
                 kps = std::move(features_distributed);
 
@@ -152,16 +155,16 @@ namespace frame {
                     // Attempt subpixel refinement of feature.
                     float offset_x = 0;
                     float offset_y = 0;
-                    if (!feature::refine(feature, image_grey.get_cols(), offset_x, offset_y)) {
+                    if (!feature::refine(feature, image_cols, offset_x, offset_y)) {
                         // If unsuccessful, proceed using unrefined feature.
-                        const float angle = feature::dominant_angle(feature, image_grey.get_cols());
-                        feature::describe(feature, image_grey.get_cols(), angle, des[i]);
+                        const float angle = feature::dominant_angle(feature, image_cols);
+                        feature::describe(feature, image_cols, angle, des[i]);
                         continue;
                     }
 
                     // If successful, calculate descriptors from a subpixel patch.
                     unsigned char patch[41][41];
-                    feature::patch_bilinear(feature, image_grey.get_cols(), offset_x, offset_y, &patch[0][0]);
+                    feature::patch_bilinear(feature, image_cols, offset_x, offset_y, &patch[0][0]);
                     const float angle = feature::dominant_angle(&patch[20][20], 41);
                     feature::describe(&patch[20][20], 41, angle, des[i]);
                     kps[i].x += offset_x;

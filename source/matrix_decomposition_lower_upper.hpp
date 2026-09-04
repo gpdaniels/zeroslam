@@ -24,7 +24,7 @@ namespace {
 
 namespace matrix {
     template <typename type>
-    static bool decompose_lower_upper(
+    static inline bool decompose_lower_upper(
         const type* __restrict matrix,
         const int width,
         const int height,
@@ -146,7 +146,7 @@ namespace matrix {
     }
 
     template <typename type>
-    static bool solve_lower_upper(
+    static inline bool solve_lower_upper(
         const type* __restrict matrix_l,   // height x height
         const type* __restrict matrix_u,   // width x height
         const type* __restrict matrix_p,   // height x height
@@ -175,39 +175,39 @@ namespace matrix {
         // Forward solve lower * matrix_solution = permuted matrix_rhs, in place.
         for (size_t index_row = 0; index_row < static_cast<size_t>(height); ++index_row) {
             for (size_t j = 0; j < index_row; ++j) {
-                matrix_solution[index_row] -= matrix_l[index_row * height + j] * matrix_solution[j];
+                matrix_solution[index_row] -= matrix_l[index_row * static_cast<size_t>(height) + j] * matrix_solution[j];
             }
-            if (abs(matrix_l[index_row * height + index_row]) < type(1e-6)) {
+            if (abs(matrix_l[index_row * static_cast<size_t>(height) + index_row]) < type(1e-6)) {
                 return false;
             }
-            matrix_solution[index_row] /= matrix_l[index_row * height + index_row];
+            matrix_solution[index_row] /= matrix_l[index_row * static_cast<size_t>(height) + index_row];
         }
 
         // Backward solve upper * solution = matrix_solution, in place.
         for (size_t i = static_cast<size_t>(height); i-- > 0;) {
             for (size_t j = i + 1; j < static_cast<size_t>(height); ++j) {
-                matrix_solution[i] -= matrix_u[i * width + j] * matrix_solution[j];
+                matrix_solution[i] -= matrix_u[i * static_cast<size_t>(width) + j] * matrix_solution[j];
             }
-            if (abs(matrix_u[i * width + i]) < type(1e-6)) {
+            if (abs(matrix_u[i * static_cast<size_t>(width) + i]) < type(1e-6)) {
                 return false;
             }
-            matrix_solution[i] /= matrix_u[i * width + i];
+            matrix_solution[i] /= matrix_u[i * static_cast<size_t>(width) + i];
         }
 
         return true;
     }
 
     template <typename type>
-    static bool solve_lower_upper(
+    static inline bool solve_lower_upper(
         const type* __restrict matrix_lhs, // width x height
         const type* __restrict matrix_rhs, // 1 x height
         const int width,
         const int height,
         type* __restrict matrix_solution // 1 x height
     ) {
-        type* matrix_l = new type[height * height];
-        type* matrix_u = new type[width * height];
-        type* matrix_p = new type[height * height];
+        type* matrix_l = new type[static_cast<size_t>(height * height)];
+        type* matrix_u = new type[static_cast<size_t>(width * height)];
+        type* matrix_p = new type[static_cast<size_t>(height * height)];
         if (!decompose_lower_upper(matrix_lhs, width, height, matrix_l, matrix_u, matrix_p)) {
             delete[] matrix_l;
             delete[] matrix_u;

@@ -30,6 +30,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <string>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -165,27 +166,27 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
     }
 
     // Helper lambda to write vertex.
-    constexpr static const auto write_vertex = [](const gtl::file& output, float x, float y, float z, unsigned char r, unsigned char g, unsigned char b) {
-        gtl::file::size_type length = sizeof(float);
-        output.write(reinterpret_cast<const char*>(&x), length);
-        length = sizeof(float);
-        output.write(reinterpret_cast<const char*>(&y), length);
-        length = sizeof(float);
-        output.write(reinterpret_cast<const char*>(&z), length);
-        length = sizeof(unsigned char);
-        output.write(reinterpret_cast<const char*>(&r), length);
-        length = sizeof(unsigned char);
-        output.write(reinterpret_cast<const char*>(&g), length);
-        length = sizeof(unsigned char);
-        output.write(reinterpret_cast<const char*>(&b), length);
+    constexpr static const auto write_vertex = [](const gtl::file& file, float x, float y, float z, unsigned char r, unsigned char g, unsigned char b) {
+        gtl::file::size_type size = sizeof(float);
+        file.write(reinterpret_cast<const char*>(&x), size);
+        size = sizeof(float);
+        file.write(reinterpret_cast<const char*>(&y), size);
+        size = sizeof(float);
+        file.write(reinterpret_cast<const char*>(&z), size);
+        size = sizeof(unsigned char);
+        file.write(reinterpret_cast<const char*>(&r), size);
+        size = sizeof(unsigned char);
+        file.write(reinterpret_cast<const char*>(&g), size);
+        size = sizeof(unsigned char);
+        file.write(reinterpret_cast<const char*>(&b), size);
     };
 
     // Helper lambda to write edge.
-    constexpr static const auto write_edge = [](const gtl::file& output, int v1, int v2) {
-        gtl::file::size_type length = sizeof(int);
-        output.write(reinterpret_cast<const char*>(&v1), length);
-        length = sizeof(int);
-        output.write(reinterpret_cast<const char*>(&v2), length);
+    constexpr static const auto write_edge = [](const gtl::file& file, int v1, int v2) {
+        gtl::file::size_type size = sizeof(int);
+        file.write(reinterpret_cast<const char*>(&v1), size);
+        size = sizeof(int);
+        file.write(reinterpret_cast<const char*>(&v2), size);
     };
 
     // Write landmark vertices.
@@ -253,7 +254,7 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
 
     // Write camera frustum edges.
     for (size_t i = 0; i < reconstruction.frames.size(); ++i) {
-        const int camera_index = num_landmarks + i * vertices_per_camera;
+        const int camera_index = static_cast<int>(num_landmarks + i * vertices_per_camera);
         // Edges from centre to corners.
         for (int j = 0; j < 4; ++j) {
             write_edge(output, camera_index, camera_index + 1 + j);
@@ -506,7 +507,7 @@ int main(int argc, char* argv[]) {
         std::fprintf(stderr, "Failed to save camera trajectory to txt file.\n");
     }
     // Note: This can be easily visualised using meshlab.
-    if (!save_trajectory_and_map_as_ply("map.ply", cols, rows, slam.reconstruction)) {
+    if (!save_trajectory_and_map_as_ply("map.ply", static_cast<int>(cols), static_cast<int>(rows), slam.reconstruction)) {
         std::fprintf(stderr, "Failed to save map and camera trajectory to ply file.\n");
     }
 

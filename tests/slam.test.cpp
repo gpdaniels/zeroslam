@@ -23,6 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -53,7 +54,7 @@ public:
         unsigned long long int state_previous = this->state;
         this->state = state_previous * 0x5851F42D4C957F2Dull + this->increment;
         unsigned int state_shift_xor_shift = static_cast<unsigned int>(((state_previous >> 18u) ^ state_previous) >> 27u);
-        int rotation = state_previous >> 59u;
+        const int rotation = static_cast<int>(state_previous >> 59u);
         return (state_shift_xor_shift >> rotation) | (state_shift_xor_shift << ((-rotation) & 31));
     }
 };
@@ -177,7 +178,7 @@ private:
             xb = std::min(image_width - 1, xb);
 
             for (int x = xa; x <= xb; x++) {
-                double t = (xb == xa) ? 0.0 : (x - xa) / (double)(xb - xa);
+                double t = (xb == xa) ? 0.0 : static_cast<double>(x - xa) / static_cast<double>(xb - xa);
                 double z = za + t * (zb - za);
 
                 int idx = y * image_width + x;
@@ -190,9 +191,9 @@ private:
 
         if (y1 == y2) {
             for (int y = y0; y <= y1; y++) {
-                double t = (y - y0) / (double)(y1 - y0 + 1e-6);
-                int xa = x0 + t * (x1 - x0);
-                int xb = x0 + t * (x2 - x0);
+                double t = static_cast<double>(y - y0) / (y1 - y0 + 1e-6);
+                int xa = static_cast<int>(x0 + t * (x1 - x0));
+                int xb = static_cast<int>(x0 + t * (x2 - x0));
                 double za = z0 + t * (z1 - z0);
                 double zb = z0 + t * (z2 - z0);
                 fill_scanline(y, xa, xb, za, zb);
@@ -200,31 +201,31 @@ private:
         }
         else if (y0 == y1) {
             for (int y = y0; y <= y2; y++) {
-                double t = (y - y0) / (double)(y2 - y0 + 1e-6);
-                int xa = x0 + t * (x2 - x0);
-                int xb = x1 + t * (x2 - x1);
+                double t = static_cast<double>(y - y0) / (y2 - y0 + 1e-6);
+                int xa = static_cast<int>(x0 + t * (x2 - x0));
+                int xb = static_cast<int>(x1 + t * (x2 - x1));
                 double za = z0 + t * (z2 - z0);
                 double zb = z1 + t * (z2 - z1);
                 fill_scanline(y, xa, xb, za, zb);
             }
         }
         else {
-            int x_mid = x0 + (y1 - y0) * (x2 - x0) / (double)(y2 - y0 + 1e-6);
-            double z_mid = z0 + (y1 - y0) * (z2 - z0) / (double)(y2 - y0 + 1e-6);
+            int x_mid = static_cast<int>(x0 + (y1 - y0) * (x2 - x0) / (y2 - y0 + 1e-6));
+            double z_mid = z0 + (y1 - y0) * (z2 - z0) / (y2 - y0 + 1e-6);
 
             for (int y = y0; y <= y1; y++) {
-                double t = (y - y0) / (double)(y1 - y0 + 1e-6);
-                int xa = x0 + t * (x1 - x0);
-                int xb = x0 + t * (x_mid - x0);
+                double t = static_cast<double>(y - y0) / (y1 - y0 + 1e-6);
+                int xa = static_cast<int>(x0 + t * (x1 - x0));
+                int xb = static_cast<int>(x0 + t * (x_mid - x0));
                 double za = z0 + t * (z1 - z0);
                 double zb = z0 + t * (z_mid - z0);
                 fill_scanline(y, xa, xb, za, zb);
             }
 
             for (int y = y1; y <= y2; y++) {
-                double t = (y - y1) / (double)(y2 - y1 + 1e-6);
-                int xa = x1 + t * (x2 - x1);
-                int xb = x_mid + t * (x2 - x_mid);
+                double t = static_cast<double>(y - y1) / (y2 - y1 + 1e-6);
+                int xa = static_cast<int>(x1 + t * (x2 - x1));
+                int xb = static_cast<int>(x_mid + t * (x2 - x_mid));
                 double za = z1 + t * (z2 - z1);
                 double zb = z_mid + t * (z2 - z_mid);
                 fill_scanline(y, xa, xb, za, zb);
@@ -235,8 +236,8 @@ private:
 public:
     void render_frame(const lie::se3<double>& pose, const matrix::matrix<double, 3, 3>& intrinsics, image::image& img) {
         unsigned char* data = img.get_data();
-        std::fill(data, data + image_width * image_height, 0);
-        std::vector<double> depth_buffer(image_width * image_height, std::numeric_limits<double>::max());
+        std::fill(data, data + image_width * image_height, static_cast<unsigned char>(0));
+        std::vector<double> depth_buffer(static_cast<size_t>(image_width * image_height), std::numeric_limits<double>::max());
         for (const triangle& triangle : scene) {
             const matrix::matrix<double, 3, 1> v0_cam = pose * triangle.v0;
             const matrix::matrix<double, 3, 1> v1_cam = pose * triangle.v1;
@@ -345,19 +346,19 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
     std::fprintf(handle, "end_header\n");
 
     // Helper lambda to write vertex.
-    constexpr static const auto write_vertex = [](std::FILE* handle, float x, float y, float z, unsigned char r, unsigned char g, unsigned char b) {
-        std::fwrite(&x, sizeof(float), 1, handle);
-        std::fwrite(&y, sizeof(float), 1, handle);
-        std::fwrite(&z, sizeof(float), 1, handle);
-        std::fwrite(&r, sizeof(unsigned char), 1, handle);
-        std::fwrite(&g, sizeof(unsigned char), 1, handle);
-        std::fwrite(&b, sizeof(unsigned char), 1, handle);
+    constexpr static const auto write_vertex = [](std::FILE* file_handle, float x, float y, float z, unsigned char r, unsigned char g, unsigned char b) {
+        std::fwrite(&x, sizeof(float), 1, file_handle);
+        std::fwrite(&y, sizeof(float), 1, file_handle);
+        std::fwrite(&z, sizeof(float), 1, file_handle);
+        std::fwrite(&r, sizeof(unsigned char), 1, file_handle);
+        std::fwrite(&g, sizeof(unsigned char), 1, file_handle);
+        std::fwrite(&b, sizeof(unsigned char), 1, file_handle);
     };
 
     // Helper lambda to write edge.
-    constexpr static const auto write_edge = [](std::FILE* handle, int v1, int v2) {
-        std::fwrite(&v1, sizeof(int), 1, handle);
-        std::fwrite(&v2, sizeof(int), 1, handle);
+    constexpr static const auto write_edge = [](std::FILE* file_handle, int v1, int v2) {
+        std::fwrite(&v1, sizeof(int), 1, file_handle);
+        std::fwrite(&v2, sizeof(int), 1, file_handle);
     };
 
     // Write landmark vertices.
@@ -425,7 +426,7 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
 
     // Write camera frustum edges.
     for (size_t i = 0; i < reconstruction.frames.size(); ++i) {
-        const int camera_index = num_landmarks + i * vertices_per_camera;
+        const int camera_index = static_cast<int>(num_landmarks + i * vertices_per_camera);
         // Edges from centre to corners.
         for (int j = 0; j < 4; ++j) {
             write_edge(handle, camera_index, camera_index + 1 + j);
@@ -482,12 +483,12 @@ int main(int argc, char* argv[]) {
     REQUIRE(system.reconstruction.landmarks.size() > 100);
 
     for (const auto& [id, f] : system.reconstruction.frames) {
-        for (int r = 0; r < 3; r++) {
-            for (int c = 0; c < 3; c++) {
+        for (size_t r = 0; r < 3; r++) {
+            for (size_t c = 0; c < 3; c++) {
                 REQUIRE(!std::isnan(f.rotation[r][c]));
             }
         }
-        for (int r = 0; r < 3; r++) {
+        for (size_t r = 0; r < 3; r++) {
             REQUIRE(!std::isnan(f.translation[r]));
         }
     }

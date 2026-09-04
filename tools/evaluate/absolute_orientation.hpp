@@ -24,7 +24,7 @@ namespace {
     using size_t = decltype(sizeof(0));
 }
 
-void compute_centroids(
+static void compute_centroids(
     const double* const ground_truth_x,
     const double* const ground_truth_y,
     const double* const ground_truth_z,
@@ -74,7 +74,7 @@ void compute_centroids(
     }
 }
 
-void compute_covariance_matrix(
+static void compute_covariance_matrix(
     const double* const ground_truth_x,
     const double* const ground_truth_y,
     const double* const ground_truth_z,
@@ -117,7 +117,7 @@ void compute_covariance_matrix(
     }
 }
 
-bool compute_rotation_matrix(
+static bool compute_rotation_matrix(
     double covariance_matrix[3][3],
     double optimal_rotation[3][3]
 ) {
@@ -193,7 +193,7 @@ bool compute_rotation_matrix(
     return true;
 }
 
-bool compute_optimal_scale(
+static bool compute_optimal_scale(
     const double* const estimated_x,
     const double* const estimated_y,
     const double* const estimated_z,
@@ -238,7 +238,7 @@ bool compute_optimal_scale(
     return true;
 }
 
-void compute_optimal_translation(
+static void compute_optimal_translation(
     const double ground_truth_centroid_x,
     const double ground_truth_centroid_y,
     const double ground_truth_centroid_z,
@@ -254,7 +254,7 @@ void compute_optimal_translation(
     optimal_translation[2] = ground_truth_centroid_z - optimal_scale * (optimal_rotation[2][0] * estimated_centroid_x + optimal_rotation[2][1] * estimated_centroid_y + optimal_rotation[2][2] * estimated_centroid_z);
 }
 
-bool absolute_orientation(
+static bool absolute_orientation(
     const double* const ground_truth_x,
     const double* const ground_truth_y,
     const double* const ground_truth_z,

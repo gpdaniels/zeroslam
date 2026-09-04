@@ -23,6 +23,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -30,7 +32,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(pop)
 #endif
 
-void save_plot_to_ppm(
+static void save_plot_to_ppm(
     const char* output_filename,
     const int image_width,
     const int image_height,
@@ -45,7 +47,7 @@ void save_plot_to_ppm(
     }
 }
 
-void calculate_plot_bounds(
+static void calculate_plot_bounds(
     const std::vector<double>& ground_truth_axis_1_values,
     const std::vector<double>& ground_truth_axis_2_values,
     const std::vector<std::vector<double>>& estimated_trajectories_axis_1_values,
@@ -82,7 +84,7 @@ void calculate_plot_bounds(
     maximum_axis_2 += padding_axis_2;
 }
 
-void draw_text(
+static void draw_text(
     unsigned char* const image_buffer,
     const int image_width,
     const int image_height,
@@ -250,7 +252,7 @@ void draw_text(
     }
 }
 
-void draw_plot_legend(
+static void draw_plot_legend(
     unsigned char* const image_buffer,
     const int image_width,
     const int image_height,
@@ -287,7 +289,7 @@ void draw_plot_legend(
     }
 }
 
-void draw_line(
+static void draw_line(
     const double x_start,
     const double y_start,
     const double x_end,
@@ -342,7 +344,7 @@ void draw_line(
     }
 }
 
-void draw_plot_grid(
+static void draw_plot_grid(
     unsigned char* const image_buffer,
     const int image_width,
     const int image_height,
@@ -375,7 +377,7 @@ void draw_plot_grid(
     }
 }
 
-void draw_plot_trajectories(
+static void draw_plot_trajectories(
     unsigned char* const image_buffer,
     const int image_width,
     const int image_height,
@@ -403,7 +405,7 @@ void draw_plot_trajectories(
     }
 }
 
-void draw_plot(
+static void draw_plot(
     const std::vector<double>& ground_truth_axis_1_values,
     const std::vector<double>& ground_truth_axis_2_values,
     const std::vector<std::string>& estimated_trajectory_names,

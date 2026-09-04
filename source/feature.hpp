@@ -187,7 +187,7 @@ namespace feature {
             }
             ++front;
         }
-        features_count = (back + 1 - features);
+        features_count = static_cast<size_t>(back + 1 - features);
     }
 
     static inline float score(
@@ -361,27 +361,27 @@ namespace feature {
         const comparitor_function_type& comparitor_function
     ) {
         constexpr static const auto sift_down = [](
-                                                    point* __restrict const features,
+                                                    point* __restrict const heap_features,
                                                     size_t index,
                                                     const size_t heap_size,
-                                                    const comparitor_function_type& comparitor_function
+                                                    const comparitor_function_type& heap_comparitor_function
                                                 ) {
             while (true) {
                 size_t largest = index;
                 const size_t left = 2 * index + 1;
                 const size_t right = 2 * index + 2;
-                if ((left < heap_size) && comparitor_function(features[largest], features[left])) {
+                if ((left < heap_size) && heap_comparitor_function(heap_features[largest], heap_features[left])) {
                     largest = left;
                 }
-                if ((right < heap_size) && comparitor_function(features[largest], features[right])) {
+                if ((right < heap_size) && heap_comparitor_function(heap_features[largest], heap_features[right])) {
                     largest = right;
                 }
                 if (largest == index) {
                     break;
                 }
-                const point temp = features[index];
-                features[index] = features[largest];
-                features[largest] = temp;
+                const point temp = heap_features[index];
+                heap_features[index] = heap_features[largest];
+                heap_features[largest] = temp;
                 index = largest;
             }
         };

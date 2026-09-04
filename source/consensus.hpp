@@ -291,7 +291,7 @@ namespace consensus {
                 unsigned long long int state_previous = this->state;
                 this->state = state_previous * 0x5851F42D4C957F2Dull + this->increment;
                 unsigned int state_shift_xor_shift = static_cast<unsigned int>(((state_previous >> 18u) ^ state_previous) >> 27u);
-                int rotation = state_previous >> 59u;
+                const int rotation = static_cast<int>(state_previous >> 59u);
                 return (state_shift_xor_shift >> rotation) | (state_shift_xor_shift << ((-rotation) & 31));
             }
         };
@@ -400,7 +400,7 @@ namespace consensus {
                 data[4].rhs.y,
             };
             scalar_type essentials[10][3][3];
-            size_t generated_models_count = pose_estimation::essential_5_point(&lhs[0], &rhs[0], &essentials[0][0][0]);
+            const size_t generated_models_count = static_cast<size_t>(pose_estimation::essential_5_point(&lhs[0], &rhs[0], &essentials[0][0][0]));
             for (size_t i = 0; i < generated_models_count; ++i) {
                 for (size_t y = 0; y < 3; ++y) {
                     for (size_t x = 0; x < 3; ++x) {
@@ -464,7 +464,7 @@ namespace consensus {
                 const scalar_type ely2 = (essential_lhs[1] * essential_lhs[1]);
                 const scalar_type erx2 = (essential_rhs[0] * essential_rhs[0]);
                 const scalar_type ery2 = (essential_rhs[1] * essential_rhs[1]);
-                residuals[i] = (prxelx_pryely_przelz * prxelx_pryely_przelz) / (elx2 + ely2 + erx2 + ery2);
+                residuals[i] = static_cast<float>((prxelx_pryely_przelz * prxelx_pryely_przelz) / (elx2 + ely2 + erx2 + ery2));
             }
         }
     };
@@ -510,7 +510,7 @@ namespace consensus {
 
             scalar_type rotations[4][9];
             scalar_type translations[4][3];
-            size_t generated_models_count = pose_estimation::perspective_3_point(lhs_normalized, rhs, rotations, translations);
+            const size_t generated_models_count = static_cast<size_t>(pose_estimation::perspective_3_point(lhs_normalized, rhs, rotations, translations));
             for (size_t i = 0; i < generated_models_count; ++i) {
                 for (size_t y = 0; y < 3; ++y) {
                     for (size_t x = 0; x < 3; ++x) {
@@ -574,13 +574,13 @@ namespace consensus {
 
                 const scalar_type dot = rhs_point_transformed_normalized[0] * lhs_point_normalized[0] + rhs_point_transformed_normalized[1] * lhs_point_normalized[1] + rhs_point_transformed_normalized[2] * lhs_point_normalized[2];
                 if (math::isnan(dot)) {
-                    residuals[i] = math::inf<scalar_type>();
+                    residuals[i] = math::inf<float>();
                 }
                 else {
                     // The evaluator compares with a fixed threshold, so avoid an acos() call here
                     // PREVIOUSLY: residuals[i] = math::acos(math::max(-1.0, math::min(1.0, static_cast<double>(dot))));
                     // Using `1 - dot` rather than "-dot" so the float residual keeps fine resolution near the threshold.
-                    residuals[i] = 1.0 - dot;
+                    residuals[i] = static_cast<float>(1.0 - dot);
                 }
             }
         }

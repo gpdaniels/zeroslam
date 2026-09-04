@@ -25,6 +25,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <functional>
 #include <unordered_map>
 
 #if defined(_MSC_VER)

@@ -361,13 +361,13 @@ int main(int argc, char* argv[]) {
                     matrix::matrix<double, 3, 3> identity_product = jacobian * jacobian_inverse;
                     REQUIRE(are_values_approx(identity_product.data(), matrix::matrix<double, 3, 3>::identity().data(), 9, 1e-4));
                     double epsilon = 1e-7;
-                    for (int i = 0; i < 3; ++i) {
+                    for (size_t i = 0; i < 3; ++i) {
                         matrix::matrix<double, 3, 1> omega_plus = omega;
                         omega_plus[i] += epsilon;
                         lie::so3<double> exp_omega = lie::so3<double>::exp(omega);
                         lie::so3<double> exp_omega_plus = lie::so3<double>::exp(omega_plus);
                         matrix::matrix<double, 3, 1> delta_omega = (exp_omega_plus * exp_omega.inverse()).log();
-                        for (int j = 0; j < 3; ++j) {
+                        for (size_t j = 0; j < 3; ++j) {
                             REQUIRE(is_value_approx(delta_omega[j] / epsilon, jacobian[j][i], 1e-4));
                         }
                     }
@@ -488,7 +488,7 @@ int main(int argc, char* argv[]) {
         {
             lie::se3<double> se3 = { { { 0.0, 0.0, 1.0, 0.0 } }, { { 0.0, 1.0, 0.0 } } };
             lie::se3<double> se3_inverse = se3.inverse();
-            lie::se3<double> se3_inverse_expected = { { { 0.0, .0f, -1.0, 0.0 } }, { { 0.0, -1.0, 0.0 } } };
+            lie::se3<double> se3_inverse_expected = { { { 0.0, 0.0, -1.0, 0.0 } }, { { 0.0, -1.0, 0.0 } } };
             REQUIRE(are_values_approx(se3_inverse.rotation().get_quaternion(), se3_inverse_expected.rotation().get_quaternion(), 4, 1e-4));
             REQUIRE(are_values_approx(se3_inverse.translation(), se3_inverse_expected.translation(), 3, 1e-4));
         }
@@ -739,13 +739,13 @@ int main(int argc, char* argv[]) {
         matrix::matrix<double, 6, 6> identity_product = jacobian * jacobian_inverse;
         REQUIRE(are_values_approx(identity_product.data(), matrix::matrix<double, 6, 6>::identity().data(), 36, 1e-4));
         double epsilon = 1e-7;
-        for (int i = 0; i < 6; ++i) {
+        for (size_t i = 0; i < 6; ++i) {
             matrix::matrix<double, 6, 1> tangent_plus = tangent;
             tangent_plus[i] += epsilon;
             lie::se3<double> exp_tangent = lie::se3<double>::exp(tangent);
             lie::se3<double> exp_tangent_plus = lie::se3<double>::exp(tangent_plus);
             matrix::matrix<double, 6, 1> delta_tangent = (exp_tangent_plus * exp_tangent.inverse()).log();
-            for (int j = 0; j < 6; ++j) {
+            for (size_t j = 0; j < 6; ++j) {
                 REQUIRE(is_value_approx(delta_tangent[j] / epsilon, jacobian[j][i], 1e-3));
             }
         }
@@ -872,7 +872,7 @@ int main(int argc, char* argv[]) {
         {
             lie::sim3<double> sim3 = { { { { 0.0, 0.0, 1.0, 0.0 } }, { { 0.0, 1.0, 0.0 } } }, 0.5 };
             lie::sim3<double> sim3_inverse = sim3.inverse();
-            lie::sim3<double> sim3_inverse_expected = { { { { 0.0, .0f, -1.0, 0.0 } }, { { 0.0, -2.0, 0.0 } } }, 2.0 };
+            lie::sim3<double> sim3_inverse_expected = { { { { 0.0, 0.0, -1.0, 0.0 } }, { { 0.0, -2.0, 0.0 } } }, 2.0 };
             REQUIRE(are_values_approx(sim3_inverse.transformation().rotation().get_quaternion(), sim3_inverse_expected.transformation().rotation().get_quaternion(), 4, 1e-4));
             REQUIRE(are_values_approx(sim3_inverse.transformation().translation(), sim3_inverse_expected.transformation().translation(), 3, 1e-4));
             REQUIRE(is_value_approx(sim3_inverse.scale(), sim3_inverse_expected.scale(), 1e-4));
@@ -1193,13 +1193,13 @@ int main(int argc, char* argv[]) {
             matrix::matrix<double, 7, 7> identity_product = jacobian * jacobian_inverse;
             REQUIRE(are_values_approx(identity_product.data(), matrix::matrix<double, 7, 7>::identity().data(), 49, 1e-4));
             double epsilon = 1e-7;
-            for (int i = 0; i < 7; ++i) {
+            for (size_t i = 0; i < 7; ++i) {
                 matrix::matrix<double, 7, 1> tangent_plus = tangent;
                 tangent_plus[i] += epsilon;
                 lie::sim3<double> exp_tangent = lie::sim3<double>::exp(tangent);
                 lie::sim3<double> exp_tangent_plus = lie::sim3<double>::exp(tangent_plus);
                 matrix::matrix<double, 7, 1> delta_tangent = (exp_tangent_plus * exp_tangent.inverse()).log();
-                for (int j = 0; j < 7; ++j) {
+                for (size_t j = 0; j < 7; ++j) {
                     REQUIRE(is_value_approx(delta_tangent[j] / epsilon, jacobian[j][i], 1e-3));
                 }
             }

@@ -26,6 +26,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <cstdio>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -240,7 +241,7 @@ namespace map {
             for (const auto& [frame_id, vertex] : camera_vertexes) {
                 frame::frame& frame = frames.at(frame_id);
                 matrix::matrix<double, 0, 0> p = vertex->get_parameters();
-                const lie::se3 v_se3 = lie::se3(lie::so3(p[6][0], p[3][0], p[4][0], p[5][0]), { { p[0][0], p[1][0], p[2][0] } });
+                const lie::se3<double> v_se3 = lie::se3<double>(lie::so3<double>(p[6][0], p[3][0], p[4][0], p[5][0]), { { p[0][0], p[1][0], p[2][0] } });
                 frame.rotation = v_se3.rotation().get_matrix();
                 frame.translation = v_se3.translation();
             }

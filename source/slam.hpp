@@ -30,7 +30,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <algorithm>
+#include <cstdio>
 #include <cstdlib>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -162,7 +165,7 @@ public:
         for (const auto& [landmark_id, landmark_observations] : this->reconstruction.observations) {
             for (const auto& [frame_id, kp_index] : landmark_observations) {
                 if (frame_id == frame_previous.id) {
-                    frame_previous_points[kp_index] = landmark_id;
+                    frame_previous_points[static_cast<int>(kp_index)] = landmark_id;
                 }
             }
         }
@@ -253,8 +256,8 @@ public:
                 if (found_point != frame_previous_points.end()) {
                     consensus::correspondence_2d_3d<double> corr;
                     const double lhs_point[2] = {
-                        static_cast<double>(frame_current.keypoint_pyramid[0][match_index_current[i]].x),
-                        static_cast<double>(frame_current.keypoint_pyramid[0][match_index_current[i]].y)
+                        static_cast<double>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].x),
+                        static_cast<double>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].y)
                     };
                     double lhs_ray[3];
                     if (!frame_current.camera.unproject(&lhs_point[0], &lhs_ray[0])) {
@@ -303,7 +306,7 @@ public:
             auto found_point = frame_previous_points.find(match_index_previous[i]);
             if (found_point != frame_previous_points.end()) {
                 // Add observations to features that match existing landmarks.
-                this->reconstruction.add_observation(frame_current, this->reconstruction.landmarks[found_point->second], match_index_current[i]);
+                this->reconstruction.add_observation(frame_current, this->reconstruction.landmarks[found_point->second], static_cast<size_t>(match_index_current[i]));
                 ++observations_of_landmarks;
             }
         }
@@ -342,7 +345,7 @@ public:
             if (!frame_current.camera.project(mapped.data(), reprojected.data())) {
                 continue;
             }
-            if ((reprojected[0] < 10) || (reprojected[0] > image_grey.get_cols() - 11) || (reprojected[1] < 10) || (reprojected[1] > image_grey.get_rows() - 11)) {
+            if ((reprojected[0] < 10) || (reprojected[0] > static_cast<double>(image_grey.get_cols() - 11)) || (reprojected[1] < 10) || (reprojected[1] > static_cast<double>(image_grey.get_rows() - 11))) {
                 continue;
             }
             // Check it has not already been matched.
@@ -372,7 +375,7 @@ public:
                 const feature::descriptor& des_landmark = this->reconstruction.frames.at(landmark_observations[0].first).descriptor_pyramid[0][static_cast<size_t>(landmark_observations[0].second)];
                 const feature::descriptor& des_current = frame_current.descriptor_pyramid[0][static_cast<size_t>(match_index_current[i])];
                 if (feature::distance<256>(des_landmark.data, des_current.data) < 64) {
-                    this->reconstruction.add_observation(frame_current, landmark, match_index_current[i]);
+                    this->reconstruction.add_observation(frame_current, landmark, static_cast<size_t>(match_index_current[i]));
                     frame_previous_points[match_index_previous[i]] = -1;
                     ++observations_of_map;
                 }
@@ -454,10 +457,10 @@ public:
             }
             // Add it.
             const float colour = static_cast<float>(image_grey.get_data()[static_cast<size_t>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].y) * image_grey.get_cols() + static_cast<size_t>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].x)]) / 255.0f;
-            landmark::point landmark(point, matrix::matrix<double, 3, 1>{ { colour, colour, colour } });
+            landmark::point landmark(point, matrix::matrix<double, 3, 1>{ { static_cast<double>(colour), static_cast<double>(colour), static_cast<double>(colour) } });
             this->reconstruction.add_landmark(landmark);
-            this->reconstruction.add_observation(frame_previous, landmark, match_index_previous[i]);
-            this->reconstruction.add_observation(frame_current, landmark, match_index_current[i]);
+            this->reconstruction.add_observation(frame_previous, landmark, static_cast<size_t>(match_index_previous[i]));
+            this->reconstruction.add_observation(frame_current, landmark, static_cast<size_t>(match_index_current[i]));
             ++new_landmarks;
         }
         std::printf("Created: %d/%d new landmarks [invalid: %d, behind: %d, unprojectable: %d, poor: %d]\n", new_landmarks, potential_landmarks, invalid_landmarks, behind_landmarks, unprojectable_landmarks, poor_landmarks);

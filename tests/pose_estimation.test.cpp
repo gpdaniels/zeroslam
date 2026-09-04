@@ -47,8 +47,7 @@ static inline bool is_value_approx(double lhs, double rhs, double epsilon = 1e-8
     return (std::abs(lhs - rhs) <= (epsilon * (std::abs(lhs) + std::abs(rhs))) + epsilon);
 }
 
-template <typename array_type>
-static inline bool are_values_approx(const array_type& lhs, const array_type& rhs, unsigned long long int length, double epsilon = 1e-8) {
+static inline bool are_values_approx(const double* lhs, const double* rhs, unsigned long long int length, double epsilon = 1e-8) {
     for (size_t index = 0; index < length; ++index) {
         if (!is_value_approx(lhs[index], rhs[index], epsilon)) {
             return false;

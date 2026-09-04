@@ -34,7 +34,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(pop)
 #endif
 
-void print_usage(const char* const program_name) {
+static void print_usage(const char* const program_name) {
     const char* const usage_string = "Usage: %s <ground_truth.txt> [est1.txt] [est2.txt] [--first] [--plot|-p <axes>]...\n";
     std::printf(usage_string, program_name);
     std::printf("  First file is ground truth (reference)\n");
@@ -43,7 +43,7 @@ void print_usage(const char* const program_name) {
     std::printf("  axes: any combination of 'x', 'y', 'z' (e.g., 'xyz', 'xy', 'z')\n");
 }
 
-void print_alignment_report(
+static void print_alignment_report(
     const char* const estimated_filename,
     const double final_scale,
     const double final_rotation[3][3],
@@ -57,7 +57,7 @@ void print_alignment_report(
     std::printf("  Translation: { % 3.5f, % 3.5f, % 3.5f }\n", final_translation[0], final_translation[1], final_translation[2]);
 }
 
-void print_error_statistics(
+static void print_error_statistics(
     const double maximum_error,
     const double minimum_error,
     const double mean_error,
@@ -76,7 +76,7 @@ void print_error_statistics(
     std::printf("  std:    %f\n", standard_deviation_error);
 }
 
-void print_distance_statistics(
+static void print_distance_statistics(
     const double ground_truth_distance,
     const double estimated_distance,
     const size_t alignment_pose_count,

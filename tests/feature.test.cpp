@@ -48,10 +48,14 @@ static inline bool is_value_approx(double lhs, double rhs, double epsilon = 1e-8
     return (std::abs(lhs - rhs) <= (epsilon * (std::abs(lhs) + std::abs(rhs))) + epsilon);
 }
 
+static inline bool is_value_approx(float lhs, float rhs, double epsilon = 1e-8) {
+    return is_value_approx(static_cast<double>(lhs), static_cast<double>(rhs), epsilon);
+}
+
 template <typename array_type>
 static inline bool are_values_approx(const array_type& lhs, const array_type& rhs, unsigned long long int length, double epsilon = 1e-8) {
     for (size_t index = 0; index < length; ++index) {
-        if (!is_value_approx(lhs[index], rhs[index], epsilon)) {
+        if (!is_value_approx(static_cast<double>(lhs[index]), static_cast<double>(rhs[index]), epsilon)) {
             return false;
         }
     }
@@ -260,7 +264,7 @@ int main(int argc, char* argv[]) {
                 { 2, 20, 0, 1.1f },
             };
             feature::point features_suppressed[12] = {};
-            const int features = feature::suppress(&features_detected_sorted_by_y[0], 12, 21, &features_suppressed[0]);
+            const size_t features = feature::suppress(&features_detected_sorted_by_y[0], 12, 21, &features_suppressed[0]);
             REQUIRE(features == 3);
             REQUIRE(features_suppressed[0].x == features_detected_sorted_by_y[4].x);
             REQUIRE(features_suppressed[0].y == features_detected_sorted_by_y[4].y);
@@ -289,7 +293,7 @@ int main(int argc, char* argv[]) {
                 { 24, 24, 0, 1.1f },
             };
             feature::point features_suppressed[12] = {};
-            const int features = feature::suppress(&features_detected_sorted_by_y[0], 12, 25, &features_suppressed[0]);
+            const size_t features = feature::suppress(&features_detected_sorted_by_y[0], 12, 25, &features_suppressed[0]);
             REQUIRE(features == 12);
         }
 
@@ -299,7 +303,7 @@ int main(int argc, char* argv[]) {
                 { 10, 4, 2.0f, 0.0f },
             };
             feature::point features_suppressed[2] = {};
-            const int features = feature::suppress(&features_detected_sorted_by_y[0], 2, 5, &features_suppressed[0]);
+            const size_t features = feature::suppress(&features_detected_sorted_by_y[0], 2, 5, &features_suppressed[0]);
             REQUIRE(features == 2);
             REQUIRE(features_suppressed[0].x == features_detected_sorted_by_y[0].x);
             REQUIRE(features_suppressed[0].y == features_detected_sorted_by_y[0].y);
@@ -324,7 +328,7 @@ int main(int argc, char* argv[]) {
             return lhs.response > rhs.response;
         });
         for (unsigned int i = 0; i < 9; ++i) {
-            REQUIRE(is_value_approx(features[i].response, (9 - i)));
+            REQUIRE(is_value_approx(features[i].response, static_cast<float>(9 - i)));
         }
     }
 
@@ -378,7 +382,7 @@ int main(int argc, char* argv[]) {
             return lhs.response > rhs.response;
         });
         for (size_t i = 0; i < count; ++i) {
-            REQUIRE(is_value_approx(features_reverse_sorted[i].response, static_cast<double>(count - 1 - i)));
+            REQUIRE(is_value_approx(features_reverse_sorted[i].response, static_cast<float>(count - 1 - i)));
         }
         REQUIRE(static_cast<double>(comparisons_reverse_sorted) < comparison_budget);
 
@@ -392,7 +396,7 @@ int main(int argc, char* argv[]) {
             return lhs.response > rhs.response;
         });
         for (size_t i = 0; i < count; ++i) {
-            REQUIRE(is_value_approx(features_already_sorted[i].response, static_cast<double>(count - 1 - i)));
+            REQUIRE(is_value_approx(features_already_sorted[i].response, static_cast<float>(count - 1 - i)));
         }
         REQUIRE(static_cast<double>(comparisons_already_sorted) < comparison_budget);
     }
@@ -532,9 +536,9 @@ int main(int argc, char* argv[]) {
             for (int x = -2; x <= 2; ++x) {
                 float offset_x = 0;
                 float offset_y = 0;
-                REQUIRE(feature::refine(&data[data_height / 2 + y][data_width / 2 + x], data_width, offset_x, offset_y));
-                REQUIRE(is_value_approx(offset_x, -x, 1e-2));
-                REQUIRE(is_value_approx(offset_y, -y, 1e-2));
+                REQUIRE(feature::refine(&data[static_cast<size_t>(static_cast<int>(data_height) / 2 + y)][static_cast<size_t>(static_cast<int>(data_width) / 2 + x)], data_width, offset_x, offset_y));
+                REQUIRE(is_value_approx(offset_x, static_cast<float>(-x), 1e-2));
+                REQUIRE(is_value_approx(offset_y, static_cast<float>(-y), 1e-2));
             }
         }
         {
@@ -547,8 +551,8 @@ int main(int argc, char* argv[]) {
             REQUIRE(!feature::refine(&data[data_height / 2 + 4][data_width / 2 + 4], data_width, offset_x, offset_y));
             REQUIRE(!feature::refine(&data[data_height / 2 + 6][data_width / 2 + 6], data_width, offset_x, offset_y));
             REQUIRE(feature::refine(&data[data_height / 2 - 4][data_width / 2 - 4], data_width, offset_x, offset_y));
-            REQUIRE(is_value_approx(offset_x, +4.0, 1e-2));
-            REQUIRE(is_value_approx(offset_y, +4.0, 1e-2));
+            REQUIRE(is_value_approx(offset_x, +4.0f, 1e-2));
+            REQUIRE(is_value_approx(offset_y, +4.0f, 1e-2));
         }
     }
 
@@ -575,9 +579,9 @@ int main(int argc, char* argv[]) {
             for (int x = -2; x <= 2; ++x) {
                 float offset_x = 0;
                 float offset_y = 0;
-                REQUIRE(feature::refine_bilinear(&data[data_height / 2 + y][data_width / 2 + x], data_width, offset_x, offset_y));
-                REQUIRE(is_value_approx(offset_x, -x, 1e-2));
-                REQUIRE(is_value_approx(offset_y, -y, 1e-2));
+                REQUIRE(feature::refine_bilinear(&data[static_cast<size_t>(static_cast<int>(data_height) / 2 + y)][static_cast<size_t>(static_cast<int>(data_width) / 2 + x)], data_width, offset_x, offset_y));
+                REQUIRE(is_value_approx(offset_x, static_cast<float>(-x), 1e-2));
+                REQUIRE(is_value_approx(offset_y, static_cast<float>(-y), 1e-2));
             }
         }
     }
