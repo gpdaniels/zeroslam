@@ -15,9 +15,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef MATRIX_SPARSE_BLOCK_DIAGONAL_HPP
-#define MATRIX_SPARSE_BLOCK_DIAGONAL_HPP
+#ifndef ZEROSLAM_MATRIX_SPARSE_BLOCK_DIAGONAL_HPP
+#define ZEROSLAM_MATRIX_SPARSE_BLOCK_DIAGONAL_HPP
 
+#include "assert.hpp"
 #include "matrix.hpp"
 #include "matrix_sparse_block.hpp"
 
@@ -142,4 +143,4 @@ namespace matrix {
     }
 }
 
-#endif // MATRIX_SPARSE_BLOCK_DIAGONAL_HPP
+#endif // ZEROSLAM_MATRIX_SPARSE_BLOCK_DIAGONAL_HPP

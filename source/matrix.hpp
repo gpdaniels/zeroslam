@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef MATRIX_HPP
-#define MATRIX_HPP
+#ifndef ZEROSLAM_MATRIX_HPP
+#define ZEROSLAM_MATRIX_HPP
 
 #include "assert.hpp"
 #include "math.hpp"
@@ -774,4 +774,4 @@ namespace matrix {
     }
 }
 
-#endif // MATRIX_HPP
+#endif // ZEROSLAM_MATRIX_HPP

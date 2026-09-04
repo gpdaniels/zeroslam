@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef LANDMARK_HPP
-#define LANDMARK_HPP
+#ifndef ZEROSLAM_LANDMARK_HPP
+#define ZEROSLAM_LANDMARK_HPP
 
 #include "matrix.hpp"
 
@@ -71,4 +71,4 @@ namespace landmark {
     }
 }
 
-#endif // LANDMARK_HPP
+#endif // ZEROSLAM_LANDMARK_HPP

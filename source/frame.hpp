@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef FRAME_HPP
-#define FRAME_HPP
+#ifndef ZEROSLAM_FRAME_HPP
+#define ZEROSLAM_FRAME_HPP
 
 #include "camera.hpp"
 #include "feature.hpp"
@@ -174,4 +174,4 @@ namespace frame {
     };
 }
 
-#endif // FRAME_HPP
+#endif // ZEROSLAM_FRAME_HPP

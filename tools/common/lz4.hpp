@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef ZEROSLAM_COMMON_LZ4_HPP
-#define ZEROSLAM_COMMON_LZ4_HPP
+#ifndef ZEROSLAM_TOOLS_COMMON_LZ4_HPP
+#define ZEROSLAM_TOOLS_COMMON_LZ4_HPP
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -346,4 +346,4 @@ public:
     }
 };
 
-#endif // ZEROSLAM_COMMON_LZ4_HPP
+#endif // ZEROSLAM_TOOLS_COMMON_LZ4_HPP

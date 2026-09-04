@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef ZEROSLAM_COMMON_CDR_HPP
-#define ZEROSLAM_COMMON_CDR_HPP
+#ifndef ZEROSLAM_TOOLS_COMMON_CDR_HPP
+#define ZEROSLAM_TOOLS_COMMON_CDR_HPP
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -626,4 +626,4 @@ namespace cdr {
 
 }
 
-#endif // ZEROSLAM_COMMON_CDR_HPP
+#endif // ZEROSLAM_TOOLS_COMMON_CDR_HPP

@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef ZEROSLAM_COMMON_MCAP_HPP
-#define ZEROSLAM_COMMON_MCAP_HPP
+#ifndef ZEROSLAM_TOOLS_COMMON_MCAP_HPP
+#define ZEROSLAM_TOOLS_COMMON_MCAP_HPP
 
 #include "lz4.hpp"
 
@@ -753,4 +753,4 @@ public:
     };
 };
 
-#endif // ZEROSLAM_COMMON_MCAP_HPP
+#endif // ZEROSLAM_TOOLS_COMMON_MCAP_HPP

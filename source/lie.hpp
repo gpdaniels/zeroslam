@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef LIE_HPP
-#define LIE_HPP
+#ifndef ZEROSLAM_LIE_HPP
+#define ZEROSLAM_LIE_HPP
 
 #include "assert.hpp"
 #include "math.hpp"
@@ -789,4 +789,4 @@ namespace lie {
     }
 }
 
-#endif // LIE_HPP
+#endif // ZEROSLAM_LIE_HPP

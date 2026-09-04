@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef FEATURE_HPP
-#define FEATURE_HPP
+#ifndef ZEROSLAM_FEATURE_HPP
+#define ZEROSLAM_FEATURE_HPP
 
 #include "assert.hpp"
 #include "math.hpp"
@@ -1234,4 +1234,4 @@ namespace feature {
     }
 }
 
-#endif // FEATURE_HPP
+#endif // ZEROSLAM_FEATURE_HPP

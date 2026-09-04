@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef ZEROSLAM_COMMON_PROCESS_HPP
-#define ZEROSLAM_COMMON_PROCESS_HPP
+#ifndef ZEROSLAM_TOOLS_COMMON_PROCESS_HPP
+#define ZEROSLAM_TOOLS_COMMON_PROCESS_HPP
 
 // Summary: Launch other programs by name through the PATH search, and run commands
 // through the shell, capturing their output.
@@ -217,4 +217,4 @@ namespace platform {
     }
 }
 
-#endif // ZEROSLAM_COMMON_PROCESS_HPP
+#endif // ZEROSLAM_TOOLS_COMMON_PROCESS_HPP

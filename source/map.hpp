@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef MAP_HPP
-#define MAP_HPP
+#ifndef ZEROSLAM_MAP_HPP
+#define ZEROSLAM_MAP_HPP
 
 #include "factor_graph.hpp"
 #include "frame.hpp"
@@ -325,4 +325,4 @@ namespace map {
     };
 }
 
-#endif // MAP_HPP
+#endif // ZEROSLAM_MAP_HPP

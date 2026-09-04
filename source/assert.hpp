@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef ASSERT_HPP
-#define ASSERT_HPP
+#ifndef ZEROSLAM_ASSERT_HPP
+#define ZEROSLAM_ASSERT_HPP
 
 #ifndef NDEBUG
 
@@ -38,4 +38,4 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ASSERT(ASSERTION, MESSAGE) static_cast<void>(0)
 #endif
 
-#endif // ASSERT_HPP
+#endif // ZEROSLAM_ASSERT_HPP

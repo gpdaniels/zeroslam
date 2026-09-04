@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef CAMERA_HPP
-#define CAMERA_HPP
+#ifndef ZEROSLAM_CAMERA_HPP
+#define ZEROSLAM_CAMERA_HPP
 
 namespace {
     using size_t = decltype(sizeof(0));
@@ -178,4 +178,4 @@ namespace camera {
     }
 }
 
-#endif // CAMERA_HPP
+#endif // ZEROSLAM_CAMERA_HPP

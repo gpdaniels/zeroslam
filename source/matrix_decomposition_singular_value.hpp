@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef MATRIX_DECOMPOSITION_SINGULAR_VALUE_HPP
-#define MATRIX_DECOMPOSITION_SINGULAR_VALUE_HPP
+#ifndef ZEROSLAM_MATRIX_DECOMPOSITION_SINGULAR_VALUE_HPP
+#define ZEROSLAM_MATRIX_DECOMPOSITION_SINGULAR_VALUE_HPP
 
 #include "math.hpp"
 
@@ -502,4 +502,4 @@ namespace matrix {
     }
 }
 
-#endif // MATRIX_DECOMPOSITION_SINGULAR_VALUE_HPP
+#endif // ZEROSLAM_MATRIX_DECOMPOSITION_SINGULAR_VALUE_HPP

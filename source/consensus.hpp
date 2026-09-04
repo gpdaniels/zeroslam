@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef CONSENSUS_HPP
-#define CONSENSUS_HPP
+#ifndef ZEROSLAM_CONSENSUS_HPP
+#define ZEROSLAM_CONSENSUS_HPP
 
 #include "assert.hpp"
 #include "pose_estimation.hpp"
@@ -669,4 +669,4 @@ namespace consensus {
     }
 }
 
-#endif // CONSENSUS_HPP
+#endif // ZEROSLAM_CONSENSUS_HPP

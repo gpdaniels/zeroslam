@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef MATH_HPP
-#define MATH_HPP
+#ifndef ZEROSLAM_MATH_HPP
+#define ZEROSLAM_MATH_HPP
 
 namespace {
     using size_t = decltype(sizeof(0));
@@ -900,4 +900,4 @@ namespace math {
     }
 }
 
-#endif // MATH_HPP
+#endif // ZEROSLAM_MATH_HPP

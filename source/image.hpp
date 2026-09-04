@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef IMAGE_HPP
-#define IMAGE_HPP
+#ifndef ZEROSLAM_IMAGE_HPP
+#define ZEROSLAM_IMAGE_HPP
 
 #include "math.hpp"
 
@@ -269,4 +269,4 @@ namespace image {
     }
 }
 
-#endif // IMAGE_HPP
+#endif // ZEROSLAM_IMAGE_HPP

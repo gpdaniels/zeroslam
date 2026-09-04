@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef MATRIX_EIGEN_SOLVER_HPP
-#define MATRIX_EIGEN_SOLVER_HPP
+#ifndef ZEROSLAM_MATRIX_EIGEN_SOLVER_HPP
+#define ZEROSLAM_MATRIX_EIGEN_SOLVER_HPP
 
 #include "math.hpp"
 
@@ -686,4 +686,4 @@ namespace matrix {
     }
 }
 
-#endif // MATRIX_EIGEN_SOLVER_HPP
+#endif // ZEROSLAM_MATRIX_EIGEN_SOLVER_HPP

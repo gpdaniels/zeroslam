@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef MATRIX_DECOMPOSITION_CHOLESKY_HPP
-#define MATRIX_DECOMPOSITION_CHOLESKY_HPP
+#ifndef ZEROSLAM_MATRIX_DECOMPOSITION_CHOLESKY_HPP
+#define ZEROSLAM_MATRIX_DECOMPOSITION_CHOLESKY_HPP
 
 #include "assert.hpp"
 #include "math.hpp"
@@ -95,4 +95,4 @@ namespace matrix {
     }
 }
 
-#endif // MATRIX_DECOMPOSITION_CHOLESKY_HPP
+#endif // ZEROSLAM_MATRIX_DECOMPOSITION_CHOLESKY_HPP

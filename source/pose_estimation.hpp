@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef POSE_ESTIMATION_HPP
-#define POSE_ESTIMATION_HPP
+#ifndef ZEROSLAM_POSE_ESTIMATION_HPP
+#define ZEROSLAM_POSE_ESTIMATION_HPP
 
 #include "geometry.hpp"
 #include "math.hpp"
@@ -1131,4 +1131,4 @@ namespace pose_estimation {
     };
 }
 
-#endif // POSE_ESTIMATION_HPP
+#endif // ZEROSLAM_POSE_ESTIMATION_HPP

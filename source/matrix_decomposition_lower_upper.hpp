@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef MATRIX_DECOMPOSITION_LOWER_UPPER_HPP
-#define MATRIX_DECOMPOSITION_LOWER_UPPER_HPP
+#ifndef ZEROSLAM_MATRIX_DECOMPOSITION_LOWER_UPPER_HPP
+#define ZEROSLAM_MATRIX_DECOMPOSITION_LOWER_UPPER_HPP
 
 namespace {
     using size_t = decltype(sizeof(0));
@@ -227,4 +227,4 @@ namespace matrix {
     }
 }
 
-#endif // MATRIX_DECOMPOSITION_LOWER_UPPER_HPP
+#endif // ZEROSLAM_MATRIX_DECOMPOSITION_LOWER_UPPER_HPP

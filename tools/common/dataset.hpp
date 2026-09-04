@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef ZEROSLAM_COMMON_DATASET_HPP
-#define ZEROSLAM_COMMON_DATASET_HPP
+#ifndef ZEROSLAM_TOOLS_COMMON_DATASET_HPP
+#define ZEROSLAM_TOOLS_COMMON_DATASET_HPP
 
 #include "cdr.hpp"
 #include "file.hpp"
@@ -542,4 +542,4 @@ namespace dataset {
     }
 }
 
-#endif // ZEROSLAM_COMMON_DATASET_HPP
+#endif // ZEROSLAM_TOOLS_COMMON_DATASET_HPP

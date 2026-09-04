@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef GEOMETRY_HPP
-#define GEOMETRY_HPP
+#ifndef ZEROSLAM_GEOMETRY_HPP
+#define ZEROSLAM_GEOMETRY_HPP
 
 #include "matrix.hpp"
 #include "matrix_decomposition_singular_value.hpp"
@@ -99,4 +99,4 @@ namespace geometry {
     }
 }
 
-#endif // GEOMETRY_HPP
+#endif // ZEROSLAM_GEOMETRY_HPP

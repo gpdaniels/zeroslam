@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef FACTOR_GRAPH_HPP
-#define FACTOR_GRAPH_HPP
+#ifndef ZEROSLAM_FACTOR_GRAPH_HPP
+#define ZEROSLAM_FACTOR_GRAPH_HPP
 
 #include "assert.hpp"
 #include "lie.hpp"
@@ -1065,4 +1065,4 @@ namespace factor_graph {
     };
 }
 
-#endif // FACTOR_GRAPH_HPP
+#endif // ZEROSLAM_FACTOR_GRAPH_HPP

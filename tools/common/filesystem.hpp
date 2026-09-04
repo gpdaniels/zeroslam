@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef ZEROSLAM_COMMON_FILESYSTEM_HPP
-#define ZEROSLAM_COMMON_FILESYSTEM_HPP
+#ifndef ZEROSLAM_TOOLS_COMMON_FILESYSTEM_HPP
+#define ZEROSLAM_TOOLS_COMMON_FILESYSTEM_HPP
 
 // Summary: Minimal platform file system queries standing in for <filesystem>.
 
@@ -179,4 +179,4 @@ namespace platform {
     }
 }
 
-#endif // ZEROSLAM_COMMON_FILESYSTEM_HPP
+#endif // ZEROSLAM_TOOLS_COMMON_FILESYSTEM_HPP

@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef SLAM_HPP
-#define SLAM_HPP
+#ifndef ZEROSLAM_SLAM_HPP
+#define ZEROSLAM_SLAM_HPP
 
 #include "consensus.hpp"
 #include "frame.hpp"
@@ -492,4 +492,4 @@ public:
     }
 };
 
-#endif // SLAM_HPP
+#endif // ZEROSLAM_SLAM_HPP

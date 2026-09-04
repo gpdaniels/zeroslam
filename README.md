@@ -53,7 +53,7 @@ Sensors are topics named `/sensor/[type]_[01-99]` (`image_01`, `image_02`, ... f
 Transforms are stored in `/tf` following `root -> ego -> sensor/[name]` with the `root -> ego` transform being the ground truth.
 A per topic message `ego -> sensor/[name]` transform poses each sensor on it with the calibration extrinsics (so extrinsics could change over time).
 
-Scene mcap files can be viewed directly in a browser with web-viewers e.g. [Lichtblick](https://lichtblick-suite.github.io/lichtblick/). 
+Scene mcap files can be viewed directly in a browser with web-viewers e.g. [Lichtblick](https://lichtblick-suite.github.io/lichtblick/).
 
 The inspectable directory form produced by expanding a dataset mirrors the topics.
 ```

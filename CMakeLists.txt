@@ -1,15 +1,32 @@
+#[[
+Copyright (C) 2026 Geoffrey Daniels. https://gpdaniels.com/
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, version 3 of the License only.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+]]
+
 CMAKE_MINIMUM_REQUIRED(VERSION 3.22)
 CMAKE_POLICY(VERSION 3.22)
-###############################################################################
+
 # PROJECT
-###############################################################################
 PROJECT(zeroslam)
-###############################################################################
+
 # CONFIGURATION
-###############################################################################
 SET(CMAKE_CXX_STANDARD 17)
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 SET(CMAKE_CXX_EXTENSIONS OFF)
+SET(CMAKE_C_STANDARD 11)
+SET(CMAKE_C_STANDARD_REQUIRED ON)
+SET(CMAKE_C_EXTENSIONS OFF)
 SET(CMAKE_POSITION_INDEPENDENT_CODE ON)
 SET(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 SET(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
@@ -29,9 +46,8 @@ FOREACH(BUILD_TYPE ${CMAKE_CONFIGURATION_TYPES})
     SET(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${UPPER_BUILD_TYPE} "${CMAKE_BINARY_DIR}/archive/${BUILD_TYPE}")
     SET(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${UPPER_BUILD_TYPE} "${CMAKE_BINARY_DIR}/library/${BUILD_TYPE}")
 ENDFOREACH()
-###############################################################################
+
 # FLAGS
-###############################################################################
 IF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang")
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-exceptions")
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
@@ -40,12 +56,14 @@ IF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQ
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wextra")
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wpedantic")
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unknown-pragmas")
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-alloc-size-larger-than")
+    IF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+        SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-alloc-size-larger-than")
+        SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-aggressive-loop-optimizations")
+    ENDIF()
     IF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang")
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Weverything")
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-c++98-compat")
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-c++98-compat-pedantic")
-        SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-newline-eof")
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-reserved-id-macro")
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-padded")
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-disabled-macro-expansion")
@@ -60,6 +78,16 @@ IF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQ
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-thread-safety-negative")
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-ms-bitfield-padding")
     ENDIF()
+ENDIF()
+IF("${CMAKE_C_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_C_COMPILER_ID}" STREQUAL "Clang" OR "${CMAKE_C_COMPILER_ID}" STREQUAL "AppleClang")
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wfatal-errors")
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall")
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra")
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wpedantic")
+ENDIF()
+IF("${CMAKE_C_COMPILER_ID}" STREQUAL "MSVC")
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_CRT_SECURE_NO_WARNINGS=1")
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W4")
 ENDIF()
 IF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fp:strict")
@@ -76,51 +104,113 @@ IF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4")
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /bigobj")
 ENDIF()
-IF(FALSE)
-    # For profiling ensure perf is enabled:
-    # sudo sysctl kernel.perf_event_paranoid=-1
-    # Generally it seems callgrind gives better results.
-    IF(NOT CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
-        MESSAGE(FATAL_ERROR "Perform profiling in RelWithDebInfo mode.")
+
+# WARNINGS AS ERRORS
+SET(ZEROSLAM_WERROR OFF CACHE BOOL "Treat compiler warnings as errors.")
+IF(ZEROSLAM_WERROR)
+    IF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
+        SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /WX")
+        SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX")
+    ELSE()
+        SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror")
+        SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
     ENDIF()
 ENDIF()
-IF(FALSE)
-    # Disable address space randomisation to avoid random failures:
-    # echo 0 | sudo tee /proc/sys/kernel/randomize_va_space
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
-    SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
-    SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=address")
+
+# PERFORMANCE
+SET(ZEROSLAM_PERF OFF CACHE BOOL "Configure for perf capture.")
+IF(ZEROSLAM_PERF)
+    IF(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        MESSAGE(FATAL_ERROR "Perf capture is only available on linux, the system is '${CMAKE_SYSTEM_NAME}'.")
+    ENDIF()
+    IF(NOT CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+        MESSAGE(FATAL_ERROR "Perform profiling in RelWithDebInfo mode, the build type is '${CMAKE_BUILD_TYPE}'.")
+    ENDIF()
+    SET(PERF_EVENT_PARANOID_FILE "/proc/sys/kernel/perf_event_paranoid")
+    IF(NOT EXISTS "${PERF_EVENT_PARANOID_FILE}")
+        MESSAGE(FATAL_ERROR "Perf capture needs '${PERF_EVENT_PARANOID_FILE}', which this kernel does not provide.")
+    ENDIF()
+    FILE(READ "${PERF_EVENT_PARANOID_FILE}" PERF_EVENT_PARANOID)
+    STRING(STRIP "${PERF_EVENT_PARANOID}" PERF_EVENT_PARANOID)
+    IF(NOT PERF_EVENT_PARANOID MATCHES "^-?[0-9]+$")
+        MESSAGE(FATAL_ERROR "Failed to parse '${PERF_EVENT_PARANOID_FILE}', found '${PERF_EVENT_PARANOID}'.")
+    ENDIF()
+    IF(PERF_EVENT_PARANOID GREATER 2)
+        MESSAGE(FATAL_ERROR "Perf capture is disabled, kernel.perf_event_paranoid is ${PERF_EVENT_PARANOID}, enable it with: sudo sysctl kernel.perf_event_paranoid=-1")
+    ELSEIF(PERF_EVENT_PARANOID GREATER -1)
+        MESSAGE(STATUS "Perf capture is limited, kernel.perf_event_paranoid is ${PERF_EVENT_PARANOID}, for kernel samples and tracepoints use: sudo sysctl kernel.perf_event_paranoid=-1")
+    ELSE()
+        MESSAGE(STATUS "Perf capture is enabled, kernel.perf_event_paranoid is ${PERF_EVENT_PARANOID}.")
+    ENDIF()
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer")
 ENDIF()
-IF(FALSE) # Not in GCC
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=memory")
-    SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=memory")
-    SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=memory")
+
+# SANITIZERS
+SET(ZEROSLAM_SANITIZE_ADDRESS OFF CACHE BOOL "Build with the address sanitizer (gcc and clang).")
+SET(ZEROSLAM_SANITIZE_UNDEFINED OFF CACHE BOOL "Build with the undefined behaviour sanitizer (gcc and clang).")
+SET(ZEROSLAM_SANITIZE_THREAD OFF CACHE BOOL "Build with the thread sanitizer (gcc and clang).")
+SET(ZEROSLAM_SANITIZE_MEMORY OFF CACHE BOOL "Build with the memory sanitizer (clang only).")
+SET(ZEROSLAM_SANITIZERS "")
+IF(ZEROSLAM_SANITIZE_ADDRESS)
+    LIST(APPEND ZEROSLAM_SANITIZERS "address")
 ENDIF()
-IF(FALSE)
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=thread")
-    SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=thread")
-    SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=thread")
+IF(ZEROSLAM_SANITIZE_UNDEFINED)
+    LIST(APPEND ZEROSLAM_SANITIZERS "undefined")
 ENDIF()
-IF(FALSE)
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined")
-    SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=undefined")
-    SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=undefined")
+IF(ZEROSLAM_SANITIZE_THREAD)
+    LIST(APPEND ZEROSLAM_SANITIZERS "thread")
 ENDIF()
-###############################################################################
+IF(ZEROSLAM_SANITIZE_MEMORY)
+    LIST(APPEND ZEROSLAM_SANITIZERS "memory")
+ENDIF()
+IF(ZEROSLAM_SANITIZERS)
+    IF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
+        MESSAGE(FATAL_ERROR "The sanitizer options are only supported with gcc and clang.")
+    ENDIF()
+    IF(ZEROSLAM_SANITIZE_ADDRESS AND ZEROSLAM_SANITIZE_THREAD)
+        MESSAGE(FATAL_ERROR "The address and thread sanitizers cannot be combined.")
+    ENDIF()
+    IF(ZEROSLAM_SANITIZE_MEMORY AND NOT "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+        MESSAGE(FATAL_ERROR "The memory sanitizer is only supported with clang.")
+    ENDIF()
+    LIST(JOIN ZEROSLAM_SANITIZERS "," ZEROSLAM_SANITIZE_FLAG)
+    SET(ZEROSLAM_SANITIZE_FLAGS "-fsanitize=${ZEROSLAM_SANITIZE_FLAG} -fno-omit-frame-pointer -fno-sanitize-recover=all")
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ZEROSLAM_SANITIZE_FLAGS}")
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ZEROSLAM_SANITIZE_FLAGS}")
+    SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=${ZEROSLAM_SANITIZE_FLAG}")
+    SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=${ZEROSLAM_SANITIZE_FLAG}")
+    SET(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
+ENDIF()
+
 # LIBRARIES
-###############################################################################
 SET(THREADS_PREFER_PTHREAD_FLAG ON)
 FIND_PACKAGE(Threads REQUIRED)
-###############################################################################
+
 # MAIN LIBRARY
-###############################################################################
 FILE(GLOB_RECURSE SOURCE_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/source/*")
 ADD_LIBRARY(${PROJECT_NAME} INTERFACE ${SOURCE_FILES})
 TARGET_INCLUDE_DIRECTORIES(${PROJECT_NAME} INTERFACE "${CMAKE_SOURCE_DIR}/source/")
 TARGET_LINK_LIBRARIES(${PROJECT_NAME} INTERFACE Threads::Threads)
-###############################################################################
+
+# TESTING
+ENABLE_TESTING()
+FILE(GLOB_RECURSE TEST_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/*")
+FOREACH(TEST_FILE ${TEST_FILES})
+    FILE(RELATIVE_PATH TEST_FILE_NAME "${CMAKE_SOURCE_DIR}/tests/" ${TEST_FILE})
+    STRING(REPLACE ".test.cpp" "" SOURCE_FILE_NAME ${TEST_FILE_NAME})
+    STRING(REPLACE "/" "_" TEST_TARGET_NAME ${SOURCE_FILE_NAME})
+    SET(TEST_TARGET_NAME "test_${TEST_TARGET_NAME}")
+    ADD_EXECUTABLE(${TEST_TARGET_NAME} EXCLUDE_FROM_ALL ${TEST_FILE} "${CMAKE_SOURCE_DIR}/source/${SOURCE_FILE_NAME}.hpp")
+    TARGET_LINK_LIBRARIES(${TEST_TARGET_NAME} PRIVATE ${PROJECT_NAME})
+    TARGET_LINK_LIBRARIES(${TEST_TARGET_NAME} PRIVATE Threads::Threads)
+    SET_TARGET_PROPERTIES(${TEST_TARGET_NAME} PROPERTIES FOLDER tests)
+    ADD_TEST(NAME test_${TEST_TARGET_NAME} COMMAND $<TARGET_FILE:${TEST_TARGET_NAME}>)
+    ADD_TEST(NAME build_${TEST_TARGET_NAME} COMMAND "${CMAKE_COMMAND}" "--build" "${CMAKE_BINARY_DIR}" "--config" "$<CONFIG>" "--target" "${TEST_TARGET_NAME}")
+    SET_TESTS_PROPERTIES(test_${TEST_TARGET_NAME} PROPERTIES DEPENDS build_${TEST_TARGET_NAME})
+    SET_TESTS_PROPERTIES(build_${TEST_TARGET_NAME} PROPERTIES RESOURCE_LOCK build_tree)
+ENDFOREACH()
+
 # TOOLING
-###############################################################################
 FILE(GLOB TOOL_DIRS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tools/*")
 SET(COMMON_DIR "${CMAKE_SOURCE_DIR}/tools/common")
 IF(IS_DIRECTORY "${COMMON_DIR}")
@@ -138,22 +228,58 @@ FOREACH(TOOL_DIR ${TOOL_DIRS})
         ENDIF()
     ENDIF()
 ENDFOREACH()
-###############################################################################
-# TESTING
-###############################################################################
-ENABLE_TESTING()
-FILE(GLOB_RECURSE TEST_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/*")
-FOREACH(TEST_FILE ${TEST_FILES})
-    FILE(RELATIVE_PATH TEST_FILE_NAME "${CMAKE_SOURCE_DIR}/tests/" ${TEST_FILE})
-    STRING(REPLACE ".test.cpp" "" SOURCE_FILE_NAME ${TEST_FILE_NAME})
-    STRING(REPLACE "/" "_" TEST_TARGET_NAME ${SOURCE_FILE_NAME})
-    SET(TEST_TARGET_NAME "test_${TEST_TARGET_NAME}")
-    ADD_EXECUTABLE(${TEST_TARGET_NAME} EXCLUDE_FROM_ALL ${TEST_FILE} "${CMAKE_SOURCE_DIR}/source/${SOURCE_FILE_NAME}.hpp")
-    TARGET_LINK_LIBRARIES(${TEST_TARGET_NAME} PRIVATE ${PROJECT_NAME})
-    TARGET_LINK_LIBRARIES(${TEST_TARGET_NAME} PRIVATE Threads::Threads)
-    SET_TARGET_PROPERTIES(${TEST_TARGET_NAME} PROPERTIES FOLDER tests)
-    ADD_TEST(NAME test_${TEST_TARGET_NAME} COMMAND $<TARGET_FILE:${TEST_TARGET_NAME}>)
-    ADD_TEST(NAME build_${TEST_TARGET_NAME} COMMAND "${CMAKE_COMMAND}" "--build" "${CMAKE_BINARY_DIR}" "--config" "$<CONFIG>" "--target" "${TEST_TARGET_NAME}")
-    SET_TESTS_PROPERTIES(test_${TEST_TARGET_NAME} PROPERTIES DEPENDS build_${TEST_TARGET_NAME})
-    SET_TESTS_PROPERTIES(build_${TEST_TARGET_NAME} PROPERTIES DEPENDS ${TEST_TARGET_NAME})
-ENDFOREACH()
+
+# FORMATTING
+FIND_PROGRAM(CLANG_FORMAT_EXECUTABLE NAMES clang-format DOC "clang-format command line tool")
+IF(CLANG_FORMAT_EXECUTABLE)
+    FILE(GLOB_RECURSE CLANG_FORMAT_SOURCES RELATIVE "${CMAKE_SOURCE_DIR}/" CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/include/*.h"
+        "${CMAKE_SOURCE_DIR}/include/*.hpp"
+        "${CMAKE_SOURCE_DIR}/source/*.cpp"
+        "${CMAKE_SOURCE_DIR}/source/*.hpp"
+        "${CMAKE_SOURCE_DIR}/tests/*.cpp"
+        "${CMAKE_SOURCE_DIR}/tests/*.hpp"
+        "${CMAKE_SOURCE_DIR}/tools/*.c"
+        "${CMAKE_SOURCE_DIR}/tools/*.cpp"
+        "${CMAKE_SOURCE_DIR}/tools/*.hpp"
+    )
+    LIST(SORT CLANG_FORMAT_SOURCES)
+    ADD_CUSTOM_TARGET(format
+        COMMAND "${CMAKE_COMMAND}" "-E" "echo" "Formatting code..."
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    )
+    FOREACH(SOURCE_FILE ${CLANG_FORMAT_SOURCES})
+        ADD_CUSTOM_COMMAND(
+            TARGET format
+            POST_BUILD
+            COMMAND "${CLANG_FORMAT_EXECUTABLE}" "-style=file" "-i" "${CMAKE_SOURCE_DIR}/${SOURCE_FILE}"
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        )
+    ENDFOREACH()
+ELSE()
+    ADD_CUSTOM_TARGET(format
+        COMMAND "${CMAKE_COMMAND}" "-E" "echo" "Failed to format code, clang-format tool not found..."
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    )
+ENDIF()
+
+# CHECKING
+SET(ZEROSLAM_CHECKS ON CACHE BOOL "Run the source checks in the checks directory as tests.")
+IF(ZEROSLAM_CHECKS)
+    FILE(GLOB CHECK_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/checks/*.cmake")
+    LIST(SORT CHECK_FILES)
+    ADD_CUSTOM_TARGET(check
+        COMMAND "${CMAKE_COMMAND}" "-E" "echo" "Running checks..."
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    )
+    FOREACH(CHECK_FILE ${CHECK_FILES})
+        GET_FILENAME_COMPONENT(CHECK_NAME "${CHECK_FILE}" NAME_WE)
+        ADD_CUSTOM_COMMAND(
+            TARGET check
+            POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}" "-DBINARY_DIR=${CMAKE_BINARY_DIR}" "-P" "${CHECK_FILE}"
+            COMMENT "Running ${CHECK_NAME} check..."
+        )
+        ADD_TEST(NAME check_${CHECK_NAME} COMMAND "${CMAKE_COMMAND}" "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}" "-DBINARY_DIR=${CMAKE_BINARY_DIR}" "-P" "${CHECK_FILE}")
+    ENDFOREACH()
+ENDIF()

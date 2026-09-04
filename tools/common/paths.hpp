@@ -1,5 +1,5 @@
 /*
-Copyright (C) 2018-2024 Geoffrey Daniels. https://gpdaniels.com/
+Copyright (C) 2026 Geoffrey Daniels. https://gpdaniels.com/
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -15,8 +15,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef GTL_IO_PATHS_HPP
-#define GTL_IO_PATHS_HPP
+#ifndef ZEROSLAM_TOOLS_COMMON_PATHS_HPP
+#define ZEROSLAM_TOOLS_COMMON_PATHS_HPP
 
 // Summary: Collection of cross platform functions to provide useful paths.
 
@@ -402,4 +402,4 @@ namespace gtl {
     };
 }
 
-#endif // GTL_IO_PATHS_HPP
+#endif // ZEROSLAM_TOOLS_COMMON_PATHS_HPP
