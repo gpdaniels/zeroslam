@@ -489,7 +489,7 @@ namespace consensus {
             if (data_size < 3) {
                 return 0;
             }
-            
+
             // Construct bearing vectors and normalize them for the solver
             scalar_type lhs_normalized[3][3];
             for (int i = 0; i < 3; ++i) {
@@ -501,13 +501,13 @@ namespace consensus {
                 lhs_normalized[i][1] = y / norm;
                 lhs_normalized[i][2] = z / norm;
             }
-            
+
             const scalar_type rhs[3][3] = {
                 { data[0].rhs.x, data[0].rhs.y, data[0].rhs.z },
                 { data[1].rhs.x, data[1].rhs.y, data[1].rhs.z },
                 { data[2].rhs.x, data[2].rhs.y, data[2].rhs.z },
             };
-            
+
             scalar_type rotations[4][9];
             scalar_type translations[4][3];
             size_t generated_models_count = pose_estimation::perspective_3_point(lhs_normalized, rhs, rotations, translations);
@@ -647,7 +647,7 @@ namespace consensus {
         const float probability_failure = 0.01f;
         const size_t iterations_minimum = 5;
         const size_t iterations_maximum = 300;
-        
+
         // The estimator's residual is `1 - dot`, so the equivalent threshold is `1 - cos(threshold_angle_radians)`, computed once here.
         const float threshold_angle_radians = 1.0e-3f;
         const float residual_threshold = static_cast<float>(1.0 - math::cos(static_cast<double>(threshold_angle_radians)));

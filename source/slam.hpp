@@ -31,8 +31,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 #include <cstdlib>
-#include <vector>
 #include <unordered_set>
+#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -280,16 +280,12 @@ public:
                 size_t inliers_size = 0;
 
                 if (consensus::solve_ransac_p3p(pnp_correspondencies.data(), pnp_correspondencies.size(), pnp_residuals.data(), pnp_inliers.data(), inliers_size, model)) {
-                    frame_current.rotation = matrix::matrix<double, 3, 3>({
-                        { model.rotation[0][0], model.rotation[0][1], model.rotation[0][2] },
-                        { model.rotation[1][0], model.rotation[1][1], model.rotation[1][2] },
-                        { model.rotation[2][0], model.rotation[2][1], model.rotation[2][2] }
-                    });
-                    frame_current.translation = matrix::matrix<double, 3, 1>({
-                        { model.translation[0] },
-                        { model.translation[1] },
-                        { model.translation[2] }
-                    });
+                    frame_current.rotation = matrix::matrix<double, 3, 3>({ { model.rotation[0][0], model.rotation[0][1], model.rotation[0][2] },
+                                                                            { model.rotation[1][0], model.rotation[1][1], model.rotation[1][2] },
+                                                                            { model.rotation[2][0], model.rotation[2][1], model.rotation[2][2] } });
+                    frame_current.translation = matrix::matrix<double, 3, 1>({ { model.translation[0] },
+                                                                               { model.translation[1] },
+                                                                               { model.translation[2] } });
                     pnp_success = true;
                     std::printf("Inliers: %zu inliers in PnP pose estimation out of %zu correspondencies.\n", inliers_size, pnp_correspondencies.size());
                 }

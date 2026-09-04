@@ -33,7 +33,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <utility>
 #include <vector>
 
-
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
@@ -476,7 +475,7 @@ namespace {
                 ++edge;
             }
             if (edge == edge_names.size()) {
-                edge_names.push_back({transform.frame_header.frame_id, transform.child_frame_id});
+                edge_names.push_back({ transform.frame_header.frame_id, transform.child_frame_id });
                 edge_last_timestamps.push_back(stamp);
                 continue;
             }
@@ -1087,13 +1086,16 @@ int main(int argc, char* argv[]) {
             return EXIT_SUCCESS;
         }
         else if (matches("--datasets")) {
-            if (!take_value(datasets_directory_override)) return EXIT_FAILURE;
+            if (!take_value(datasets_directory_override))
+                return EXIT_FAILURE;
         }
         else if (matches("--repo")) {
-            if (!take_value(repository)) return EXIT_FAILURE;
+            if (!take_value(repository))
+                return EXIT_FAILURE;
         }
         else if (matches("--token")) {
-            if (!take_value(token)) return EXIT_FAILURE;
+            if (!take_value(token))
+                return EXIT_FAILURE;
         }
         else if (matches("--force")) {
             force = true;

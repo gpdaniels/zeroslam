@@ -317,7 +317,6 @@ namespace pose_estimation {
         return count;
     }
 
-
     template <typename type>
     static inline int perspective_3_point(
         const type image_points_in[3][3],
@@ -328,11 +327,11 @@ namespace pose_estimation {
         // Solves x^2 + b*x + c = 0 for real roots.
         // Returns true if real roots exist.
         constexpr static const auto solve_quadratic_real_roots = [](
-            const type b,
-            const type c,
-            type& r1,
-            type& r2
-        ) -> bool {
+                                                                     const type b,
+                                                                     const type c,
+                                                                     type& r1,
+                                                                     type& r2
+                                                                 ) -> bool {
             const type threshold = type(-1.0e-12);
             const type v = b * b - type(4.0) * c;
             if (v < threshold) {
@@ -348,7 +347,8 @@ namespace pose_estimation {
             if (b < type(0)) {
                 r1 = type(0.5) * (-b + y);
                 r2 = type(0.5) * (-b - y);
-            } else {
+            }
+            else {
                 r1 = type(2.0) * c / (-b + y);
                 r2 = type(2.0) * c / (-b - y);
             }
@@ -358,11 +358,11 @@ namespace pose_estimation {
         // Finds a single real root of x^3 + c2*x^2 + c1*x + c0 = 0.
         // Returns true if the cubic has a single real root (discriminant > 0).
         constexpr static const auto solve_cubic_single_real_root = [](
-            const type c2,
-            const type c1,
-            const type c0,
-            type& root
-        ) -> bool {
+                                                                       const type c2,
+                                                                       const type c1,
+                                                                       const type c0,
+                                                                       type& root
+                                                                   ) -> bool {
             const type a = c1 - c2 * c2 / type(3.0);
             const type b = (type(2.0) * c2 * c2 * c2 - type(9.0) * c2 * c1) / type(27.0) + c0;
             type c = b * b / type(4.0) + a * a * a / type(27.0);
@@ -376,11 +376,13 @@ namespace pose_estimation {
                     const type cbrt2 = math::copysign(math::pow(math::abs(val2), type(1.0) / type(3.0)), val2);
                     root = cbrt1 + cbrt2 - c2 / type(3.0);
                     return true;
-                } else {
+                }
+                else {
                     c = type(3.0) * b / (type(2.0) * a) * math::sqrt(type(-3.0) / a);
                     root = type(2.0) * math::sqrt(-a / type(3.0)) * math::cos(math::acos(c) / type(3.0)) - c2 / type(3.0);
                 }
-            } else {
+            }
+            else {
                 root = -c2 / type(3.0) + (a != type(0) ? (type(3.0) * b / a) : type(0));
             }
             return false;
@@ -390,9 +392,9 @@ namespace pose_estimation {
         // Returns 2 vectors p and q such that C has rank 1 in the null space.
         // pq[2][3] receives the two 3-vectors. C is a 3x3 matrix (modified in-place).
         constexpr static const auto compute_null_space_factorization = [](
-            type matrix_c[3][3],
-            type pq[2][3]
-        ) -> void {
+                                                                           type matrix_c[3][3],
+                                                                           type pq[2][3]
+                                                                       ) -> void {
             type matrix_c_adj[3][3];
 
             matrix_c_adj[0][0] = matrix_c[1][2] * matrix_c[2][1] - matrix_c[1][1] * matrix_c[2][2];
@@ -412,18 +414,21 @@ namespace pose_estimation {
                     v[0] = matrix_c_adj[0][0] * inv;
                     v[1] = matrix_c_adj[1][0] * inv;
                     v[2] = matrix_c_adj[2][0] * inv;
-                } else {
+                }
+                else {
                     const type inv = type(1.0) / math::sqrt(matrix_c_adj[2][2]);
                     v[0] = matrix_c_adj[0][2] * inv;
                     v[1] = matrix_c_adj[1][2] * inv;
                     v[2] = matrix_c_adj[2][2] * inv;
                 }
-            } else if (matrix_c_adj[1][1] > matrix_c_adj[2][2]) {
+            }
+            else if (matrix_c_adj[1][1] > matrix_c_adj[2][2]) {
                 const type inv = type(1.0) / math::sqrt(matrix_c_adj[1][1]);
                 v[0] = matrix_c_adj[0][1] * inv;
                 v[1] = matrix_c_adj[1][1] * inv;
                 v[2] = matrix_c_adj[2][1] * inv;
-            } else {
+            }
+            else {
                 const type inv = type(1.0) / math::sqrt(matrix_c_adj[2][2]);
                 v[0] = matrix_c_adj[0][2] * inv;
                 v[1] = matrix_c_adj[1][2] * inv;
@@ -437,22 +442,26 @@ namespace pose_estimation {
             matrix_c[2][0] -= v[1];
             matrix_c[2][1] += v[0];
 
-            pq[0][0] = matrix_c[0][0]; pq[0][1] = matrix_c[1][0]; pq[0][2] = matrix_c[2][0];
-            pq[1][0] = matrix_c[0][0]; pq[1][1] = matrix_c[0][1]; pq[1][2] = matrix_c[0][2];
+            pq[0][0] = matrix_c[0][0];
+            pq[0][1] = matrix_c[1][0];
+            pq[0][2] = matrix_c[2][0];
+            pq[1][0] = matrix_c[0][0];
+            pq[1][1] = matrix_c[0][1];
+            pq[1][2] = matrix_c[0][2];
         };
 
         // Performs Newton refinement on the distance constraints.
         constexpr static const auto refine_distances_newton = [](
-            type& lambda1,
-            type& lambda2,
-            type& lambda3,
-            const type a12,
-            const type a13,
-            const type a23,
-            const type b12,
-            const type b13,
-            const type b23
-        ) -> void {
+                                                                  type& lambda1,
+                                                                  type& lambda2,
+                                                                  type& lambda3,
+                                                                  const type a12,
+                                                                  const type a13,
+                                                                  const type a23,
+                                                                  const type b12,
+                                                                  const type b13,
+                                                                  const type b23
+                                                              ) -> void {
             for (int iter = 0; iter < 5; ++iter) {
                 const type r1 = (lambda1 * lambda1 - type(2.0) * lambda1 * lambda2 * b12 + lambda2 * lambda2 - a12);
                 const type r2 = (lambda1 * lambda1 - type(2.0) * lambda1 * lambda3 * b13 + lambda3 * lambda3 - a13);
@@ -524,7 +533,8 @@ namespace pose_estimation {
                     world_vector_02[j] = -world_vector_02[j];
                 }
             }
-        } else if (world_dist_sq_02 > world_dist_sq_12) {
+        }
+        else if (world_dist_sq_02 > world_dist_sq_12) {
             // Swap points 0 and 1.
             for (int j = 0; j < 3; ++j) {
                 const type temp_image = image_points[0][j];
@@ -602,9 +612,7 @@ namespace pose_estimation {
 
         // Compute inverse of world_basis_matrix using the 3x3 formula.
         const type det_world_basis =
-            world_basis_matrix[0][0] * (world_basis_matrix[1][1] * world_basis_matrix[2][2] - world_basis_matrix[2][1] * world_basis_matrix[1][2])
-          - world_basis_matrix[0][1] * (world_basis_matrix[1][0] * world_basis_matrix[2][2] - world_basis_matrix[1][2] * world_basis_matrix[2][0])
-          + world_basis_matrix[0][2] * (world_basis_matrix[1][0] * world_basis_matrix[2][1] - world_basis_matrix[1][1] * world_basis_matrix[2][0]);
+            world_basis_matrix[0][0] * (world_basis_matrix[1][1] * world_basis_matrix[2][2] - world_basis_matrix[2][1] * world_basis_matrix[1][2]) - world_basis_matrix[0][1] * (world_basis_matrix[1][0] * world_basis_matrix[2][2] - world_basis_matrix[1][2] * world_basis_matrix[2][0]) + world_basis_matrix[0][2] * (world_basis_matrix[1][0] * world_basis_matrix[2][1] - world_basis_matrix[1][1] * world_basis_matrix[2][0]);
 
         if (math::abs(det_world_basis) < type(1.0e-15)) {
             return 0;
@@ -690,8 +698,10 @@ namespace pose_estimation {
                         solution_translation[row] = dist_d0 * image_points[0][row] - (solution_rotation[row * 3 + 0] * world_points[0][0] + solution_rotation[row * 3 + 1] * world_points[0][1] + solution_rotation[row * 3 + 2] * world_points[0][2]);
                     }
 
-                    for (int k = 0; k < 9; ++k) rotations[num_solutions][k] = solution_rotation[k];
-                    for (int k = 0; k < 3; ++k) translations[num_solutions][k] = solution_translation[k];
+                    for (int k = 0; k < 9; ++k)
+                        rotations[num_solutions][k] = solution_rotation[k];
+                    for (int k = 0; k < 3; ++k)
+                        translations[num_solutions][k] = solution_translation[k];
                     ++num_solutions;
                 }
             }
@@ -749,8 +759,10 @@ namespace pose_estimation {
                         solution_translation[row] = dist_d0 * image_points[0][row] - (solution_rotation[row * 3 + 0] * world_points[0][0] + solution_rotation[row * 3 + 1] * world_points[0][1] + solution_rotation[row * 3 + 2] * world_points[0][2]);
                     }
 
-                    for (int k = 0; k < 9; ++k) rotations[num_solutions][k] = solution_rotation[k];
-                    for (int k = 0; k < 3; ++k) translations[num_solutions][k] = solution_translation[k];
+                    for (int k = 0; k < 9; ++k)
+                        rotations[num_solutions][k] = solution_rotation[k];
+                    for (int k = 0; k < 3; ++k)
+                        translations[num_solutions][k] = solution_translation[k];
                     ++num_solutions;
                 }
             }
@@ -812,11 +824,13 @@ namespace pose_estimation {
                 for (int i = 6; i < 9; ++i) {
                     matrix_vt[i] = essential_cross_0[i - 6] * matrix_vt_factor_0;
                 }
-            } else if ((matrix_vt_factor_1 <= matrix_vt_factor_0) && (matrix_vt_factor_1 <= matrix_vt_factor_2)) {
+            }
+            else if ((matrix_vt_factor_1 <= matrix_vt_factor_0) && (matrix_vt_factor_1 <= matrix_vt_factor_2)) {
                 for (int i = 6; i < 9; ++i) {
                     matrix_vt[i] = essential_cross_1[i - 6] * matrix_vt_factor_1;
                 }
-            } else {
+            }
+            else {
                 for (int i = 6; i < 9; ++i) {
                     matrix_vt[i] = essential_cross_2[i - 6] * matrix_vt_factor_2;
                 }
@@ -832,12 +846,14 @@ namespace pose_estimation {
                 matrix_vt[0] = essential[0] * matrix_vt_row_v0_normalization;
                 matrix_vt[1] = essential[1] * matrix_vt_row_v0_normalization;
                 matrix_vt[2] = essential[2] * matrix_vt_row_v0_normalization;
-            } else if (essential_row_1_norm_squared >= essential_row_2_norm_squared) {
+            }
+            else if (essential_row_1_norm_squared >= essential_row_2_norm_squared) {
                 const type matrix_vt_row_v0_normalization = type(1.0) / math::sqrt(essential_row_1_norm_squared);
                 matrix_vt[0] = essential[3] * matrix_vt_row_v0_normalization;
                 matrix_vt[1] = essential[4] * matrix_vt_row_v0_normalization;
                 matrix_vt[2] = essential[5] * matrix_vt_row_v0_normalization;
-            } else {
+            }
+            else {
                 const type matrix_vt_row_v0_normalization = type(1.0) / math::sqrt(essential_row_2_norm_squared);
                 matrix_vt[0] = essential[6] * matrix_vt_row_v0_normalization;
                 matrix_vt[1] = essential[7] * matrix_vt_row_v0_normalization;
@@ -963,18 +979,18 @@ namespace pose_estimation {
             const size_t point_count,
             type* const __restrict rotation,
             type* const __restrict translation,
-            type* const __restrict triangulated_points, // X, Y, Z, X, Y, Z, X, Y, Z, ...
+            type* const __restrict triangulated_points,      // X, Y, Z, X, Y, Z, X, Y, Z, ...
             size_t* const __restrict support_count = nullptr // Optional: The number of points supporting the returned transformation.
         ) {
             constexpr static const auto matrix_multiply_local = [](
-                const type* const __restrict lhs_matrix,
-                const int lhs_width,
-                const int lhs_height,
-                const type* const __restrict rhs_matrix,
-                const int rhs_width,
-                const int rhs_height,
-                type* const __restrict result_matrix
-            ) -> void {
+                                                                    const type* const __restrict lhs_matrix,
+                                                                    const int lhs_width,
+                                                                    const int lhs_height,
+                                                                    const type* const __restrict rhs_matrix,
+                                                                    const int rhs_width,
+                                                                    const int rhs_height,
+                                                                    type* const __restrict result_matrix
+                                                                ) -> void {
                 static_cast<void>(rhs_height);
                 for (int row = 0; row < lhs_height; ++row) {
                     for (int col = 0; col < rhs_width; ++col) {

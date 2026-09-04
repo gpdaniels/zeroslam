@@ -950,9 +950,9 @@ namespace factor_graph {
             const lie::se3<double> current_pose(current_rotation, current_translation);
             const lie::se3<double> update = lie::se3<double>::exp({ { delta[0][0], delta[1][0], delta[2][0], delta[3][0], delta[4][0], delta[5][0] } });
             const lie::se3<double> next_pose = update * current_pose;
-            this->parameters[0][0] = next_pose.translation()[0]; // tx.
-            this->parameters[1][0] = next_pose.translation()[1]; // ty.
-            this->parameters[2][0] = next_pose.translation()[2]; // tz.
+            this->parameters[0][0] = next_pose.translation()[0];               // tx.
+            this->parameters[1][0] = next_pose.translation()[1];               // ty.
+            this->parameters[2][0] = next_pose.translation()[2];               // tz.
             this->parameters[3][0] = next_pose.rotation().get_quaternion()[1]; // qx.
             this->parameters[4][0] = next_pose.rotation().get_quaternion()[2]; // qy.
             this->parameters[5][0] = next_pose.rotation().get_quaternion()[3]; // qz.
@@ -997,7 +997,7 @@ namespace factor_graph {
             // Transform landmark into camera frame.
             const matrix::matrix<double, 3, 1> landmark_camera = pose * landmark_world;
             // Project into image plane using intrinsic matrix.
-            matrix::matrix<double, 2, 1> projected = {{ 0.0, 0.0 }};
+            matrix::matrix<double, 2, 1> projected = { { 0.0, 0.0 } };
             if (!this->camera.project(landmark_camera.data(), projected.data())) {
                 const double penalty = -edge_reprojection::behind_camera_penalty * landmark_camera[2];
                 this->residual[0][0] = penalty;
@@ -1020,8 +1020,12 @@ namespace factor_graph {
             matrix::matrix<double, 2, 3> jacobian_camera;
             if (!this->camera.project(landmark_camera.data(), projected, jacobian_camera.data())) {
                 // Behind the camera the residual is the finite penalty: `-behind_camera_penalty * Z`, so `dR/dZ` is the constant `-behind_camera_penalty` and dR/dX = dR/dY = 0.
-                jacobian_camera[0][0] = 0.0; jacobian_camera[0][1] = 0.0; jacobian_camera[0][2] = edge_reprojection::behind_camera_penalty;
-                jacobian_camera[1][0] = 0.0; jacobian_camera[1][1] = 0.0; jacobian_camera[1][2] = edge_reprojection::behind_camera_penalty;
+                jacobian_camera[0][0] = 0.0;
+                jacobian_camera[0][1] = 0.0;
+                jacobian_camera[0][2] = edge_reprojection::behind_camera_penalty;
+                jacobian_camera[1][0] = 0.0;
+                jacobian_camera[1][1] = 0.0;
+                jacobian_camera[1][2] = edge_reprojection::behind_camera_penalty;
             }
 
             const double X = landmark_camera[0];
@@ -1031,12 +1035,24 @@ namespace factor_graph {
             // Point Jacobian wrt Pose increment (Left SE3 update: T' = exp(delta) * T)
             // d(exp(delta) * P) / d(omega, upsilon) = [-P^, I]
             matrix::matrix<double, 3, 6> jacobian_point_pose;
-            jacobian_point_pose[0][0] = 0;   jacobian_point_pose[0][1] = Z;  jacobian_point_pose[0][2] = -Y;
-            jacobian_point_pose[1][0] = -Z;  jacobian_point_pose[1][1] = 0;  jacobian_point_pose[1][2] = X;
-            jacobian_point_pose[2][0] = Y;   jacobian_point_pose[2][1] = -X; jacobian_point_pose[2][2] = 0;
-            jacobian_point_pose[0][3] = 1;   jacobian_point_pose[0][4] = 0;  jacobian_point_pose[0][5] = 0;
-            jacobian_point_pose[1][3] = 0;   jacobian_point_pose[1][4] = 1;  jacobian_point_pose[1][5] = 0;
-            jacobian_point_pose[2][3] = 0;   jacobian_point_pose[2][4] = 0;  jacobian_point_pose[2][5] = 1;
+            jacobian_point_pose[0][0] = 0;
+            jacobian_point_pose[0][1] = Z;
+            jacobian_point_pose[0][2] = -Y;
+            jacobian_point_pose[1][0] = -Z;
+            jacobian_point_pose[1][1] = 0;
+            jacobian_point_pose[1][2] = X;
+            jacobian_point_pose[2][0] = Y;
+            jacobian_point_pose[2][1] = -X;
+            jacobian_point_pose[2][2] = 0;
+            jacobian_point_pose[0][3] = 1;
+            jacobian_point_pose[0][4] = 0;
+            jacobian_point_pose[0][5] = 0;
+            jacobian_point_pose[1][3] = 0;
+            jacobian_point_pose[1][4] = 1;
+            jacobian_point_pose[1][5] = 0;
+            jacobian_point_pose[2][3] = 0;
+            jacobian_point_pose[2][4] = 0;
+            jacobian_point_pose[2][5] = 1;
 
             // Residual Jacobian wrt Pose: d(obs - proj)/d_delta = -jacobian_camera * jacobian_point_pose
             const matrix::matrix<double, 2, 6> jacobian_pose_res = -(jacobian_camera * jacobian_point_pose);

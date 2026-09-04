@@ -48,82 +48,90 @@ namespace cdr {
 
     inline std::string image_schema() {
         return std::string(
-            "std_msgs/Header header\n"
-            "uint32 height\n"
-            "uint32 width\n"
-            "string encoding\n"
-            "uint8 is_bigendian\n"
-            "uint32 step\n"
-            "uint8[] data\n") + header_schema_suffix;
+                   "std_msgs/Header header\n"
+                   "uint32 height\n"
+                   "uint32 width\n"
+                   "string encoding\n"
+                   "uint8 is_bigendian\n"
+                   "uint32 step\n"
+                   "uint8[] data\n"
+               ) +
+               header_schema_suffix;
     }
 
     inline std::string camera_info_schema() {
         return std::string(
-            "std_msgs/Header header\n"
-            "uint32 height\n"
-            "uint32 width\n"
-            "string distortion_model\n"
-            "float64[] d\n"
-            "float64[9] k\n"
-            "float64[9] r\n"
-            "float64[12] p\n"
-            "uint32 binning_x\n"
-            "uint32 binning_y\n"
-            "sensor_msgs/RegionOfInterest roi\n"
-            "================================================================================\n"
-            "MSG: sensor_msgs/RegionOfInterest\n"
-            "uint32 x_offset\n"
-            "uint32 y_offset\n"
-            "uint32 height\n"
-            "uint32 width\n"
-            "bool do_rectify\n") + header_schema_suffix;
+                   "std_msgs/Header header\n"
+                   "uint32 height\n"
+                   "uint32 width\n"
+                   "string distortion_model\n"
+                   "float64[] d\n"
+                   "float64[9] k\n"
+                   "float64[9] r\n"
+                   "float64[12] p\n"
+                   "uint32 binning_x\n"
+                   "uint32 binning_y\n"
+                   "sensor_msgs/RegionOfInterest roi\n"
+                   "================================================================================\n"
+                   "MSG: sensor_msgs/RegionOfInterest\n"
+                   "uint32 x_offset\n"
+                   "uint32 y_offset\n"
+                   "uint32 height\n"
+                   "uint32 width\n"
+                   "bool do_rectify\n"
+               ) +
+               header_schema_suffix;
     }
 
     inline std::string tf_message_schema() {
         return std::string(
-            "geometry_msgs/TransformStamped[] transforms\n"
-            "================================================================================\n"
-            "MSG: geometry_msgs/TransformStamped\n"
-            "std_msgs/Header header\n"
-            "string child_frame_id\n"
-            "geometry_msgs/Transform transform\n"
-            "================================================================================\n"
-            "MSG: geometry_msgs/Transform\n"
-            "geometry_msgs/Vector3 translation\n"
-            "geometry_msgs/Quaternion rotation\n"
-            "================================================================================\n"
-            "MSG: geometry_msgs/Vector3\n"
-            "float64 x\n"
-            "float64 y\n"
-            "float64 z\n"
-            "================================================================================\n"
-            "MSG: geometry_msgs/Quaternion\n"
-            "float64 x\n"
-            "float64 y\n"
-            "float64 z\n"
-            "float64 w\n") + header_schema_suffix;
+                   "geometry_msgs/TransformStamped[] transforms\n"
+                   "================================================================================\n"
+                   "MSG: geometry_msgs/TransformStamped\n"
+                   "std_msgs/Header header\n"
+                   "string child_frame_id\n"
+                   "geometry_msgs/Transform transform\n"
+                   "================================================================================\n"
+                   "MSG: geometry_msgs/Transform\n"
+                   "geometry_msgs/Vector3 translation\n"
+                   "geometry_msgs/Quaternion rotation\n"
+                   "================================================================================\n"
+                   "MSG: geometry_msgs/Vector3\n"
+                   "float64 x\n"
+                   "float64 y\n"
+                   "float64 z\n"
+                   "================================================================================\n"
+                   "MSG: geometry_msgs/Quaternion\n"
+                   "float64 x\n"
+                   "float64 y\n"
+                   "float64 z\n"
+                   "float64 w\n"
+               ) +
+               header_schema_suffix;
     }
 
     inline std::string imu_schema() {
         return std::string(
-            "std_msgs/Header header\n"
-            "geometry_msgs/Quaternion orientation\n"
-            "float64[9] orientation_covariance\n"
-            "geometry_msgs/Vector3 angular_velocity\n"
-            "float64[9] angular_velocity_covariance\n"
-            "geometry_msgs/Vector3 linear_acceleration\n"
-            "float64[9] linear_acceleration_covariance\n"
-            "================================================================================\n"
-            "MSG: geometry_msgs/Quaternion\n"
-            "float64 x\n"
-            "float64 y\n"
-            "float64 z\n"
-            "float64 w\n"
-            "================================================================================\n"
-            "MSG: geometry_msgs/Vector3\n"
-            "float64 x\n"
-            "float64 y\n"
-            "float64 z\n") + header_schema_suffix;
+                   "std_msgs/Header header\n"
+                   "geometry_msgs/Quaternion orientation\n"
+                   "float64[9] orientation_covariance\n"
+                   "geometry_msgs/Vector3 angular_velocity\n"
+                   "float64[9] angular_velocity_covariance\n"
+                   "geometry_msgs/Vector3 linear_acceleration\n"
+                   "float64[9] linear_acceleration_covariance\n"
+                   "================================================================================\n"
+                   "MSG: geometry_msgs/Quaternion\n"
+                   "float64 x\n"
+                   "float64 y\n"
+                   "float64 z\n"
+                   "float64 w\n"
+                   "================================================================================\n"
+                   "MSG: geometry_msgs/Vector3\n"
+                   "float64 x\n"
+                   "float64 y\n"
+                   "float64 z\n"
+               ) +
+               header_schema_suffix;
     }
 
     class reader final {

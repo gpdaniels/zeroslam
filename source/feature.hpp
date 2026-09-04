@@ -342,7 +342,7 @@ namespace feature {
         point* __restrict const features,
         const size_t features_count,
         const comparitor_function_type& comparitor_function
-        ) {
+    ) {
         for (size_t i = 1; i < features_count; ++i) {
             const point value = features[i];
             size_t j = i;
@@ -361,11 +361,11 @@ namespace feature {
         const comparitor_function_type& comparitor_function
     ) {
         constexpr static const auto sift_down = [](
-            point* __restrict const features,
-            size_t index,
-            const size_t heap_size,
-            const comparitor_function_type& comparitor_function
-        ) {
+                                                    point* __restrict const features,
+                                                    size_t index,
+                                                    const size_t heap_size,
+                                                    const comparitor_function_type& comparitor_function
+                                                ) {
             while (true) {
                 size_t largest = index;
                 const size_t left = 2 * index + 1;
@@ -388,7 +388,7 @@ namespace feature {
         if (features_count < 2) {
             return;
         }
-        for (size_t i = features_count / 2; i-- > 0; ) {
+        for (size_t i = features_count / 2; i-- > 0;) {
             sift_down(features, i, features_count, comparitor_function);
         }
         for (size_t i = features_count - 1; i > 0; --i) {

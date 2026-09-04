@@ -519,7 +519,7 @@ int main(int argc, char* argv[]) {
 
         // Three non-collinear world points.
         const double world_points[3][3] = {
-            { 0.1,  0.2, 3.0 },
+            { 0.1, 0.2, 3.0 },
             { -0.5, 0.4, 4.2 },
             { 0.7, -0.3, 5.1 }
         };
@@ -558,7 +558,7 @@ int main(int argc, char* argv[]) {
                     break;
                 }
             }
-            
+
             // Check translation matches ground truth
             bool t_match = true;
             for (int k = 0; k < 3; ++k) {
@@ -567,7 +567,7 @@ int main(int argc, char* argv[]) {
                     break;
                 }
             }
-            
+
             if (r_match && t_match) {
                 // Verify reprojection error is also small for this valid solution
                 double total_error = 0.0;
@@ -602,9 +602,9 @@ int main(int argc, char* argv[]) {
         const double gt_translation[3] = { 0.0, 0.0, 0.5 };
 
         const double world_points[3][3] = {
-            { -1.0,  0.0, 5.0 },
-            {  1.0,  0.0, 5.0 },
-            {  0.0,  1.0, 5.0 }
+            { -1.0, 0.0, 5.0 },
+            { 1.0, 0.0, 5.0 },
+            { 0.0, 1.0, 5.0 }
         };
 
         double bearing_vectors[3][3];
@@ -657,16 +657,22 @@ int main(int argc, char* argv[]) {
     {
         const double angle = 0.7;
         const double gt_rotation[9] = {
-            std::cos(angle), 0.0, std::sin(angle),
-            0.0, 1.0, 0.0,
-            -std::sin(angle), 0.0, std::cos(angle)
+            std::cos(angle),
+            0.0,
+            std::sin(angle),
+            0.0,
+            1.0,
+            0.0,
+            -std::sin(angle),
+            0.0,
+            std::cos(angle)
         };
         const double gt_translation[3] = { 1.0, -0.5, 2.0 };
 
         const double world_points[3][3] = {
-            { 0.3,  0.5, 4.0 },
+            { 0.3, 0.5, 4.0 },
             { -0.8, -0.2, 3.5 },
-            { 0.0,  0.7, 6.0 }
+            { 0.0, 0.7, 6.0 }
         };
 
         double bearing_vectors[3][3];
@@ -702,7 +708,7 @@ int main(int argc, char* argv[]) {
                     break;
                 }
             }
-            
+
             // Check translation matches ground truth
             bool t_match = true;
             for (int k = 0; k < 3; ++k) {
@@ -711,7 +717,7 @@ int main(int argc, char* argv[]) {
                     break;
                 }
             }
-            
+
             if (r_match && t_match) {
                 // Verify reprojection error is also small for this valid solution
                 double total_error = 0.0;

@@ -205,25 +205,32 @@ int main(int argc, char* argv[]) {
             return EXIT_SUCCESS;
         }
         else if (matches("--ground-truth")) {
-            if (!take_value(ground_truth_override)) return EXIT_FAILURE;
+            if (!take_value(ground_truth_override))
+                return EXIT_FAILURE;
         }
         else if (matches("--tools-dir")) {
-            if (!take_value(tools_directory_override)) return EXIT_FAILURE;
+            if (!take_value(tools_directory_override))
+                return EXIT_FAILURE;
         }
         else if (matches("--work-dir")) {
-            if (!take_value(work_directory_override)) return EXIT_FAILURE;
+            if (!take_value(work_directory_override))
+                return EXIT_FAILURE;
         }
         else if (matches("--log")) {
-            if (!take_value(log_path)) return EXIT_FAILURE;
+            if (!take_value(log_path))
+                return EXIT_FAILURE;
         }
         else if (matches("--name")) {
-            if (!take_value(dataset_name_override)) return EXIT_FAILURE;
+            if (!take_value(dataset_name_override))
+                return EXIT_FAILURE;
         }
         else if (matches("--commit")) {
-            if (!take_value(commit_override)) return EXIT_FAILURE;
+            if (!take_value(commit_override))
+                return EXIT_FAILURE;
         }
         else if (matches("--frames")) {
-            if (!take_value(frames_override)) return EXIT_FAILURE;
+            if (!take_value(frames_override))
+                return EXIT_FAILURE;
         }
         else if (matches("--first") || matches("-f")) {
             overlap_first_pose = true;

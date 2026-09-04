@@ -663,11 +663,13 @@ public:
             }
             // The summary section: schemas, channels, chunk indexes, and statistics, each group located by a summary offset record.
             const unsigned long long summary_start = output.size();
+
             struct group_type {
                 opcode group_opcode;
                 unsigned long long start;
                 unsigned long long length;
             };
+
             std::vector<group_type> groups;
             const auto begin_group = [&](const opcode group_opcode) {
                 groups.push_back({ group_opcode, output.size(), 0 });

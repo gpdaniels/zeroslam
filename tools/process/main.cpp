@@ -14,11 +14,10 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include "slam.hpp"
-
 #include "cdr.hpp"
 #include "file.hpp"
 #include "mcap.hpp"
+#include "slam.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -42,7 +41,8 @@ namespace {
 }
 
 namespace {
-    std::atomic<bool> shutdown_requested{false};
+    std::atomic<bool> shutdown_requested{ false };
+
     void signal_handler(int) {
         std::signal(SIGINT, SIG_DFL);
         shutdown_requested = true;
@@ -137,7 +137,8 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
     // Write PLY header.
     char header[512];
     const int characters = std::snprintf(
-        header, sizeof(header),
+        header,
+        sizeof(header),
         "ply\n"
         "format binary_little_endian 1.0\n"
         "comment Created using ZeroSLAM by Geoffrey Daniels\n"
@@ -446,7 +447,8 @@ int main(int argc, char* argv[]) {
         }
 
         if (shutdown_requested) {
-            if (verbose >= 1) std::printf("\nInterrupt received, stopping...\n");
+            if (verbose >= 1)
+                std::printf("\nInterrupt received, stopping...\n");
             break;
         }
 

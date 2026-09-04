@@ -350,11 +350,11 @@ int main(int argc, char* argv[]) {
             REQUIRE(are_values_approx(so3 * matrix::matrix<double, 3, 1>{ { 1.0, -2.0, 3.0 } }, { { -1.0, 2.0, 3.0 } }, 3, 1e-4));
         }
     }
-    
+
     {
-        for (double omega_x = 0.0; omega_x < 0.5+0.01; omega_x += 0.5) {
-            for (double omega_y = 0.0; omega_y > -0.3-0.01; omega_y -= 0.3) {
-                for (double omega_z = 0.0; omega_z < 0.2+0.01; omega_z += 0.2) {
+        for (double omega_x = 0.0; omega_x < 0.5 + 0.01; omega_x += 0.5) {
+            for (double omega_y = 0.0; omega_y > -0.3 - 0.01; omega_y -= 0.3) {
+                for (double omega_z = 0.0; omega_z < 0.2 + 0.01; omega_z += 0.2) {
                     matrix::matrix<double, 3, 1> omega = { { omega_x, omega_y, omega_z } };
                     matrix::matrix<double, 3, 3> jacobian = lie::so3<double>::left_jacobian(omega);
                     matrix::matrix<double, 3, 3> jacobian_inverse = lie::so3<double>::left_jacobian_inverse(omega);
@@ -731,7 +731,7 @@ int main(int argc, char* argv[]) {
             REQUIRE(are_values_approx(se3 * matrix::matrix<double, 3, 1>{ { 1.0, -2.0, 3.0 } }, { { 1.0, 2.0, 3.0 } }, 3, 1e-4));
         }
     }
-    
+
     {
         matrix::matrix<double, 6, 1> tangent = { { 0.5, -0.3, 0.2, 1.0, 2.0, -1.0 } };
         matrix::matrix<double, 6, 6> jacobian = lie::se3<double>::left_jacobian(tangent);

@@ -470,8 +470,8 @@ namespace lie {
         for (size_t i = 0; i < 3; ++i) {
             for (size_t j = 0; j < 3; ++j) {
                 adjoint[i][j] = omega_hat[i][j];
-                adjoint[i+3][j] = upsilon_hat[i][j];
-                adjoint[i+3][j+3] = omega_hat[i][j];
+                adjoint[i + 3][j] = upsilon_hat[i][j];
+                adjoint[i + 3][j + 3] = omega_hat[i][j];
             }
         }
         matrix::matrix<type, 6, 6> adjoint_power = adjoint;
@@ -479,7 +479,8 @@ namespace lie {
         for (size_t n = 1; n < 20; ++n) {
             factorial *= static_cast<type>(n + 1);
             result = result + (adjoint_power * (1.0 / factorial));
-            if (n < 19) adjoint_power = adjoint_power * adjoint;
+            if (n < 19)
+                adjoint_power = adjoint_power * adjoint;
         }
         return result;
     }
@@ -492,7 +493,7 @@ namespace lie {
         matrix::matrix<type, 3, 3> coupling_block;
         for (size_t i = 0; i < 3; ++i) {
             for (size_t j = 0; j < 3; ++j) {
-                coupling_block[i][j] = jacobian[i+3][j];
+                coupling_block[i][j] = jacobian[i + 3][j];
             }
         }
         const matrix::matrix<type, 3, 3> inverse_coupling_block = -(rotation_jacobian_inverse * coupling_block * rotation_jacobian_inverse);
@@ -500,8 +501,8 @@ namespace lie {
         for (size_t i = 0; i < 3; ++i) {
             for (size_t j = 0; j < 3; ++j) {
                 result[i][j] = rotation_jacobian_inverse[i][j];
-                result[i+3][j] = inverse_coupling_block[i][j];
-                result[i+3][j+3] = rotation_jacobian_inverse[i][j];
+                result[i + 3][j] = inverse_coupling_block[i][j];
+                result[i + 3][j + 3] = rotation_jacobian_inverse[i][j];
             }
         }
         return result;
@@ -714,18 +715,19 @@ namespace lie {
         for (size_t i = 0; i < 3; ++i) {
             for (size_t j = 0; j < 3; ++j) {
                 adjoint[i][j] = omega_hat[i][j];
-                adjoint[i+3][j] = upsilon_hat[i][j];
-                adjoint[i+3][j+3] = omega_hat[i][j];
+                adjoint[i + 3][j] = upsilon_hat[i][j];
+                adjoint[i + 3][j + 3] = omega_hat[i][j];
             }
-            adjoint[i+3][i+3] += sigma;
-            adjoint[i+3][6] = -omega_upsilon_sigma[3 + i];
+            adjoint[i + 3][i + 3] += sigma;
+            adjoint[i + 3][6] = -omega_upsilon_sigma[3 + i];
         }
         matrix::matrix<type, 7, 7> adjoint_power = adjoint;
         type factorial = 1.0;
         for (size_t n = 1; n < 20; ++n) {
             factorial *= static_cast<type>(n + 1);
             result = result + (adjoint_power * (1.0 / factorial));
-            if (n < 19) adjoint_power = adjoint_power * adjoint;
+            if (n < 19)
+                adjoint_power = adjoint_power * adjoint;
         }
         return result;
     }
@@ -740,10 +742,10 @@ namespace lie {
         matrix::matrix<type, 3, 1> sigma_column;
         for (size_t i = 0; i < 3; ++i) {
             for (size_t j = 0; j < 3; ++j) {
-                coupling_block[i][j] = jacobian[i+3][j];
-                scaled_rotation_block[i][j] = jacobian[i+3][j+3];
+                coupling_block[i][j] = jacobian[i + 3][j];
+                scaled_rotation_block[i][j] = jacobian[i + 3][j + 3];
             }
-            sigma_column[i] = jacobian[i+3][6];
+            sigma_column[i] = jacobian[i + 3][6];
         }
         matrix::matrix<type, 3, 3> scaled_rotation_block_inverse;
         const bool invertible = matrix::invert(scaled_rotation_block, scaled_rotation_block_inverse);
@@ -755,10 +757,10 @@ namespace lie {
         for (size_t i = 0; i < 3; ++i) {
             for (size_t j = 0; j < 3; ++j) {
                 result[i][j] = rotation_jacobian_inverse[i][j];
-                result[i+3][j] = inverse_coupling_block[i][j];
-                result[i+3][j+3] = scaled_rotation_block_inverse[i][j];
+                result[i + 3][j] = inverse_coupling_block[i][j];
+                result[i + 3][j + 3] = scaled_rotation_block_inverse[i][j];
             }
-            result[i+3][6] = inverse_sigma_column[i];
+            result[i + 3][6] = inverse_sigma_column[i];
         }
         result[6][6] = 1.0;
         return result;

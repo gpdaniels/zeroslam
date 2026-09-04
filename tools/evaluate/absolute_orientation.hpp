@@ -47,7 +47,8 @@ void compute_centroids(
         estimated_centroid_x = estimated_x[0];
         estimated_centroid_y = estimated_y[0];
         estimated_centroid_z = estimated_z[0];
-    } else {
+    }
+    else {
         double ground_truth_sum_x = 0;
         double ground_truth_sum_y = 0;
         double ground_truth_sum_z = 0;
@@ -159,15 +160,15 @@ bool compute_rotation_matrix(
         }
     }
 
-    const double determinant = 
+    const double determinant =
         matrix_vut[0][0] * (matrix_vut[1][1] * matrix_vut[2][2] - matrix_vut[2][1] * matrix_vut[1][2]) -
         matrix_vut[0][1] * (matrix_vut[1][0] * matrix_vut[2][2] - matrix_vut[1][2] * matrix_vut[2][0]) +
         matrix_vut[0][2] * (matrix_vut[1][0] * matrix_vut[2][1] - matrix_vut[1][1] * matrix_vut[2][0]);
 
-    const double reflection_matrix[3][3] = { 
-        { 1.0, 0.0, 0.0 }, 
-        { 0.0, 1.0, 0.0 }, 
-        { 0.0, 0.0, (determinant > 0.0) ? 1.0 : -1.0 } 
+    const double reflection_matrix[3][3] = {
+        { 1.0, 0.0, 0.0 },
+        { 0.0, 1.0, 0.0 },
+        { 0.0, 0.0, (determinant > 0.0) ? 1.0 : -1.0 }
     };
 
     double matrix_vr[3][3];
@@ -352,4 +353,3 @@ bool absolute_orientation(
 }
 
 #endif // ZEROSLAM_EVALUATE_ABSOLUTE_ORIENTATION_HPP
-

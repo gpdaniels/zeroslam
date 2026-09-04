@@ -304,8 +304,8 @@ int main(int argc, char* argv[]) {
             permute_via_multiply(&p[0][0], &a[0][0], 3, 3, &via_multiply[0][0]);
             permute_via_row_swap(&p[0][0], &a[0][0], 3, 3, &via_row_swap[0][0]);
             // Row 2 of the permuted result comes from row 0 of a, i.e. the row containing -0.0.
-            REQUIRE(std::signbit(via_row_swap[2][0]));  // Row swap preserves the sign of -0.0.
-            REQUIRE(!std::signbit(via_multiply[2][0])); // Dense multiply loses it: (+0) + 1*(-0.0) == +0.
+            REQUIRE(std::signbit(via_row_swap[2][0]));         // Row swap preserves the sign of -0.0.
+            REQUIRE(!std::signbit(via_multiply[2][0]));        // Dense multiply loses it: (+0) + 1*(-0.0) == +0.
             REQUIRE(via_row_swap[2][0] == via_multiply[2][0]); // Numerically equal despite the sign difference.
             // All other (non-zero) elements are unaffected and remain bit-identical.
             for (int i = 0; i < 3; ++i) {

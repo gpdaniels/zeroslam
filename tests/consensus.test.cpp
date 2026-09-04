@@ -364,36 +364,36 @@ int main(int argc, char* argv[]) {
         // R = Rz * Ry * Rx
         matrix_multiply(temp, &rotation_x[0][0], gt_rotation);
         double gt_translation[3] = { 0.5, -0.3, 1.0 };
-        
+
         constexpr static const int inlier_count = 15;
         constexpr static const int outlier_count = 5;
         constexpr static const int correspondence_count = inlier_count + outlier_count;
-        
+
         double world_points[correspondence_count][3] = {
             // Inliers
-            { 0.1,  0.2, 3.0 },
+            { 0.1, 0.2, 3.0 },
             { -0.5, 0.4, 4.2 },
             { 0.7, -0.3, 5.1 },
             { -0.2, -0.1, 2.7 },
-            { 0.0,  0.0, 6.0 },
+            { 0.0, 0.0, 6.0 },
             { 0.3, -0.25, 4.0 },
-            { 0.4,  0.1, 7.5 },
+            { 0.4, 0.1, 7.5 },
             { -0.6, -0.2, 3.8 },
-            { 0.2,  0.6, 5.4 },
+            { 0.2, 0.6, 5.4 },
             { -0.1, 0.3, 8.2 },
             { 0.55, -0.45, 4.7 },
             { -0.35, 0.25, 6.3 },
             { 0.15, -0.55, 9.1 },
             { -0.25, -0.35, 7.0 },
-            { 0.6,  0.4, 3.3 },
+            { 0.6, 0.4, 3.3 },
             // Outliers (will be manually corrupted later)
-            { 0.1,  0.2, 3.0 },
+            { 0.1, 0.2, 3.0 },
             { -0.5, 0.4, 4.2 },
             { 0.7, -0.3, 5.1 },
             { -0.2, -0.1, 2.7 },
-            { 0.0,  0.0, 6.0 },
+            { 0.0, 0.0, 6.0 },
         };
-        
+
         consensus::correspondence_2d_3d<double> data[correspondence_count];
         for (int i = 0; i < inlier_count; ++i) {
             double point[2];
@@ -440,7 +440,7 @@ int main(int argc, char* argv[]) {
             }
             REQUIRE(std::isfinite(model.translation[y]));
         }
-        
+
         // Model should match ground truth
         for (int k = 0; k < 9; ++k) {
             REQUIRE(is_value_approx(gt_rotation[k], model.rotation[k / 3][k % 3], 1e-4));
@@ -509,21 +509,21 @@ int main(int argc, char* argv[]) {
         constexpr static const int correspondence_count = inlier_count + outlier_count;
 
         double world_points[inlier_count][3] = {
-            { 0.1,  0.2, 3.0 },
+            { 0.1, 0.2, 3.0 },
             { -0.5, 0.4, 4.2 },
             { 0.7, -0.3, 5.1 },
             { -0.2, -0.1, 2.7 },
-            { 0.0,  0.0, 6.0 },
+            { 0.0, 0.0, 6.0 },
             { 0.3, -0.25, 4.0 },
-            { 0.4,  0.1, 7.5 },
+            { 0.4, 0.1, 7.5 },
             { -0.6, -0.2, 3.8 },
-            { 0.2,  0.6, 5.4 },
+            { 0.2, 0.6, 5.4 },
             { -0.1, 0.3, 8.2 },
             { 0.55, -0.45, 4.7 },
             { -0.35, 0.25, 6.3 },
             { 0.15, -0.55, 9.1 },
             { -0.25, -0.35, 7.0 },
-            { 0.6,  0.4, 3.3 },
+            { 0.6, 0.4, 3.3 },
         };
 
         // Deterministic, unstructured offsets used to corrupt the outlier observations.

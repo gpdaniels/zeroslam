@@ -148,7 +148,8 @@ namespace map {
                 // Add edges.
                 for (const auto& [frame_id, kp_index] : this->observations.at(landmark_id)) {
                     // Only add the edge if it will do something.
-                    if (camera_vertexes.count(frame_id) == 0) continue;
+                    if (camera_vertexes.count(frame_id) == 0)
+                        continue;
                     if (camera_vertexes.at(frame_id)->is_fixed() && fix_landmarks) {
                         continue;
                     }

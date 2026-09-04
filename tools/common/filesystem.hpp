@@ -25,9 +25,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 #include <string>
-#include <vector>
-
 #include <sys/stat.h>
+#include <vector>
 
 #if !defined(_WIN32)
 #include <dirent.h>

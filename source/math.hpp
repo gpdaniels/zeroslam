@@ -20,49 +20,78 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace {
     using size_t = decltype(sizeof(0));
-    template<typename lhs, typename rhs>
+
+    template <typename lhs, typename rhs>
     struct is_same_type {
         static constexpr bool value = false;
     };
-    template<typename type>
+
+    template <typename type>
     struct is_same_type<type, type> {
         static constexpr bool value = true;
     };
 }
 
 namespace math {
-    template <typename type> constexpr static inline type pi();
-    template <typename type> constexpr static inline type e();
-    template <typename type> constexpr static const type epsilon();
-    template <typename type> constexpr static inline type nan();
-    template <typename type> constexpr static inline type inf();
-    template <typename type> constexpr static inline bool isnan(type value);
-    template <typename type> constexpr static inline bool isinf(type value);
-    template <typename type> constexpr static inline bool isfinite(type value);
-    template <typename type> constexpr static inline type copysign(type magnitude, type sign);
-    template <typename type> constexpr static inline bool signbit(type value);
-    template <typename type> constexpr static inline type abs(type value);
-    template <typename type> constexpr static inline type min(type lhs, type rhs);
-    template <typename type> constexpr static inline type max(type lhs, type rhs);
-    template <typename type> constexpr static inline type floor(type value);
-    template <typename type> constexpr static inline type ceil(type value);
+    template <typename type>
+    constexpr static inline type pi();
+    template <typename type>
+    constexpr static inline type e();
+    template <typename type>
+    constexpr static const type epsilon();
+    template <typename type>
+    constexpr static inline type nan();
+    template <typename type>
+    constexpr static inline type inf();
+    template <typename type>
+    constexpr static inline bool isnan(type value);
+    template <typename type>
+    constexpr static inline bool isinf(type value);
+    template <typename type>
+    constexpr static inline bool isfinite(type value);
+    template <typename type>
+    constexpr static inline type copysign(type magnitude, type sign);
+    template <typename type>
+    constexpr static inline bool signbit(type value);
+    template <typename type>
+    constexpr static inline type abs(type value);
+    template <typename type>
+    constexpr static inline type min(type lhs, type rhs);
+    template <typename type>
+    constexpr static inline type max(type lhs, type rhs);
+    template <typename type>
+    constexpr static inline type floor(type value);
+    template <typename type>
+    constexpr static inline type ceil(type value);
 
     constexpr static inline int round(float value);
     constexpr static inline long long int round(double value);
 
-    template <typename type> constexpr static inline type fmod(type value, type modulus);
-    template <typename type> constexpr static inline type sqr(type value);
-    template <typename type> constexpr static inline type sqrt(type value);
-    template <typename type> constexpr static type pythag(const type a, const type b);
-    template <typename type> constexpr static inline type exp(type value);
-    template <typename type> constexpr static inline type log(type value);
-    template <typename type> constexpr static inline type pow(type value, type exponent);
-    template <typename type> constexpr static inline type sin(type value);
-    template <typename type> constexpr static inline type cos(type value);
+    template <typename type>
+    constexpr static inline type fmod(type value, type modulus);
+    template <typename type>
+    constexpr static inline type sqr(type value);
+    template <typename type>
+    constexpr static inline type sqrt(type value);
+    template <typename type>
+    constexpr static type pythag(const type a, const type b);
+    template <typename type>
+    constexpr static inline type exp(type value);
+    template <typename type>
+    constexpr static inline type log(type value);
+    template <typename type>
+    constexpr static inline type pow(type value, type exponent);
+    template <typename type>
+    constexpr static inline type sin(type value);
+    template <typename type>
+    constexpr static inline type cos(type value);
 
-    template <typename type> constexpr static inline type asin(type value);
-    template <typename type> constexpr static inline type acos(type value);
-    template <typename type> constexpr static inline type atan2(type y, type x);
+    template <typename type>
+    constexpr static inline type asin(type value);
+    template <typename type>
+    constexpr static inline type acos(type value);
+    template <typename type>
+    constexpr static inline type atan2(type y, type x);
 }
 
 namespace math {
@@ -263,14 +292,14 @@ namespace math {
     template <typename type>
     constexpr static inline type ceil(type value) {
 #if __has_builtin(__builtin_ceilf)
-            if constexpr (is_same_type<type, float>::value) {
-                return __builtin_ceilf(value);
-            }
+        if constexpr (is_same_type<type, float>::value) {
+            return __builtin_ceilf(value);
+        }
 #endif
 #if __has_builtin(__builtin_ceil)
-            if constexpr (is_same_type<type, double>::value) {
-                return __builtin_ceil(value);
-            }
+        if constexpr (is_same_type<type, double>::value) {
+            return __builtin_ceil(value);
+        }
 #endif
         constexpr const long long int max_integer = static_cast<long long int>(static_cast<unsigned long long int>(-1) >> 1);
         constexpr const long long int min_integer = -max_integer - 1;
@@ -548,7 +577,9 @@ namespace math {
             return nan<type>();
         const type angle = fmod(abs(value), (pi<type>() * type(2)));
         const type sign = (angle <= pi<type>()) ? (type(1) - type(2) * signbit(value)) : (type(-1) + type(2) * signbit(value));
-        const type remapped = (angle > (pi<type>() * type(1.5))) ? ((pi<type>() * type(2)) - angle) : (angle > (pi<type>())) ? angle - pi<type>() : (angle > (pi<type>() * type(0.5))) ? pi<type>() - angle : angle;
+        const type remapped = (angle > (pi<type>() * type(1.5))) ? ((pi<type>() * type(2)) - angle) : (angle > (pi<type>()))           ? angle - pi<type>()
+                                                                                                  : (angle > (pi<type>() * type(0.5))) ? pi<type>() - angle
+                                                                                                                                       : angle;
         const type remapped2 = remapped * remapped;
         type polynomial = 0;
         if constexpr (is_same_type<type, double>::value) {
@@ -583,7 +614,7 @@ namespace math {
     template <typename type>
     constexpr static inline type cos(type value) {
 #if __has_builtin(__builtin_cosf)
-            if constexpr (is_same_type<type, float>::value) {
+        if constexpr (is_same_type<type, float>::value) {
             return __builtin_cosf(value);
         }
 #endif
@@ -597,8 +628,11 @@ namespace math {
         if (!isfinite(value))
             return nan<type>();
         const type angle = fmod(abs(value), (pi<type>() * type(2)));
-        const type sign = (angle > (pi<type>() * type(1.5))) ? type(1) : (angle > (pi<type>() * type(0.5))) ? -type(1) : type(1);
-        const type remapped = (angle > (pi<type>() * type(1.5))) ? ((pi<type>() * type(2)) - angle) : (angle > (pi<type>())) ? angle - pi<type>() : (angle > (pi<type>() * type(0.5))) ? pi<type>() - angle : angle;
+        const type sign = (angle > (pi<type>() * type(1.5))) ? type(1) : (angle > (pi<type>() * type(0.5))) ? -type(1)
+                                                                                                            : type(1);
+        const type remapped = (angle > (pi<type>() * type(1.5))) ? ((pi<type>() * type(2)) - angle) : (angle > (pi<type>()))           ? angle - pi<type>()
+                                                                                                  : (angle > (pi<type>() * type(0.5))) ? pi<type>() - angle
+                                                                                                                                       : angle;
         const type remapped2 = remapped * remapped;
         type polynomial = 0;
         if constexpr (is_same_type<type, double>::value) {
@@ -654,8 +688,12 @@ namespace math {
         }
         const type angle = fmod(abs(value), (pi<type>() * type(2)));
         const type sign_sin = (angle <= pi<type>()) ? (type(1) - type(2) * signbit(value)) : (type(-1) + type(2) * signbit(value));
-        const type sign_cos = (angle > (pi<type>() * type(1.5))) ? type(1) : (angle > (pi<type>())) ? type(-1) : (angle > (pi<type>() * type(0.5))) ? type(-1) : type(1);
-        const type remapped = (angle > (pi<type>() * type(1.5))) ? ((pi<type>() * type(2)) - angle) : (angle > (pi<type>())) ? angle - pi<type>() : (angle > (pi<type>() * type(0.5))) ? pi<type>() - angle : angle;
+        const type sign_cos = (angle > (pi<type>() * type(1.5))) ? type(1) : (angle > (pi<type>()))           ? type(-1)
+                                                                         : (angle > (pi<type>() * type(0.5))) ? type(-1)
+                                                                                                              : type(1);
+        const type remapped = (angle > (pi<type>() * type(1.5))) ? ((pi<type>() * type(2)) - angle) : (angle > (pi<type>()))           ? angle - pi<type>()
+                                                                                                  : (angle > (pi<type>() * type(0.5))) ? pi<type>() - angle
+                                                                                                                                       : angle;
         const type remapped2 = remapped * remapped;
         type polynomial_sin = 0;
         type polynomial_cos = 0;
