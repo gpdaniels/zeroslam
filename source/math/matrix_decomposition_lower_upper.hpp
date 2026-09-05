@@ -22,7 +22,7 @@ namespace {
     using size_t = decltype(sizeof(0));
 }
 
-namespace matrix {
+namespace math {
     template <typename type>
     static inline bool decompose_lower_upper(
         const type* __restrict matrix,

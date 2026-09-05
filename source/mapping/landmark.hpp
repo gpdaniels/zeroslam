@@ -20,39 +20,39 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "math/matrix.hpp"
 
-namespace landmark {
+namespace mapping {
     class point {
     public:
         static inline int id_generator = 0;
         int id;
-        matrix::matrix<double, 3, 1> location;
-        matrix::matrix<double, 3, 1> colour;
+        math::matrix<double, 3, 1> location;
+        math::matrix<double, 3, 1> colour;
 
     public:
         point();
-        point(const matrix::matrix<double, 3, 1>& input_location, const matrix::matrix<double, 3, 1>& input_colour);
+        point(const math::matrix<double, 3, 1>& input_location, const math::matrix<double, 3, 1>& input_colour);
     };
 
     class line {
     public:
         static inline int id_generator = 0;
         int id;
-        matrix::matrix<double, 3, 1> locations[2];
+        math::matrix<double, 3, 1> locations[2];
 
     public:
         line();
-        line(const matrix::matrix<double, 3, 1>& input_location_1, const matrix::matrix<double, 3, 1>& input_location_2);
+        line(const math::matrix<double, 3, 1>& input_location_1, const math::matrix<double, 3, 1>& input_location_2);
     };
 }
 
-namespace landmark {
+namespace mapping {
     inline point::point() {
         this->id = -1;
-        this->location = matrix::matrix<double, 3, 1>::zero();
-        this->colour = matrix::matrix<double, 3, 1>::zero();
+        this->location = math::matrix<double, 3, 1>::zero();
+        this->colour = math::matrix<double, 3, 1>::zero();
     }
 
-    inline point::point(const matrix::matrix<double, 3, 1>& input_location, const matrix::matrix<double, 3, 1>& input_colour) {
+    inline point::point(const math::matrix<double, 3, 1>& input_location, const math::matrix<double, 3, 1>& input_colour) {
         this->id = point::id_generator++;
         this->location = input_location;
         this->colour = input_colour;
@@ -60,11 +60,11 @@ namespace landmark {
 
     inline line::line() {
         this->id = -1;
-        this->locations[0] = matrix::matrix<double, 3, 1>::zero();
-        this->locations[1] = matrix::matrix<double, 3, 1>::zero();
+        this->locations[0] = math::matrix<double, 3, 1>::zero();
+        this->locations[1] = math::matrix<double, 3, 1>::zero();
     }
 
-    inline line::line(const matrix::matrix<double, 3, 1>& input_location_1, const matrix::matrix<double, 3, 1>& input_location_2) {
+    inline line::line(const math::matrix<double, 3, 1>& input_location_1, const math::matrix<double, 3, 1>& input_location_2) {
         this->id = line::id_generator++;
         this->locations[0] = input_location_1;
         this->locations[1] = input_location_2;

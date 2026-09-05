@@ -38,7 +38,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(pop)
 #endif
 
-namespace factor_graph {
+namespace optimisation {
 
     // Base class for robust loss functions.
     class loss_function_base {
@@ -53,7 +53,7 @@ namespace factor_graph {
         // rho[0] = robust function value.
         // rho[1] = first derivative.
         // rho[2] = second derivative.
-        virtual void compute(double err2, matrix::matrix<double, 3, 1>& rho) const = 0;
+        virtual void compute(double err2, math::matrix<double, 3, 1>& rho) const = 0;
     };
 
     // Base class for optimisation vertices.
@@ -68,9 +68,9 @@ namespace factor_graph {
         // Flag indicating vertex is marginalised.
         bool marginalised = false;
         // Parameters are stored as a column vector.
-        matrix::matrix<double, 0, 0> parameters;
+        math::matrix<double, 0, 0> parameters;
         // Backup used for rollback.
-        matrix::matrix<double, 0, 0> parameters_backup;
+        math::matrix<double, 0, 0> parameters_backup;
 
     public:
         virtual ~vertex_base() = default;
@@ -83,12 +83,12 @@ namespace factor_graph {
 
     protected:
         explicit vertex_base(int parameter_dimension_value) {
-            this->parameters = matrix::matrix<double, 0, 0>::zero(static_cast<size_t>(parameter_dimension_value), 1);
+            this->parameters = math::matrix<double, 0, 0>::zero(static_cast<size_t>(parameter_dimension_value), 1);
             this->local_dimension = parameter_dimension_value;
         }
 
         explicit vertex_base(int parameter_dimension_value, int local_dimension_value) {
-            this->parameters = matrix::matrix<double, 0, 0>::zero(static_cast<size_t>(parameter_dimension_value), 1);
+            this->parameters = math::matrix<double, 0, 0>::zero(static_cast<size_t>(parameter_dimension_value), 1);
             this->local_dimension = local_dimension_value;
         }
 
@@ -121,11 +121,11 @@ namespace factor_graph {
             return this->marginalised;
         }
 
-        const matrix::matrix<double, 0, 0>& get_parameters() const {
+        const math::matrix<double, 0, 0>& get_parameters() const {
             return this->parameters;
         }
 
-        void set_parameters(const matrix::matrix<double, 0, 0>& parameters_value) {
+        void set_parameters(const math::matrix<double, 0, 0>& parameters_value) {
             this->parameters = parameters_value;
         }
 
@@ -139,7 +139,7 @@ namespace factor_graph {
 
     public:
         // Default additive update for dense parameter vectors.
-        virtual void plus(const matrix::matrix<double, 0, 0>& delta) {
+        virtual void plus(const math::matrix<double, 0, 0>& delta) {
             for (size_t i = 0; i < this->parameters.rows(); ++i) {
                 this->parameters[i][0] += delta[i][0];
             }
@@ -154,13 +154,13 @@ namespace factor_graph {
         // Connected vertices for this edge.
         std::vector<vertex_base*> vertices;
         // Residual vector for the factor.
-        matrix::matrix<double, 0, 0> residual;
+        math::matrix<double, 0, 0> residual;
         // Jacobians for each connected vertex.
-        std::vector<matrix::matrix<double, 0, 0>> jacobians;
+        std::vector<math::matrix<double, 0, 0>> jacobians;
         // Information matrix of the measurement.
-        matrix::matrix<double, 0, 0> information;
+        math::matrix<double, 0, 0> information;
         // Observation vector.
-        matrix::matrix<double, 0, 0> observation;
+        math::matrix<double, 0, 0> observation;
         // Optional robust loss function.
         loss_function_base* loss_function;
 
@@ -177,9 +177,9 @@ namespace factor_graph {
         // Construct an edge with residual dimension and number of vertices.
         explicit edge_base(int residual_dimension_value, int num_vertices) {
             this->vertices.reserve(static_cast<size_t>(num_vertices));
-            this->residual = matrix::matrix<double, 0, 0>::zero(static_cast<size_t>(residual_dimension_value), 1);
+            this->residual = math::matrix<double, 0, 0>::zero(static_cast<size_t>(residual_dimension_value), 1);
             this->jacobians.resize(static_cast<size_t>(num_vertices));
-            this->information = matrix::matrix<double, 0, 0>::identity(static_cast<size_t>(residual_dimension_value), static_cast<size_t>(residual_dimension_value));
+            this->information = math::matrix<double, 0, 0>::identity(static_cast<size_t>(residual_dimension_value), static_cast<size_t>(residual_dimension_value));
             this->loss_function = nullptr;
         }
 
@@ -216,31 +216,31 @@ namespace factor_graph {
         }
 
         double chi2() const {
-            return (matrix::transpose(this->residual) * this->information * this->residual)[0][0];
+            return (math::transpose(this->residual) * this->information * this->residual)[0][0];
         }
 
         double robust_chi2() const {
             if (!this->loss_function) {
                 return this->chi2();
             }
-            matrix::matrix<double, 3, 1> rho = matrix::matrix<double, 3, 1>::zero();
+            math::matrix<double, 3, 1> rho = math::matrix<double, 3, 1>::zero();
             this->loss_function->compute(this->chi2(), rho);
             return rho[0];
         }
 
-        const matrix::matrix<double, 0, 0>& get_residual() const {
+        const math::matrix<double, 0, 0>& get_residual() const {
             return this->residual;
         }
 
-        const std::vector<matrix::matrix<double, 0, 0>>& get_jacobians() const {
+        const std::vector<math::matrix<double, 0, 0>>& get_jacobians() const {
             return this->jacobians;
         }
 
-        const matrix::matrix<double, 0, 0>& get_information() const {
+        const math::matrix<double, 0, 0>& get_information() const {
             return this->information;
         }
 
-        void set_information(const matrix::matrix<double, 0, 0>& information_value) {
+        void set_information(const math::matrix<double, 0, 0>& information_value) {
             this->information = information_value;
         }
 
@@ -252,28 +252,28 @@ namespace factor_graph {
             this->loss_function = loss_function_value;
         }
 
-        void robust_info(double& rho_delta, matrix::matrix<double, 0, 0>& robust_information) const {
+        void robust_info(double& rho_delta, math::matrix<double, 0, 0>& robust_information) const {
             if (!this->loss_function) {
                 rho_delta = 1.0;
                 robust_information = this->information;
                 return;
             }
             const double error_squared = this->chi2();
-            matrix::matrix<double, 3, 1> rho;
+            math::matrix<double, 3, 1> rho;
             this->loss_function->compute(error_squared, rho);
             rho_delta = rho[1];
             robust_information = rho[1] * this->information;
             if ((rho[1] + 2.0 * rho[2] * error_squared) > 0.0) {
-                matrix::matrix<double, 0, 0> weight_error = this->information * this->residual;
-                robust_information = robust_information + 2.0 * rho[2] * weight_error * matrix::transpose(weight_error);
+                math::matrix<double, 0, 0> weight_error = this->information * this->residual;
+                robust_information = robust_information + 2.0 * rho[2] * weight_error * math::transpose(weight_error);
             }
         }
 
-        const matrix::matrix<double, 0, 0>& get_observation() const {
+        const math::matrix<double, 0, 0>& get_observation() const {
             return this->observation;
         }
 
-        void set_observation(const matrix::matrix<double, 0, 0>& observation_value) {
+        void set_observation(const math::matrix<double, 0, 0>& observation_value) {
             this->observation = observation_value;
         }
 
@@ -287,13 +287,13 @@ namespace factor_graph {
             const double scalar = 1.0 / (2.0 * delta);
 
             // Save current residual to restore later.
-            matrix::matrix<double, 0, 0> backup_residual = this->residual;
+            math::matrix<double, 0, 0> backup_residual = this->residual;
 
             for (size_t i = 0; i < this->vertices.size(); ++i) {
                 const int vertex_dimensions = this->vertices[i]->get_local_dimensions();
                 // Initialise jacobian block for this vertex to the correct size.
                 // The residual dimension is known from the residual vector.
-                this->jacobians[i] = matrix::matrix<double, 0, 0>::zero(this->residual.rows(), static_cast<size_t>(vertex_dimensions));
+                this->jacobians[i] = math::matrix<double, 0, 0>::zero(this->residual.rows(), static_cast<size_t>(vertex_dimensions));
 
                 if (this->vertices[i]->is_fixed()) {
                     continue;
@@ -302,16 +302,16 @@ namespace factor_graph {
                 // For each dimension of the vertex apply a small step and measure residual change.
                 for (int d = 0; d < vertex_dimensions; ++d) {
                     // Save parameters for this vertex.
-                    matrix::matrix<double, 0, 0> backup = this->vertices[i]->get_parameters();
+                    math::matrix<double, 0, 0> backup = this->vertices[i]->get_parameters();
 
                     // Prepare delta vector for additive perturbation.
-                    matrix::matrix<double, 0, 0> add_delta = matrix::matrix<double, 0, 0>::zero(static_cast<size_t>(vertex_dimensions), 1);
+                    math::matrix<double, 0, 0> add_delta = math::matrix<double, 0, 0>::zero(static_cast<size_t>(vertex_dimensions), 1);
 
                     // Forward perturbation.
                     add_delta[static_cast<size_t>(d)][0] = delta;
                     this->vertices[i]->plus(add_delta);
                     this->compute_residual();
-                    matrix::matrix<double, 0, 0> error_addition = this->residual;
+                    math::matrix<double, 0, 0> error_addition = this->residual;
 
                     // Restore parameters to original.
                     this->vertices[i]->set_parameters(backup);
@@ -320,13 +320,13 @@ namespace factor_graph {
                     add_delta[static_cast<size_t>(d)][0] = -delta;
                     this->vertices[i]->plus(add_delta);
                     this->compute_residual();
-                    matrix::matrix<double, 0, 0> error_subtract = this->residual;
+                    math::matrix<double, 0, 0> error_subtract = this->residual;
 
                     // Restore parameters again.
                     this->vertices[i]->set_parameters(backup);
 
                     // Numerical derivative column.
-                    const matrix::matrix<double, 0, 0> column = scalar * (error_addition - error_subtract);
+                    const math::matrix<double, 0, 0> column = scalar * (error_addition - error_subtract);
                     for (size_t r = 0; r < this->residual.rows(); ++r) {
                         this->jacobians[i][static_cast<size_t>(r)][static_cast<size_t>(d)] = column[r][0];
                     }
@@ -362,15 +362,15 @@ namespace factor_graph {
         // Matrix shape for Schur complement partitioning.
         //   [ h_pp h_pl ]
         //   [ h_lp h_ll ]
-        matrix::sparse_block_diagonal<6> h_pp;         // pose-pose block diagonal.
-        matrix::sparse_block_diagonal<3> h_ll;         // landmark-landmark block diagonal.
-        matrix::sparse_block<6, 3> h_pl;               // pose-landmark off-diagonal blocks.
-        matrix::sparse_block<3, 6> h_lp;               // landmark-pose off-diagonal blocks.
-        matrix::sparse_block_diagonal<3> h_ll_inverse; // inverse of landmark-landmark block diagonal.
-        matrix::matrix<double, 0, 0> vector_b;         // full right-hand side vector.
-        matrix::matrix<double, 0, 0> delta_x;          // full solution vector.
-        matrix::matrix<double, 0, 0> b_pp;             // pose part of vector_b.
-        matrix::matrix<double, 0, 0> b_ll;             // landmark part of vector_b.
+        math::sparse_block_diagonal<6> h_pp;         // pose-pose block diagonal.
+        math::sparse_block_diagonal<3> h_ll;         // landmark-landmark block diagonal.
+        math::sparse_block<6, 3> h_pl;               // pose-landmark off-diagonal blocks.
+        math::sparse_block<3, 6> h_lp;               // landmark-pose off-diagonal blocks.
+        math::sparse_block_diagonal<3> h_ll_inverse; // inverse of landmark-landmark block diagonal.
+        math::matrix<double, 0, 0> vector_b;         // full right-hand side vector.
+        math::matrix<double, 0, 0> delta_x;          // full solution vector.
+        math::matrix<double, 0, 0> b_pp;             // pose part of vector_b.
+        math::matrix<double, 0, 0> b_ll;             // landmark part of vector_b.
 
         int count_general_params = 0;
         int count_marginalised_params = 0;
@@ -649,52 +649,52 @@ namespace factor_graph {
         void make_hessian() {
             // Clear existing block structures and resize to match current variables.
             this->h_pp.diagonal().clear();
-            this->h_pp.diagonal().resize(static_cast<size_t>(this->count_general_params / 6), matrix::matrix<double, 6, 6>::zero());
+            this->h_pp.diagonal().resize(static_cast<size_t>(this->count_general_params / 6), math::matrix<double, 6, 6>::zero());
             this->h_ll.diagonal().clear();
-            this->h_ll.diagonal().resize(static_cast<size_t>(this->count_marginalised_params / 3), matrix::matrix<double, 3, 3>::zero());
+            this->h_ll.diagonal().resize(static_cast<size_t>(this->count_marginalised_params / 3), math::matrix<double, 3, 3>::zero());
             this->h_pl.blocks().clear();
             this->h_pl.set_size(static_cast<size_t>(this->count_general_params), static_cast<size_t>(this->count_marginalised_params));
             this->h_lp.blocks().clear();
             this->h_lp.set_size(static_cast<size_t>(this->count_marginalised_params), static_cast<size_t>(this->count_general_params));
             this->h_ll_inverse.diagonal().clear();
-            this->h_ll_inverse.diagonal().resize(static_cast<size_t>(this->count_marginalised_params / 3), matrix::matrix<double, 3, 3>::zero());
-            this->vector_b = matrix::matrix<double, 0, 0>::zero(static_cast<size_t>(this->count_general_params + this->count_marginalised_params), 1);
-            this->delta_x = matrix::matrix<double, 0, 0>::zero(static_cast<size_t>(this->count_general_params + this->count_marginalised_params), 1);
+            this->h_ll_inverse.diagonal().resize(static_cast<size_t>(this->count_marginalised_params / 3), math::matrix<double, 3, 3>::zero());
+            this->vector_b = math::matrix<double, 0, 0>::zero(static_cast<size_t>(this->count_general_params + this->count_marginalised_params), 1);
+            this->delta_x = math::matrix<double, 0, 0>::zero(static_cast<size_t>(this->count_general_params + this->count_marginalised_params), 1);
 
             // Accumulate Hessian and vector terms from all edges.
             for (const auto& edge : this->edges) {
                 edge->compute_jacobians();
                 const std::vector<vertex_base*>& edge_vertices = edge->get_vertices();
-                const std::vector<matrix::matrix<double, 0, 0>>& jacobians = edge->get_jacobians();
+                const std::vector<math::matrix<double, 0, 0>>& jacobians = edge->get_jacobians();
                 ASSERT(edge_vertices.size() == jacobians.size(), "Mismatching sizes between edge vertices and edge jacobians.");
                 for (size_t i = 0; i < edge_vertices.size(); ++i) {
                     const vertex_base* v_i = edge_vertices[i];
                     if (v_i->is_fixed()) {
                         continue;
                     }
-                    const matrix::matrix<double, 0, 0>& jacobian_i = jacobians[i];
+                    const math::matrix<double, 0, 0>& jacobian_i = jacobians[i];
                     const int index_i = v_i->get_ordering_id();
                     const int dim_i = v_i->get_local_dimensions();
                     double drho;
-                    matrix::matrix<double, 0, 0> robust_information(edge->get_information().rows(), edge->get_information().cols());
+                    math::matrix<double, 0, 0> robust_information(edge->get_information().rows(), edge->get_information().cols());
                     edge->robust_info(drho, robust_information);
-                    const matrix::matrix<double, 0, 0> jtw = matrix::transpose(jacobian_i) * robust_information;
+                    const math::matrix<double, 0, 0> jtw = math::transpose(jacobian_i) * robust_information;
                     for (size_t j = i; j < edge_vertices.size(); ++j) {
                         const vertex_base* v_j = edge_vertices[j];
                         if (v_j->is_fixed()) {
                             continue;
                         }
-                        const matrix::matrix<double, 0, 0>& jacobian_j = jacobians[j];
+                        const math::matrix<double, 0, 0>& jacobian_j = jacobians[j];
                         const int index_j = v_j->get_ordering_id();
                         ASSERT(v_j->get_ordering_id() != -1, "Missing ordering id value of edge vertex.");
-                        const matrix::matrix<double, 0, 0> hessian_block = jtw * jacobian_j;
+                        const math::matrix<double, 0, 0> hessian_block = jtw * jacobian_j;
                         // Four cases depending on marginalisation state of v_i and v_j.
                         if (v_i->is_marginalised() == false) {
                             if (v_j->is_marginalised() == false) {
                                 // pose-pose block.
                                 ASSERT(index_i == index_j, "Attempting to add a pose-pose block that is not on the block diagonal.");
                                 ASSERT(hessian_block.cols() == 6 && hessian_block.rows() == 6, "Currently only 6 wide by 6 tall pose-pose blocks are supported.");
-                                this->h_pp.diagonal()[static_cast<size_t>(index_i / 6)] = this->h_pp.diagonal()[static_cast<size_t>(index_i / 6)] + matrix::matrix<double, 6, 6>(hessian_block.data());
+                                this->h_pp.diagonal()[static_cast<size_t>(index_i / 6)] = this->h_pp.diagonal()[static_cast<size_t>(index_i / 6)] + math::matrix<double, 6, 6>(hessian_block.data());
                             }
                             else {
                                 // pose-landmark block.
@@ -703,10 +703,10 @@ namespace factor_graph {
                                 const size_t block_row = static_cast<size_t>(index_i / 6);
                                 const size_t block_col = static_cast<size_t>((index_j - this->count_general_params) / 3);
                                 if (this->h_pl.blocks().find({ block_row, block_col }) == this->h_pl.blocks().end()) {
-                                    this->h_pl.blocks()[{ block_row, block_col }] = matrix::matrix<double, 6, 3>(hessian_block.data());
+                                    this->h_pl.blocks()[{ block_row, block_col }] = math::matrix<double, 6, 3>(hessian_block.data());
                                 }
                                 else {
-                                    this->h_pl.blocks()[{ block_row, block_col }] = this->h_pl.blocks()[{ block_row, block_col }] + matrix::matrix<double, 6, 3>(hessian_block.data());
+                                    this->h_pl.blocks()[{ block_row, block_col }] = this->h_pl.blocks()[{ block_row, block_col }] + math::matrix<double, 6, 3>(hessian_block.data());
                                 }
                             }
                         }
@@ -718,26 +718,26 @@ namespace factor_graph {
                                 // landmark-landmark block.
                                 ASSERT(index_i == index_j, "Attempting to add a landmark-landmark block that is not on the block diagonal.");
                                 ASSERT(hessian_block.cols() == 3 && hessian_block.rows() == 3, "Currently only 3 wide by 6 tall landmark-landmark blocks are supported.");
-                                this->h_ll.diagonal()[static_cast<size_t>((index_j - this->count_general_params) / 3)] = this->h_ll.diagonal()[static_cast<size_t>((index_j - this->count_general_params) / 3)] + matrix::matrix<double, 3, 3>(hessian_block.data());
+                                this->h_ll.diagonal()[static_cast<size_t>((index_j - this->count_general_params) / 3)] = this->h_ll.diagonal()[static_cast<size_t>((index_j - this->count_general_params) / 3)] + math::matrix<double, 3, 3>(hessian_block.data());
                             }
                         }
                     }
                     // Update right-hand side vector B.
-                    matrix::set_block(this->vector_b, static_cast<size_t>(index_i), 0, matrix::get_block(this->vector_b, static_cast<size_t>(index_i), 0, static_cast<size_t>(dim_i), 1) - drho * matrix::transpose(jacobian_i) * edge->get_information() * edge->get_residual());
+                    math::set_block(this->vector_b, static_cast<size_t>(index_i), 0, math::get_block(this->vector_b, static_cast<size_t>(index_i), 0, static_cast<size_t>(dim_i), 1) - drho * math::transpose(jacobian_i) * edge->get_information() * edge->get_residual());
                 }
             }
             // Compute transposed off-diagonal blocks.
             this->h_lp = this->h_pl.get_transpose();
-            this->b_pp = matrix::get_block(this->vector_b, 0, 0, static_cast<size_t>(this->count_general_params), 1);
-            this->b_ll = matrix::get_block(this->vector_b, static_cast<size_t>(this->count_general_params), 0, static_cast<size_t>(this->count_marginalised_params), 1);
+            this->b_pp = math::get_block(this->vector_b, 0, 0, static_cast<size_t>(this->count_general_params), 1);
+            this->b_ll = math::get_block(this->vector_b, static_cast<size_t>(this->count_general_params), 0, static_cast<size_t>(this->count_marginalised_params), 1);
         }
 
         // Solve the linear system using Schur complement and a dense Cholesky for the reduced system.
         // Returns false if the Cholesky decompose or solve of the reduced pose system fails.
         bool solve_linear_system() {
             // Backup diagonal blocks in case we need to restore.
-            const matrix::sparse_block_diagonal<6> h_pp_backup = this->h_pp;
-            const matrix::sparse_block_diagonal<3> h_ll_backup = this->h_ll;
+            const math::sparse_block_diagonal<6> h_pp_backup = this->h_pp;
+            const math::sparse_block_diagonal<3> h_ll_backup = this->h_ll;
 
             // Apply current damping lambda to diagonal elements of Hpp and Hll.
             for (size_t d = 0; d < this->h_pp.diagonal().size(); ++d) {
@@ -760,45 +760,45 @@ namespace factor_graph {
                 const int size = landmark_vertex->get_local_dimensions();
                 ASSERT(size == 3, "Currently only landmarks of size 3 are supported.");
                 ASSERT(idx % 3 == 0, "Landmark indexes must be aligned in sets of 3.");
-                matrix::matrix<double, 3, 3> inverse_block;
-                matrix::invert(this->h_ll.diagonal()[static_cast<size_t>(idx / size)], inverse_block);
+                math::matrix<double, 3, 3> inverse_block;
+                math::invert(this->h_ll.diagonal()[static_cast<size_t>(idx / size)], inverse_block);
                 this->h_ll_inverse.diagonal()[static_cast<size_t>(idx / size)] = inverse_block;
             }
 
             // Step 1: Schur complement setup.
-            const matrix::sparse_block<6, 3> h_p_m_times_hll_inv = matrix::multiply(this->h_pl, this->h_ll_inverse);
-            const matrix::matrix<double, 0, 0> b_pp_schur = this->b_pp - h_p_m_times_hll_inv.multiply(this->b_ll);
-            const matrix::sparse_block<6, 6> h_pp_schur = matrix::subtract(this->h_pp, h_p_m_times_hll_inv.multiply(this->h_lp));
+            const math::sparse_block<6, 3> h_p_m_times_hll_inv = math::multiply(this->h_pl, this->h_ll_inverse);
+            const math::matrix<double, 0, 0> b_pp_schur = this->b_pp - h_p_m_times_hll_inv.multiply(this->b_ll);
+            const math::sparse_block<6, 6> h_pp_schur = math::subtract(this->h_pp, h_p_m_times_hll_inv.multiply(this->h_lp));
 
             // Step 2: solve reduced pose system Hpp_schur * delta_xpp = b_pp_schur.
             // Assemble dense matrix for Cholesky since a sparse block Cholesky is not provided here.
-            matrix::matrix<double, 0, 0> hpp_schur_dense = matrix::matrix<double, 0, 0>::zero(h_pp_schur.rows(), h_pp_schur.cols());
-            for (std::unordered_map<typename matrix::sparse_block<6, 6>::block_key<size_t, size_t>, typename matrix::sparse_block<6, 6>::block_type, typename matrix::sparse_block<6, 6>::block_key<size_t, size_t>>::const_iterator iterator = h_pp_schur.blocks().begin(); iterator != h_pp_schur.blocks().end(); ++iterator) {
+            math::matrix<double, 0, 0> hpp_schur_dense = math::matrix<double, 0, 0>::zero(h_pp_schur.rows(), h_pp_schur.cols());
+            for (std::unordered_map<typename math::sparse_block<6, 6>::block_key<size_t, size_t>, typename math::sparse_block<6, 6>::block_type, typename math::sparse_block<6, 6>::block_key<size_t, size_t>>::const_iterator iterator = h_pp_schur.blocks().begin(); iterator != h_pp_schur.blocks().end(); ++iterator) {
                 for (size_t i = 0; i < 6; ++i) {
                     for (size_t j = 0; j < 6; ++j) {
                         hpp_schur_dense[iterator->first.first * 6 + i][iterator->first.second * 6 + j] = hpp_schur_dense[iterator->first.first * 6 + i][iterator->first.second * 6 + j] + iterator->second[i][j];
                     }
                 }
             }
-            matrix::matrix<double, 0, 0> matrix_lower(static_cast<size_t>(this->count_general_params), static_cast<size_t>(this->count_general_params));
-            matrix::matrix<double, 0, 0> delta_xpp = matrix::matrix<double, 0, 0>::zero(static_cast<size_t>(this->count_general_params), 1);
-            if (!matrix::decompose_cholesky(hpp_schur_dense.data(), this->count_general_params, this->count_general_params, matrix_lower.data()) || !matrix::solve_cholesky(matrix_lower.data(), b_pp_schur.data(), this->count_general_params, this->count_general_params, delta_xpp.data())) {
+            math::matrix<double, 0, 0> matrix_lower(static_cast<size_t>(this->count_general_params), static_cast<size_t>(this->count_general_params));
+            math::matrix<double, 0, 0> delta_xpp = math::matrix<double, 0, 0>::zero(static_cast<size_t>(this->count_general_params), 1);
+            if (!math::decompose_cholesky(hpp_schur_dense.data(), this->count_general_params, this->count_general_params, matrix_lower.data()) || !math::solve_cholesky(matrix_lower.data(), b_pp_schur.data(), this->count_general_params, this->count_general_params, delta_xpp.data())) {
                 if (this->verbose) {
                     std::fprintf(stderr, "Cholesky solver failed!\n");
                 }
                 // Restore Hessian if solver fails and clear any stale step.
                 this->h_pp = h_pp_backup;
                 this->h_ll = h_ll_backup;
-                this->delta_x = matrix::matrix<double, 0, 0>::zero(static_cast<size_t>(this->count_general_params + this->count_marginalised_params), 1);
+                this->delta_x = math::matrix<double, 0, 0>::zero(static_cast<size_t>(this->count_general_params + this->count_marginalised_params), 1);
                 return false;
             }
 
             // Place pose solution into full delta vector.
-            matrix::set_block(this->delta_x, 0, 0, delta_xpp);
+            math::set_block(this->delta_x, 0, 0, delta_xpp);
 
             // Step 3: back-substitute to compute marginalised variable updates.
-            matrix::matrix<double, 0, 0> delta_xll = this->h_ll_inverse.multiply(this->b_ll - this->h_lp.multiply(delta_xpp));
-            matrix::set_block(this->delta_x, static_cast<size_t>(this->count_general_params), 0, delta_xll);
+            math::matrix<double, 0, 0> delta_xll = this->h_ll_inverse.multiply(this->b_ll - this->h_lp.multiply(delta_xpp));
+            math::set_block(this->delta_x, static_cast<size_t>(this->count_general_params), 0, delta_xll);
 
             // Restore original Hessian blocks.
             this->h_pp = h_pp_backup;
@@ -815,7 +815,7 @@ namespace factor_graph {
                 vertex->backup();
                 int idx = vertex->get_ordering_id();
                 int dim = vertex->get_local_dimensions();
-                matrix::matrix<double, 0, 0> delta = matrix::get_block(this->delta_x, static_cast<size_t>(idx), 0, static_cast<size_t>(dim), 1);
+                math::matrix<double, 0, 0> delta = math::get_block(this->delta_x, static_cast<size_t>(idx), 0, static_cast<size_t>(dim), 1);
                 vertex->plus(delta);
             }
             for (auto vertex : this->vertices_marginalised) {
@@ -825,7 +825,7 @@ namespace factor_graph {
                 vertex->backup();
                 int idx = vertex->get_ordering_id();
                 int dim = vertex->get_local_dimensions();
-                matrix::matrix<double, 0, 0> delta = matrix::get_block(this->delta_x, static_cast<size_t>(idx), 0, static_cast<size_t>(dim), 1);
+                math::matrix<double, 0, 0> delta = math::get_block(this->delta_x, static_cast<size_t>(idx), 0, static_cast<size_t>(dim), 1);
                 vertex->plus(delta);
             }
         }
@@ -848,11 +848,11 @@ namespace factor_graph {
     };
 }
 
-namespace factor_graph {
+namespace optimisation {
     class loss_trivial final
         : public loss_function_base {
     public:
-        virtual void compute(double error_squared, matrix::matrix<double, 3, 1>& rho) const override final {
+        virtual void compute(double error_squared, math::matrix<double, 3, 1>& rho) const override final {
             rho[0] = error_squared;
             rho[1] = 1;
             rho[2] = 0;
@@ -869,7 +869,7 @@ namespace factor_graph {
             : delta(delta_value) {
         }
 
-        virtual void compute(double error_squared, matrix::matrix<double, 3, 1>& rho) const override final {
+        virtual void compute(double error_squared, math::matrix<double, 3, 1>& rho) const override final {
             const double delta_squared = this->delta * this->delta;
             if (error_squared <= delta_squared) {
                 rho[0] = error_squared;
@@ -895,7 +895,7 @@ namespace factor_graph {
             : delta(delta_value) {
         }
 
-        virtual void compute(double error_squared, matrix::matrix<double, 3, 1>& rho) const override final {
+        virtual void compute(double error_squared, math::matrix<double, 3, 1>& rho) const override final {
             const double delta_squared = this->delta * this->delta;
             const double delta_squared_reciprocal = 1.0 / delta_squared;
             const double aux = delta_squared_reciprocal * error_squared + 1.0;
@@ -915,7 +915,7 @@ namespace factor_graph {
             : delta(delta_value) {
         }
 
-        virtual void compute(double error_squared, matrix::matrix<double, 3, 1>& rho) const override final {
+        virtual void compute(double error_squared, math::matrix<double, 3, 1>& rho) const override final {
             const double delta_squared = this->delta * this->delta;
             if (error_squared <= delta_squared) {
                 const double aux = error_squared / delta_squared;
@@ -935,7 +935,7 @@ namespace factor_graph {
     };
 }
 
-namespace factor_graph {
+namespace optimisation {
     class vertex_pose final
         : public vertex_base {
     public:
@@ -945,12 +945,12 @@ namespace factor_graph {
         }
 
         // Update on the manifold using left-multiplicative increment.
-        virtual void plus(const matrix::matrix<double, 0, 0>& delta) override final {
-            const lie::so3<double> current_rotation(this->parameters[6][0], this->parameters[3][0], this->parameters[4][0], this->parameters[5][0]);
-            const matrix::matrix<double, 3, 1> current_translation = { { this->parameters[0][0], this->parameters[1][0], this->parameters[2][0] } };
-            const lie::se3<double> current_pose(current_rotation, current_translation);
-            const lie::se3<double> update = lie::se3<double>::exp({ { delta[0][0], delta[1][0], delta[2][0], delta[3][0], delta[4][0], delta[5][0] } });
-            const lie::se3<double> next_pose = update * current_pose;
+        virtual void plus(const math::matrix<double, 0, 0>& delta) override final {
+            const math::so3<double> current_rotation(this->parameters[6][0], this->parameters[3][0], this->parameters[4][0], this->parameters[5][0]);
+            const math::matrix<double, 3, 1> current_translation = { { this->parameters[0][0], this->parameters[1][0], this->parameters[2][0] } };
+            const math::se3<double> current_pose(current_rotation, current_translation);
+            const math::se3<double> update = math::se3<double>::exp({ { delta[0][0], delta[1][0], delta[2][0], delta[3][0], delta[4][0], delta[5][0] } });
+            const math::se3<double> next_pose = update * current_pose;
             this->parameters[0][0] = next_pose.translation()[0];               // tx.
             this->parameters[1][0] = next_pose.translation()[1];               // ty.
             this->parameters[2][0] = next_pose.translation()[2];               // tz.
@@ -970,7 +970,7 @@ namespace factor_graph {
     };
 }
 
-namespace factor_graph {
+namespace optimisation {
     template <typename camera_type>
     class edge_reprojection final
         : public edge_base {
@@ -990,15 +990,15 @@ namespace factor_graph {
         // Compute reprojection residual given a pose and a 3D landmark.
         virtual void compute_residual() override final {
             // Pose parameters from first vertex.
-            const matrix::matrix<double, 0, 0>& pose_params = this->get_vertex(0)->get_parameters();
-            const lie::se3<double> pose(lie::so3<double>(pose_params[6][0], pose_params[3][0], pose_params[4][0], pose_params[5][0]), { { pose_params[0][0], pose_params[1][0], pose_params[2][0] } });
+            const math::matrix<double, 0, 0>& pose_params = this->get_vertex(0)->get_parameters();
+            const math::se3<double> pose(math::so3<double>(pose_params[6][0], pose_params[3][0], pose_params[4][0], pose_params[5][0]), { { pose_params[0][0], pose_params[1][0], pose_params[2][0] } });
             // Landmark parameters from second vertex.
-            const matrix::matrix<double, 0, 0>& xyz_params = this->get_vertex(1)->get_parameters();
-            const matrix::matrix<double, 3, 1> landmark_world({ xyz_params[0][0], xyz_params[1][0], xyz_params[2][0] });
+            const math::matrix<double, 0, 0>& xyz_params = this->get_vertex(1)->get_parameters();
+            const math::matrix<double, 3, 1> landmark_world({ xyz_params[0][0], xyz_params[1][0], xyz_params[2][0] });
             // Transform landmark into camera frame.
-            const matrix::matrix<double, 3, 1> landmark_camera = pose * landmark_world;
+            const math::matrix<double, 3, 1> landmark_camera = pose * landmark_world;
             // Project into image plane using intrinsic matrix.
-            matrix::matrix<double, 2, 1> projected = { { 0.0, 0.0 } };
+            math::matrix<double, 2, 1> projected = { { 0.0, 0.0 } };
             if (!this->camera.project(landmark_camera.data(), projected.data())) {
                 const double penalty = -edge_reprojection::behind_camera_penalty * landmark_camera[2];
                 this->residual[0][0] = penalty;
@@ -1011,14 +1011,14 @@ namespace factor_graph {
 
         // Analytical jacobians for pose and landmark using camera model.
         virtual void compute_jacobians() override final {
-            const matrix::matrix<double, 0, 0>& pose_params = this->get_vertex(0)->get_parameters();
-            const lie::se3<double> pose(lie::so3<double>(pose_params[6][0], pose_params[3][0], pose_params[4][0], pose_params[5][0]), { { pose_params[0][0], pose_params[1][0], pose_params[2][0] } });
-            const matrix::matrix<double, 0, 0>& xyz_params = this->get_vertex(1)->get_parameters();
-            const matrix::matrix<double, 3, 1> landmark_world({ xyz_params[0][0], xyz_params[1][0], xyz_params[2][0] });
-            const matrix::matrix<double, 3, 1> landmark_camera = pose * landmark_world;
+            const math::matrix<double, 0, 0>& pose_params = this->get_vertex(0)->get_parameters();
+            const math::se3<double> pose(math::so3<double>(pose_params[6][0], pose_params[3][0], pose_params[4][0], pose_params[5][0]), { { pose_params[0][0], pose_params[1][0], pose_params[2][0] } });
+            const math::matrix<double, 0, 0>& xyz_params = this->get_vertex(1)->get_parameters();
+            const math::matrix<double, 3, 1> landmark_world({ xyz_params[0][0], xyz_params[1][0], xyz_params[2][0] });
+            const math::matrix<double, 3, 1> landmark_camera = pose * landmark_world;
 
             double projected[2];
-            matrix::matrix<double, 2, 3> jacobian_camera;
+            math::matrix<double, 2, 3> jacobian_camera;
             if (!this->camera.project(landmark_camera.data(), projected, jacobian_camera.data())) {
                 // Behind the camera the residual is the finite penalty: `-behind_camera_penalty * Z`, so `dR/dZ` is the constant `-behind_camera_penalty` and dR/dX = dR/dY = 0.
                 jacobian_camera[0][0] = 0.0;
@@ -1035,7 +1035,7 @@ namespace factor_graph {
 
             // Point Jacobian wrt Pose increment (Left SE3 update: T' = exp(delta) * T)
             // d(exp(delta) * P) / d(omega, upsilon) = [-P^, I]
-            matrix::matrix<double, 3, 6> jacobian_point_pose;
+            math::matrix<double, 3, 6> jacobian_point_pose;
             jacobian_point_pose[0][0] = 0;
             jacobian_point_pose[0][1] = Z;
             jacobian_point_pose[0][2] = -Y;
@@ -1056,12 +1056,12 @@ namespace factor_graph {
             jacobian_point_pose[2][5] = 1;
 
             // Residual Jacobian wrt Pose: d(obs - proj)/d_delta = -jacobian_camera * jacobian_point_pose
-            const matrix::matrix<double, 2, 6> jacobian_pose_res = -(jacobian_camera * jacobian_point_pose);
-            this->jacobians[0] = matrix::matrix<double, 0, 0>(2, 6, jacobian_pose_res.data());
+            const math::matrix<double, 2, 6> jacobian_pose_res = -(jacobian_camera * jacobian_point_pose);
+            this->jacobians[0] = math::matrix<double, 0, 0>(2, 6, jacobian_pose_res.data());
 
             // Landmark Jacobian: d(obs - proj)/d_point_world = -jacobian_camera * d(P_camera)/d(P_world) = -jacobian_camera * R
-            const matrix::matrix<double, 2, 3> jacobian_landmark_res = -(jacobian_camera * pose.rotation().get_matrix());
-            this->jacobians[1] = matrix::matrix<double, 0, 0>(2, 3, jacobian_landmark_res.data());
+            const math::matrix<double, 2, 3> jacobian_landmark_res = -(jacobian_camera * pose.rotation().get_matrix());
+            this->jacobians[1] = math::matrix<double, 0, 0>(2, 3, jacobian_landmark_res.data());
         }
     };
 }

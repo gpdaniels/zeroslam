@@ -34,20 +34,20 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(pop)
 #endif
 
-namespace frame {
+namespace mapping {
     class frame {
     public:
         static inline int id_generator = 0;
         int id;
-        matrix::matrix<double, 3, 3> rotation;
-        matrix::matrix<double, 3, 1> translation;
-        camera::pinhole camera;
+        math::matrix<double, 3, 3> rotation;
+        math::matrix<double, 3, 1> translation;
+        sensor::pinhole camera;
         std::vector<image::image> image_pyramid;
         std::vector<std::vector<feature::point>> keypoint_pyramid;
         std::vector<std::vector<feature::descriptor>> descriptor_pyramid;
 
     public:
-        matrix::matrix<double, 3, 4> get_pose() const {
+        math::matrix<double, 3, 4> get_pose() const {
             return { { { rotation[0][0], rotation[0][1], rotation[0][2], translation[0] },
                        { rotation[1][0], rotation[1][1], rotation[1][2], translation[1] },
                        { rotation[2][0], rotation[2][1], rotation[2][2], translation[2] } } };
@@ -56,14 +56,14 @@ namespace frame {
     public:
         frame() {
             this->id = -1;
-            this->rotation = matrix::matrix<double, 3, 3>::zero();
-            this->translation = matrix::matrix<double, 3, 1>::zero();
+            this->rotation = math::matrix<double, 3, 3>::zero();
+            this->translation = math::matrix<double, 3, 1>::zero();
         }
 
-        frame(const camera::pinhole camera_intrinsics, const image::image& input_image_grey) {
+        frame(const sensor::pinhole camera_intrinsics, const image::image& input_image_grey) {
             this->id = frame::id_generator++;
-            this->rotation = matrix::matrix<double, 3, 3>::identity();
-            this->translation = matrix::matrix<double, 3, 1>::zero();
+            this->rotation = math::matrix<double, 3, 3>::identity();
+            this->translation = math::matrix<double, 3, 1>::zero();
             this->camera = camera_intrinsics;
 
             // Pyramid.

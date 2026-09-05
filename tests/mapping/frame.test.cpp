@@ -38,11 +38,11 @@ int main(int argc, char* argv[]) {
     static_cast<void>(argv);
 
     {
-        frame::frame frame;
+        mapping::frame frame;
     }
     {
-        const matrix::matrix<double, 3, 3> intrinsics = { { { 1.0, 0.0, 0.5 }, { 0.0, 1.0, 0.5 }, { 0.0, 0.0, 1.0 } } };
-        camera::pinhole camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }.data(), 4);
+        const math::matrix<double, 3, 3> intrinsics = { { { 1.0, 0.0, 0.5 }, { 0.0, 1.0, 0.5 }, { 0.0, 0.0, 1.0 } } };
+        sensor::pinhole camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }.data(), 4);
         image::image image(256, 256);
         for (size_t i = 0; i < image.get_rows(); ++i) {
             for (size_t j = 0; j < image.get_cols(); ++j) {
@@ -54,13 +54,13 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
-        frame::frame frame_0(camera, image);
+        mapping::frame frame_0(camera, image);
         REQUIRE(frame_0.id == 0);
     }
 
     {
-        const matrix::matrix<double, 3, 3> intrinsics = { { { 1.0, 0.0, 0.5 }, { 0.0, 1.0, 0.5 }, { 0.0, 0.0, 1.0 } } };
-        camera::pinhole camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }.data(), 4);
+        const math::matrix<double, 3, 3> intrinsics = { { { 1.0, 0.0, 0.5 }, { 0.0, 1.0, 0.5 }, { 0.0, 0.0, 1.0 } } };
+        sensor::pinhole camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }.data(), 4);
 
         image::image tiny(16, 16);
         for (size_t i = 0; i < tiny.get_rows(); ++i) {
@@ -68,7 +68,7 @@ int main(int argc, char* argv[]) {
                 tiny.get_data()[i * tiny.get_cols() + j] = static_cast<unsigned char>((i * 16 + j) % 256);
             }
         }
-        frame::frame frame_tiny(camera, tiny);
+        mapping::frame frame_tiny(camera, tiny);
         REQUIRE(frame_tiny.image_pyramid.size() >= 1);
         REQUIRE(frame_tiny.keypoint_pyramid.size() >= 1);
         REQUIRE(frame_tiny.descriptor_pyramid.size() >= 1);
@@ -79,7 +79,7 @@ int main(int argc, char* argv[]) {
                 small.get_data()[i * small.get_cols() + j] = static_cast<unsigned char>((i + j) % 256);
             }
         }
-        frame::frame frame_small(camera, small);
+        mapping::frame frame_small(camera, small);
         REQUIRE(frame_small.image_pyramid.size() >= 1);
         REQUIRE(frame_small.keypoint_pyramid.size() >= 1);
         REQUIRE(frame_small.descriptor_pyramid.size() >= 1);

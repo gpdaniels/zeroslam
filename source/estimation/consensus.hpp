@@ -25,7 +25,7 @@ namespace {
     using size_t = decltype(sizeof(0));
 }
 
-namespace consensus {
+namespace estimation {
     template <size_t template_sample_size>
     class sampler_base {
     private:
@@ -276,7 +276,7 @@ namespace consensus {
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
-namespace consensus {
+namespace estimation {
     template <size_t sample_size>
     class random final
         : public sampler_base<sample_size> {
@@ -330,7 +330,7 @@ namespace consensus {
     };
 }
 
-namespace consensus {
+namespace estimation {
     template <typename scalar_type>
     class xy {
     public:
@@ -357,7 +357,7 @@ namespace consensus {
     };
 }
 
-namespace consensus {
+namespace estimation {
     template <typename scalar_type>
     struct model_essential {
         scalar_type essential[3][3];
@@ -400,7 +400,7 @@ namespace consensus {
                 data[4].rhs.y,
             };
             scalar_type essentials[10][3][3];
-            const size_t generated_models_count = static_cast<size_t>(pose_estimation::essential_5_point(&lhs[0], &rhs[0], &essentials[0][0][0]));
+            const size_t generated_models_count = static_cast<size_t>(estimation::essential_5_point(&lhs[0], &rhs[0], &essentials[0][0][0]));
             for (size_t i = 0; i < generated_models_count; ++i) {
                 for (size_t y = 0; y < 3; ++y) {
                     for (size_t x = 0; x < 3; ++x) {
@@ -470,7 +470,7 @@ namespace consensus {
     };
 }
 
-namespace consensus {
+namespace estimation {
     template <typename scalar_type>
     struct model_p3p {
         scalar_type rotation[3][3];
@@ -510,7 +510,7 @@ namespace consensus {
 
             scalar_type rotations[4][9];
             scalar_type translations[4][3];
-            const size_t generated_models_count = static_cast<size_t>(pose_estimation::perspective_3_point(lhs_normalized, rhs, rotations, translations));
+            const size_t generated_models_count = static_cast<size_t>(estimation::perspective_3_point(lhs_normalized, rhs, rotations, translations));
             for (size_t i = 0; i < generated_models_count; ++i) {
                 for (size_t y = 0; y < 3; ++y) {
                     for (size_t x = 0; x < 3; ++x) {
@@ -587,7 +587,7 @@ namespace consensus {
     };
 }
 
-namespace consensus {
+namespace estimation {
     class inlier_support final
         : public evaluator_base {
     private:
@@ -620,7 +620,7 @@ namespace consensus {
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
-namespace consensus {
+namespace estimation {
     static inline bool solve_ransac_essential(const correspondence_2d_2d<double>* correspondences, size_t data_size, float* residuals, size_t* inliers, size_t& inliers_size, model_essential<double>& model) {
         const float probability_failure = 0.01f;
         const size_t iterations_minimum = 5;

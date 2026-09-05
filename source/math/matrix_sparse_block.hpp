@@ -36,7 +36,7 @@ namespace {
     using size_t = decltype(sizeof(0));
 }
 
-namespace matrix {
+namespace math {
     template <size_t template_block_rows, size_t template_block_cols>
     class sparse_block final {
     public:

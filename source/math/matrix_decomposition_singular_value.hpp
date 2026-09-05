@@ -24,7 +24,7 @@ namespace {
     using size_t = decltype(sizeof(0));
 }
 
-namespace matrix {
+namespace math {
     /// @brief  Compute the singular value decomposition of a matrix, A = U * S * Vt.
     /// @param  matrix_a Input matrix to decompose, matrix size (width x height), row-major.
     /// @param  width Number of columns of the input matrix, must be non-zero.

@@ -69,7 +69,7 @@ int main(int argc, char* argv[]) {
         };
 
         class line_estimator final
-            : public consensus::estimator_base<xy, 2, line, 1> {
+            : public estimation::estimator_base<xy, 2, line, 1> {
         public:
             virtual std::size_t generate_models(const data_type* const __restrict data, std::size_t data_size, model_type* const __restrict models) override final {
                 REQUIRE(data_size == 2);
@@ -132,11 +132,11 @@ int main(int argc, char* argv[]) {
         const std::size_t iterations_maximum = 100;
         const float residual_threshold = 0.1f;
 
-        consensus::random<2> random;
+        estimation::random<2> random;
         line_estimator estimator;
-        consensus::inlier_support inlier_support(residual_threshold);
+        estimation::inlier_support inlier_support(residual_threshold);
 
-        consensus::consensus<consensus::random<2>, line_estimator, consensus::inlier_support> consensus(
+        estimation::consensus<estimation::random<2>, line_estimator, estimation::inlier_support> consensus(
             random,
             estimator,
             inlier_support,
@@ -268,7 +268,7 @@ int main(int argc, char* argv[]) {
             { -0.25, -0.35, 7.0 },
             { 0.6, 0.4, 3.3 }
         };
-        consensus::correspondence_2d_2d<double> data[correspondence_count];
+        estimation::correspondence_2d_2d<double> data[correspondence_count];
         for (int i = 0; i < inlier_count; ++i) {
             double point[2];
             project_point(identity, zero, &world_points[i][0], point);
@@ -291,9 +291,9 @@ int main(int argc, char* argv[]) {
         float residuals[correspondence_count];
         size_t inliers[correspondence_count];
         size_t inliers_size = 0;
-        consensus::model_essential<double> model{};
+        estimation::model_essential<double> model{};
 
-        bool ok = consensus::solve_ransac_essential(
+        bool ok = estimation::solve_ransac_essential(
             data,
             correspondence_count,
             residuals,
@@ -398,7 +398,7 @@ int main(int argc, char* argv[]) {
             { 0.0, 0.0, 6.0 },
         };
 
-        consensus::correspondence_2d_3d<double> data[correspondence_count];
+        estimation::correspondence_2d_3d<double> data[correspondence_count];
         for (int i = 0; i < inlier_count; ++i) {
             double point[2];
             project_point(gt_rotation, gt_translation, &world_points[i][0], point);
@@ -419,9 +419,9 @@ int main(int argc, char* argv[]) {
         float residuals[correspondence_count];
         size_t inliers[correspondence_count];
         size_t inliers_size = 0;
-        consensus::model_p3p<double> model{};
+        estimation::model_p3p<double> model{};
 
-        bool ok = consensus::solve_ransac_p3p(
+        bool ok = estimation::solve_ransac_p3p(
             data,
             correspondence_count,
             residuals,
@@ -549,7 +549,7 @@ int main(int argc, char* argv[]) {
             { 1.0, 1.6 },
         };
 
-        consensus::correspondence_2d_3d<double> data[correspondence_count];
+        estimation::correspondence_2d_3d<double> data[correspondence_count];
         for (int i = 0; i < inlier_count; ++i) {
             double point[2];
             project_point(gt_rotation, gt_translation, &world_points[i][0], point);
@@ -573,9 +573,9 @@ int main(int argc, char* argv[]) {
         float residuals[correspondence_count];
         size_t inliers[correspondence_count];
         size_t inliers_size = 0;
-        consensus::model_p3p<double> model{};
+        estimation::model_p3p<double> model{};
 
-        bool ok = consensus::solve_ransac_p3p(
+        bool ok = estimation::solve_ransac_p3p(
             data,
             correspondence_count,
             residuals,

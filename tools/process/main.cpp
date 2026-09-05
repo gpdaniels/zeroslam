@@ -76,13 +76,13 @@ inline unsigned char* file_load(const char* path, std::size_t& length) {
     return data;
 }
 
-inline bool save_trajectory_as_txt(const char* path, const map::map& reconstruction, const std::vector<long long>& timestamps) {
+inline bool save_trajectory_as_txt(const char* path, const mapping::map& reconstruction, const std::vector<long long>& timestamps) {
     gtl::file output(path, gtl::file::access_type::write_only, gtl::file::creation_type::create_or_open, gtl::file::cursor_type::start_of_truncated);
     if (!output.is_open()) {
         return false;
     }
 
-    const std::map<int, frame::frame> ordered_frames(reconstruction.frames.begin(), reconstruction.frames.end());
+    const std::map<int, mapping::frame> ordered_frames(reconstruction.frames.begin(), reconstruction.frames.end());
 
     // Write camera trajectory in TUM format.
     for (const auto& [id, frame] : ordered_frames) {
@@ -90,8 +90,8 @@ inline bool save_trajectory_as_txt(const char* path, const map::map& reconstruct
         const auto& t = frame.translation;
 
         // Camera centre in world coordinates.
-        matrix::matrix<double, 3, 1> centre = -matrix::transpose(R) * t;
-        matrix::matrix<double, 4, 1> rotation = lie::so3<double>(R).get_quaternion();
+        math::matrix<double, 3, 1> centre = -math::transpose(R) * t;
+        math::matrix<double, 4, 1> rotation = math::so3<double>(R).get_quaternion();
 
         // Write camera pose.
         if ((id < 0) || (static_cast<size_t>(id) >= timestamps.size())) {
@@ -114,7 +114,7 @@ inline bool save_trajectory_as_txt(const char* path, const map::map& reconstruct
     return true;
 }
 
-inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, int image_height, const map::map& reconstruction) {
+inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, int image_height, const mapping::map& reconstruction) {
     // Camera colour (blue for trajectory).
     constexpr static const unsigned char cam_r = 0;
     constexpr static const unsigned char cam_g = 255;
@@ -214,17 +214,17 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
             { static_cast<double>(image_width), static_cast<double>(image_height) },
             { 0, static_cast<double>(image_height) }
         };
-        matrix::matrix<double, 3, 1> corners[4];
+        math::matrix<double, 3, 1> corners[4];
         for (int i = 0; i < 4; ++i) {
             frame.camera.unproject(&image_corners[i][0], corners[i].data());
             corners[i] = corners[i] * frustum_scale;
         }
 
         // Camera centre in world coordinates.
-        matrix::matrix<double, 3, 1> centre = -matrix::transpose(R) * t;
-        matrix::matrix<double, 3, 1> world_corners[4];
+        math::matrix<double, 3, 1> centre = -math::transpose(R) * t;
+        math::matrix<double, 3, 1> world_corners[4];
         for (int i = 0; i < 4; ++i) {
-            world_corners[i] = matrix::transpose(R) * corners[i] + centre;
+            world_corners[i] = math::transpose(R) * corners[i] + centre;
         }
 
         // Write camera centre.
@@ -419,9 +419,9 @@ int main(int argc, char* argv[]) {
                 std::printf("Starting frame %zu\n", frames + 1);
             }
             std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-            matrix::matrix<double, 3, 3> intrinsic = { { { fx, 0.0, cx },
-                                                         { 0.0, fy, cy },
-                                                         { 0.0, 0.0, 1.0 } } };
+            math::matrix<double, 3, 3> intrinsic = { { { fx, 0.0, cx },
+                                                       { 0.0, fy, cy },
+                                                       { 0.0, 0.0, 1.0 } } };
             image::image frame(rows, cols, image.data.data());
             slam.process_frame(intrinsic, frame);
             std::chrono::duration<double> frame_duration = std::chrono::steady_clock::now() - start;

@@ -62,7 +62,7 @@ public:
 class world {
 private:
     struct triangle {
-        matrix::matrix<double, 3, 1> v0, v1, v2;
+        math::matrix<double, 3, 1> v0, v1, v2;
         unsigned char intensity;
     };
 
@@ -102,7 +102,7 @@ public:
     }
 
 private:
-    static bool project_point(const matrix::matrix<double, 3, 3>& intrinsics, const matrix::matrix<double, 3, 1>& point, double& u, double& v) {
+    static bool project_point(const math::matrix<double, 3, 3>& intrinsics, const math::matrix<double, 3, 1>& point, double& u, double& v) {
         if (point[2] <= 0.01) {
             return false;
         }
@@ -113,7 +113,7 @@ private:
 
     void add_cube(double cx, double cy, double cz, double size, unsigned char base_intensity) {
         const double s = size / 2.0;
-        matrix::matrix<double, 3, 1> v[8] = {
+        math::matrix<double, 3, 1> v[8] = {
             { { cx - s, cy - s, cz - s } },
             { { cx + s, cy - s, cz - s } },
             { { cx + s, cy + s, cz - s } },
@@ -234,14 +234,14 @@ private:
     }
 
 public:
-    void render_frame(const lie::se3<double>& pose, const matrix::matrix<double, 3, 3>& intrinsics, image::image& img) {
+    void render_frame(const math::se3<double>& pose, const math::matrix<double, 3, 3>& intrinsics, image::image& img) {
         unsigned char* data = img.get_data();
         std::fill(data, data + image_width * image_height, static_cast<unsigned char>(0));
         std::vector<double> depth_buffer(static_cast<size_t>(image_width * image_height), std::numeric_limits<double>::max());
         for (const triangle& triangle : scene) {
-            const matrix::matrix<double, 3, 1> v0_cam = pose * triangle.v0;
-            const matrix::matrix<double, 3, 1> v1_cam = pose * triangle.v1;
-            const matrix::matrix<double, 3, 1> v2_cam = pose * triangle.v2;
+            const math::matrix<double, 3, 1> v0_cam = pose * triangle.v0;
+            const math::matrix<double, 3, 1> v1_cam = pose * triangle.v1;
+            const math::matrix<double, 3, 1> v2_cam = pose * triangle.v2;
             if ((v0_cam[2] <= 0.01) && (v1_cam[2] <= 0.01) && (v2_cam[2] <= 0.01)) {
                 continue;
             }
@@ -308,7 +308,7 @@ inline bool ppm_save(const std::string& filepath, std::size_t width, std::size_t
     return true;
 }
 
-inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, int image_height, const map::map& reconstruction) {
+inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, int image_height, const mapping::map& reconstruction) {
     // Camera colour (blue for trajectory).
     constexpr static const unsigned char cam_r = 0;
     constexpr static const unsigned char cam_g = 255;
@@ -386,17 +386,17 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
             { static_cast<double>(image_width), static_cast<double>(image_height) },
             { 0, static_cast<double>(image_height) }
         };
-        matrix::matrix<double, 3, 1> corners[4];
+        math::matrix<double, 3, 1> corners[4];
         for (int i = 0; i < 4; ++i) {
             frame.camera.unproject(&image_corners[i][0], corners[i].data());
             corners[i] = corners[i] * frustum_scale;
         }
 
         // Camera centre in world coordinates.
-        matrix::matrix<double, 3, 1> centre = -matrix::transpose(R) * t;
-        matrix::matrix<double, 3, 1> world_corners[4];
+        math::matrix<double, 3, 1> centre = -math::transpose(R) * t;
+        math::matrix<double, 3, 1> world_corners[4];
         for (int i = 0; i < 4; ++i) {
-            world_corners[i] = matrix::transpose(R) * corners[i] + centre;
+            world_corners[i] = math::transpose(R) * corners[i] + centre;
         }
 
         // Write camera centre.
@@ -449,7 +449,7 @@ int main(int argc, char* argv[]) {
     const int width = 640;
     const int height = 480;
 
-    matrix::matrix<double, 3, 3> intrinsics;
+    math::matrix<double, 3, 3> intrinsics;
     intrinsics[0][0] = 500;
     intrinsics[0][1] = 0;
     intrinsics[0][2] = width / 2;
@@ -460,15 +460,15 @@ int main(int argc, char* argv[]) {
     intrinsics[2][1] = 0;
     intrinsics[2][2] = 1;
 
-    std::vector<lie::se3<double>> trajectory;
+    std::vector<math::se3<double>> trajectory;
     for (int i = 0; i < 10; i++) {
-        trajectory.push_back({ lie::so3<double>::rotation(0, 0, 0), { { i * 0.015, 0, 0 } } });
+        trajectory.push_back({ math::so3<double>::rotation(0, 0, 0), { { i * 0.015, 0, 0 } } });
     }
 
     world renderer(width, height);
     slam system;
 
-    for (const lie::se3<double>& pose : trajectory) {
+    for (const math::se3<double>& pose : trajectory) {
         image::image frame(width, height);
         renderer.render_frame(pose, intrinsics, frame);
         system.process_frame(intrinsics, frame);
@@ -493,8 +493,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    const frame::frame& f0 = system.reconstruction.frames[0];
-    const frame::frame& f9 = system.reconstruction.frames[9];
+    const mapping::frame& f0 = system.reconstruction.frames[0];
+    const mapping::frame& f9 = system.reconstruction.frames[9];
     const double dz = f9.translation[2] - f0.translation[2];
     const double dy = f9.translation[1] - f0.translation[1];
     const double dx = f9.translation[0] - f0.translation[0];

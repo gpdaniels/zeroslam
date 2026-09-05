@@ -36,21 +36,21 @@ int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
     {
-        landmark::point p;
+        mapping::point p;
     }
     {
-        landmark::point p0({ { 1, 2, 3 } }, { { 4, 5, 6 } });
+        mapping::point p0({ { 1, 2, 3 } }, { { 4, 5, 6 } });
         REQUIRE(p0.id == 0);
-        landmark::point p1({ { 4, 5, 6 } }, { { 7, 8, 9 } });
+        mapping::point p1({ { 4, 5, 6 } }, { { 7, 8, 9 } });
         REQUIRE(p1.id == 1);
     }
     {
-        landmark::line l;
+        mapping::line l;
     }
     {
-        landmark::line l0({ { 1, 2, 3 } }, { { 1, 2, 3 } });
+        mapping::line l0({ { 1, 2, 3 } }, { { 1, 2, 3 } });
         REQUIRE(l0.id == 0);
-        landmark::line l1({ { 4, 5, 6 } }, { { 4, 5, 6 } });
+        mapping::line l1({ { 4, 5, 6 } }, { { 4, 5, 6 } });
         REQUIRE(l1.id == 1);
     }
 

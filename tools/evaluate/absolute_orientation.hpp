@@ -125,7 +125,7 @@ static bool compute_rotation_matrix(
     double singular_value_s[3][3];
     double singular_value_vt[3][3];
 
-    if (!matrix::decompose_singular_value(
+    if (!math::decompose_singular_value(
             &covariance_matrix[0][0],
             3,
             3,
@@ -214,7 +214,7 @@ static bool compute_optimal_scale(
         }
     }
 
-    if (!matrix::decompose_singular_value(
+    if (!math::decompose_singular_value(
             &covariance_copy[0][0],
             3,
             3,

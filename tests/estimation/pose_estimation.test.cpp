@@ -176,7 +176,7 @@ int main(int argc, char* argv[]) {
         matrix_multiply(translation_matrix, &rotation[0][0], expected);
         normalize_matrix(expected);
         double essential[9];
-        pose_estimation::essential_matrix<double>::compose(&rotation[0][0], translation, essential);
+        estimation::essential_matrix<double>::compose(&rotation[0][0], translation, essential);
         normalize_matrix(essential);
         REQUIRE(are_values_approx(essential, expected, 9, 1e-10));
     }
@@ -200,7 +200,7 @@ int main(int argc, char* argv[]) {
         double rotation_1[9];
         double translation_0[3];
         double translation_1[3];
-        pose_estimation::essential_matrix<double>::decompose(expected, rotation_0, rotation_1, translation_0, translation_1);
+        estimation::essential_matrix<double>::decompose(expected, rotation_0, rotation_1, translation_0, translation_1);
 
         // Rotations should be orthonormal.
         REQUIRE(is_rotation_matrix(rotation_0));
@@ -294,7 +294,7 @@ int main(int argc, char* argv[]) {
 
         // Call essential_5_point
         double essentials[10 * 9] = {};
-        int solutions = pose_estimation::essential_5_point<double>(lhs_points, rhs_points, essentials);
+        int solutions = estimation::essential_5_point<double>(lhs_points, rhs_points, essentials);
         REQUIRE(solutions >= 1);
         REQUIRE(solutions <= 10);
 
@@ -363,7 +363,7 @@ int main(int argc, char* argv[]) {
             }
 
             double essentials[10 * 9] = {};
-            const int solutions = pose_estimation::essential_5_point<double>(lhs_points, rhs_points, essentials);
+            const int solutions = estimation::essential_5_point<double>(lhs_points, rhs_points, essentials);
             REQUIRE(solutions >= 1);
             REQUIRE(solutions <= 10);
 
@@ -386,7 +386,7 @@ int main(int argc, char* argv[]) {
             // Repeating the exact same call must give the exact same result (the factorize-once
             // decomposition is a pure function of its input, so this must hold bit-for-bit).
             double essentials_repeat[10 * 9] = {};
-            const int solutions_repeat = pose_estimation::essential_5_point<double>(lhs_points, rhs_points, essentials_repeat);
+            const int solutions_repeat = estimation::essential_5_point<double>(lhs_points, rhs_points, essentials_repeat);
             REQUIRE(solutions_repeat == solutions);
             for (int i = 0; i < solutions * 9; ++i) {
                 REQUIRE(essentials[i] == essentials_repeat[i]);
@@ -453,7 +453,7 @@ int main(int argc, char* argv[]) {
         double recovered_translation[3];
         double points_xyz[point_count * 3] = {};
         size_t support_count = 0;
-        const bool recovered = pose_estimation::essential_matrix<double>::recover_pose(essential, lhs_points, rhs_points, static_cast<size_t>(point_count), recovered_rotation, recovered_translation, points_xyz, &support_count);
+        const bool recovered = estimation::essential_matrix<double>::recover_pose(essential, lhs_points, rhs_points, static_cast<size_t>(point_count), recovered_rotation, recovered_translation, points_xyz, &support_count);
         REQUIRE(recovered);
         REQUIRE(support_count == static_cast<size_t>(point_count));
 
@@ -539,7 +539,7 @@ int main(int argc, char* argv[]) {
 
         double p3p_rotations[4][9];
         double p3p_translations[4][3];
-        int n_solutions = pose_estimation::perspective_3_point(bearing_vectors, world_points, p3p_rotations, p3p_translations);
+        int n_solutions = estimation::perspective_3_point(bearing_vectors, world_points, p3p_rotations, p3p_translations);
 
         REQUIRE(n_solutions >= 1);
         REQUIRE(n_solutions <= 4);
@@ -621,7 +621,7 @@ int main(int argc, char* argv[]) {
 
         double p3p_rotations[4][9];
         double p3p_translations[4][3];
-        int n_solutions = pose_estimation::perspective_3_point(bearing_vectors, world_points, p3p_rotations, p3p_translations);
+        int n_solutions = estimation::perspective_3_point(bearing_vectors, world_points, p3p_rotations, p3p_translations);
 
         REQUIRE(n_solutions >= 1);
 
@@ -689,7 +689,7 @@ int main(int argc, char* argv[]) {
 
         double p3p_rotations[4][9];
         double p3p_translations[4][3];
-        int n_solutions = pose_estimation::perspective_3_point(bearing_vectors, world_points, p3p_rotations, p3p_translations);
+        int n_solutions = estimation::perspective_3_point(bearing_vectors, world_points, p3p_rotations, p3p_translations);
 
         REQUIRE(n_solutions >= 1);
         REQUIRE(n_solutions <= 4);
@@ -754,13 +754,13 @@ int main(int argc, char* argv[]) {
         for (int axis = 0; axis < 3; ++axis) {
             double expected_translation[3] = { axis_translations[axis][0], axis_translations[axis][1], axis_translations[axis][2] };
             double essential[9];
-            pose_estimation::essential_matrix<double>::compose(identity, expected_translation, essential);
+            estimation::essential_matrix<double>::compose(identity, expected_translation, essential);
 
             double rotation_0[9];
             double rotation_1[9];
             double translation_0[3];
             double translation_1[3];
-            pose_estimation::essential_matrix<double>::decompose(essential, rotation_0, rotation_1, translation_0, translation_1);
+            estimation::essential_matrix<double>::decompose(essential, rotation_0, rotation_1, translation_0, translation_1);
 
             // All outputs must be finite.
             for (int i = 0; i < 9; ++i) {
@@ -866,7 +866,7 @@ int main(int argc, char* argv[]) {
         double recovered_translation[3];
         double points_xyz[point_count * 3] = {};
         size_t support_count = 0;
-        const bool recovered = pose_estimation::essential_matrix<double>::recover_pose(essential, lhs_points, rhs_points, static_cast<size_t>(point_count), recovered_rotation, recovered_translation, points_xyz, &support_count);
+        const bool recovered = estimation::essential_matrix<double>::recover_pose(essential, lhs_points, rhs_points, static_cast<size_t>(point_count), recovered_rotation, recovered_translation, points_xyz, &support_count);
         REQUIRE(recovered);
         // At this distance the triangulation is imprecise for some points, but a majority must still support the winner.
         REQUIRE(support_count * 2 >= static_cast<size_t>(point_count));
@@ -940,7 +940,7 @@ int main(int argc, char* argv[]) {
         }
 
         double essentials[10 * 9] = {};
-        int solutions = pose_estimation::essential_5_point<double>(lhs_points, rhs_points, essentials);
+        int solutions = estimation::essential_5_point<double>(lhs_points, rhs_points, essentials);
         REQUIRE(solutions >= 0);
         REQUIRE(solutions <= 10);
 
@@ -966,7 +966,7 @@ int main(int argc, char* argv[]) {
         double degenerate_lhs_points[10] = {};
         double degenerate_rhs_points[10] = {};
         double degenerate_essentials[10 * 9] = {};
-        solutions = pose_estimation::essential_5_point<double>(degenerate_lhs_points, degenerate_rhs_points, degenerate_essentials);
+        solutions = estimation::essential_5_point<double>(degenerate_lhs_points, degenerate_rhs_points, degenerate_essentials);
         REQUIRE(solutions == 0);
     }
 

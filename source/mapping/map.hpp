@@ -35,7 +35,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(pop)
 #endif
 
-namespace map {
+namespace mapping {
     class map {
     public:
         template <class type_lhs, class type_rhs>
@@ -46,20 +46,20 @@ namespace map {
         };
 
     public:
-        std::unordered_map<int, frame::frame> frames;
-        std::unordered_map<int, landmark::point> landmarks;
-        std::unordered_map<decltype(landmark::point::id), std::vector<observation<decltype(frame::frame::id), size_t>>> observations;
+        std::unordered_map<int, mapping::frame> frames;
+        std::unordered_map<int, mapping::point> landmarks;
+        std::unordered_map<decltype(mapping::point::id), std::vector<observation<decltype(mapping::frame::id), size_t>>> observations;
 
     public:
-        void add_frame(const frame::frame& frame) {
+        void add_frame(const mapping::frame& frame) {
             frames[frame.id] = frame;
         }
 
-        void add_landmark(const landmark::point& landmark) {
+        void add_landmark(const mapping::point& landmark) {
             this->landmarks[landmark.id] = landmark;
         }
 
-        void add_observation(const frame::frame& frame, const landmark::point& landmark, size_t kp_index) {
+        void add_observation(const mapping::frame& frame, const mapping::point& landmark, size_t kp_index) {
             this->observations[landmark.id].push_back({ frame.id, kp_index });
         }
 
@@ -67,17 +67,17 @@ namespace map {
             if (this->frames.empty()) {
                 return;
             }
-            std::unordered_map<int, factor_graph::vertex_base*> camera_vertexes;
-            std::unordered_map<int, factor_graph::vertex_base*> landmark_vertexes;
-            std::unordered_map<int, factor_graph::edge_base*> observation_edges;
+            std::unordered_map<int, optimisation::vertex_base*> camera_vertexes;
+            std::unordered_map<int, optimisation::vertex_base*> landmark_vertexes;
+            std::unordered_map<int, optimisation::edge_base*> observation_edges;
             // Get camera parameters.
             double camera_parameters[4];
             this->frames.begin()->second.camera.get_parameters(camera_parameters, 4);
             // Setup ba.
-            factor_graph::loss_function_base* lossfunction = new factor_graph::loss_huber(math::sqrt(5.991));
-            factor_graph::factor_graph ba(false);
+            optimisation::loss_function_base* lossfunction = new optimisation::loss_huber(math::sqrt(5.991));
+            optimisation::factor_graph ba(false);
             // Add frames.
-            const int local_window_below = frame::frame::id_generator - 1 - local_window;
+            const int local_window_below = mapping::frame::id_generator - 1 - local_window;
             const int local_window_fixed_below = local_window_below + 1;
             // Determine relevant frames and landmarks.
             std::unordered_set<int> relevant_frame_ids;
@@ -93,7 +93,7 @@ namespace map {
                 }
 
                 // Find landmarks seen by active frames and identify all frames that see them within a fixed horizon.
-                const int current_frame_id = frame::frame::id_generator - 1;
+                const int current_frame_id = mapping::frame::id_generator - 1;
                 const int fixed_horizon_limit = 2 * local_window;
                 const int horizon_threshold = current_frame_id - fixed_horizon_limit;
 
@@ -131,10 +131,10 @@ namespace map {
             int non_fixed_poses = 0;
             for (const auto& frame_id : relevant_frame_ids) {
                 const auto& frame = this->frames.at(frame_id);
-                const lie::se3<double> v_se3(frame.rotation, frame.translation);
+                const math::se3<double> v_se3(frame.rotation, frame.translation);
                 const bool fixed = ((frame_id == 0) || (frame_id == 1 && this->frames.size() > 2) || ((local_window > 0) && (frame_id < local_window_fixed_below)));
-                factor_graph::vertex_base* c = new factor_graph::vertex_pose();
-                c->set_parameters(matrix::matrix<double, 0, 0>(7, 1, matrix::matrix<double, 7, 1>{ { v_se3.translation()[0], v_se3.translation()[1], v_se3.translation()[2], v_se3.rotation().get_quaternion()[1], v_se3.rotation().get_quaternion()[2], v_se3.rotation().get_quaternion()[3], v_se3.rotation().get_quaternion()[0] } }.data()));
+                optimisation::vertex_base* c = new optimisation::vertex_pose();
+                c->set_parameters(math::matrix<double, 0, 0>(7, 1, math::matrix<double, 7, 1>{ { v_se3.translation()[0], v_se3.translation()[1], v_se3.translation()[2], v_se3.rotation().get_quaternion()[1], v_se3.rotation().get_quaternion()[2], v_se3.rotation().get_quaternion()[3], v_se3.rotation().get_quaternion()[0] } }.data()));
                 c->set_fixed(fixed);
                 ba.add_vertex(c);
                 camera_vertexes[frame_id] = c;
@@ -157,8 +157,8 @@ namespace map {
                     // Given that we're adding at least one edge, make sure the landmark has been added.
                     if (!landmark_added) {
                         landmark_added = true;
-                        factor_graph::vertex_base* l = new factor_graph::vertex_point_xyz();
-                        l->set_parameters(matrix::matrix<double, 0, 0>(3, 1, this->landmarks.at(landmark_id).location.data()));
+                        optimisation::vertex_base* l = new optimisation::vertex_point_xyz();
+                        l->set_parameters(math::matrix<double, 0, 0>(3, 1, this->landmarks.at(landmark_id).location.data()));
                         l->set_fixed(fix_landmarks);
                         l->set_marginalised(true);
                         ba.add_vertex(l);
@@ -166,10 +166,10 @@ namespace map {
                         non_fixed_landmarks += (fix_landmarks == false);
                     }
                     // Now add the edge.
-                    const frame::frame& frame = frames.at(frame_id);
-                    camera::pinhole camera_model(camera_parameters, 4);
-                    factor_graph::edge_base* m = new factor_graph::edge_reprojection<camera::pinhole>(camera_model);
-                    m->set_observation(matrix::matrix<double, 0, 0>(2, 1, matrix::matrix<double, 2, 1>{ { static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].x), static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].y) } }.data()));
+                    const mapping::frame& frame = frames.at(frame_id);
+                    sensor::pinhole camera_model(camera_parameters, 4);
+                    optimisation::edge_base* m = new optimisation::edge_reprojection<sensor::pinhole>(camera_model);
+                    m->set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].x), static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].y) } }.data()));
                     m->add_vertex(camera_vertexes[frame_id]);
                     m->add_vertex(landmark_vertexes[landmark_id]);
                     m->set_loss_function(lossfunction);
@@ -239,15 +239,15 @@ namespace map {
             std::printf("Optimised: %f to %f error [frames: %d landmarks: %d edges: %d] [%d/%d valid rounds]\n", initial_chi, ba.get_current_chi(), non_fixed_poses, non_fixed_landmarks, non_fixed_edges, number_of_accepted_rounds, rounds);
             // Apply optimised vertices to frames and landmarks.
             for (const auto& [frame_id, vertex] : camera_vertexes) {
-                frame::frame& frame = frames.at(frame_id);
-                matrix::matrix<double, 0, 0> p = vertex->get_parameters();
-                const lie::se3<double> v_se3 = lie::se3<double>(lie::so3<double>(p[6][0], p[3][0], p[4][0], p[5][0]), { { p[0][0], p[1][0], p[2][0] } });
+                mapping::frame& frame = frames.at(frame_id);
+                math::matrix<double, 0, 0> p = vertex->get_parameters();
+                const math::se3<double> v_se3 = math::se3<double>(math::so3<double>(p[6][0], p[3][0], p[4][0], p[5][0]), { { p[0][0], p[1][0], p[2][0] } });
                 frame.rotation = v_se3.rotation().get_matrix();
                 frame.translation = v_se3.translation();
             }
             for (const auto& [landmark_id, vertex] : landmark_vertexes) {
-                landmark::point& landmark = this->landmarks.at(landmark_id);
-                matrix::matrix<double, 0, 0> p = vertex->get_parameters();
+                mapping::point& landmark = this->landmarks.at(landmark_id);
+                math::matrix<double, 0, 0> p = vertex->get_parameters();
                 landmark.location[0] = p[0][0];
                 landmark.location[1] = p[1][0];
                 landmark.location[2] = p[2][0];
@@ -270,8 +270,8 @@ namespace map {
 
         void cull() {
             const size_t landmarks_before_cull = this->landmarks.size();
-            for (std::unordered_map<int, landmark::point>::iterator it = this->landmarks.begin(); it != this->landmarks.end();) {
-                if ((it->first + 500) < landmark::point::id_generator) {
+            for (std::unordered_map<int, mapping::point>::iterator it = this->landmarks.begin(); it != this->landmarks.end();) {
+                if ((it->first + 500) < mapping::point::id_generator) {
                     ++it;
                     continue;
                 }
@@ -282,7 +282,7 @@ namespace map {
                 }
                 const std::vector<observation<int, size_t>>& landmark_observations = observations_it->second;
                 const bool not_seen_in_many_frames = landmark_observations.size() <= 4;
-                const bool not_seen_recently = landmark_observations.empty() || ((landmark_observations.back().first + 7) < frame::frame::id_generator);
+                const bool not_seen_recently = landmark_observations.empty() || ((landmark_observations.back().first + 7) < mapping::frame::id_generator);
                 if (not_seen_in_many_frames && not_seen_recently) {
                     this->observations.erase(it->first);
                     it = this->landmarks.erase(it);
@@ -291,14 +291,14 @@ namespace map {
                 float reprojection_error = 0.0f;
                 size_t processed_observations = 0;
                 for (const auto& [frame_id, kp_index] : landmark_observations) {
-                    const std::unordered_map<int, frame::frame>::const_iterator frame_it = this->frames.find(frame_id);
+                    const std::unordered_map<int, mapping::frame>::const_iterator frame_it = this->frames.find(frame_id);
                     if (frame_it == this->frames.end()) {
                         continue;
                     }
-                    const frame::frame& frame = frame_it->second;
-                    const matrix::matrix<double, 2, 1> measured = { { static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].x), static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].y) } };
-                    const matrix::matrix<double, 3, 1> mapped = (frame.rotation * it->second.location) + frame.translation;
-                    matrix::matrix<double, 2, 1> reprojected;
+                    const mapping::frame& frame = frame_it->second;
+                    const math::matrix<double, 2, 1> measured = { { static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].x), static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].y) } };
+                    const math::matrix<double, 3, 1> mapped = (frame.rotation * it->second.location) + frame.translation;
+                    math::matrix<double, 2, 1> reprojected;
                     if (!frame.camera.project(mapped.data(), reprojected.data())) {
                         reprojection_error += 5.991f;
                     }
