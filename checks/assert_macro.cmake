@@ -35,8 +35,8 @@ GET_PROJECT_FILES(SOURCE_FILES
 )
 
 # The project has one assert macro, ASSERT in the assert header.
-SET(ASSERT_HEADER "source/assert.hpp")
-SET(ASSERT_INCLUDE "#include \"assert.hpp\"")
+SET(ASSERT_HEADER "source/core/assert.hpp")
+SET(ASSERT_INCLUDE "#include \"core/assert.hpp\"")
 
 # The build files are not code.
 LIST(FILTER SOURCE_FILES EXCLUDE REGEX "(^|/)CMakeLists[.]txt$")

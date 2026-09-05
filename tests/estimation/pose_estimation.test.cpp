@@ -1,0 +1,974 @@
+/*
+Copyright (C) 2026 Geoffrey Daniels. https://gpdaniels.com/
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, version 3 of the License only.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+#include "estimation/pose_estimation.hpp"
+
+#if defined(_MSC_VER)
+#pragma warning(push, 0)
+#endif
+
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
+#if defined(_MSC_VER)
+#define __builtin_trap() __debugbreak()
+#endif
+#define REQUIRE(ASSERTION) static_cast<void>((ASSERTION) || (std::fprintf(stderr, "ERROR[%d]: Requirement '%s' failed.\n", __LINE__, #ASSERTION), __builtin_trap(), 0))
+
+static inline bool is_value_approx(double lhs, double rhs, double epsilon = 1e-8) {
+    if (std::isnan(lhs) && std::isnan(rhs))
+        return true;
+    if (std::isnan(lhs) != std::isnan(rhs))
+        return false;
+    if (std::isinf(lhs) != std::isinf(rhs))
+        return false;
+    if (std::signbit(lhs + epsilon) != std::signbit(rhs + epsilon))
+        return false;
+    if (std::isinf(lhs) && std::isinf(rhs))
+        return true;
+    return (std::abs(lhs - rhs) <= (epsilon * (std::abs(lhs) + std::abs(rhs))) + epsilon);
+}
+
+static inline bool are_values_approx(const double* lhs, const double* rhs, unsigned long long int length, double epsilon = 1e-8) {
+    for (size_t index = 0; index < length; ++index) {
+        if (!is_value_approx(lhs[index], rhs[index], epsilon)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+int main(int argc, char* argv[]) {
+    static_cast<void>(argc);
+    static_cast<void>(argv);
+
+    constexpr static const auto matrix_multiply = [](const double* lhs, const double* rhs, double* result) {
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                double sum = 0.0;
+                for (int k = 0; k < 3; ++k) {
+                    sum += lhs[r * 3 + k] * rhs[k * 3 + c];
+                }
+                result[r * 3 + c] = sum;
+            }
+        }
+    };
+    constexpr static const auto matrix_vector_multiply = [](const double* matrix, const double* vector, double* result) {
+        for (int r = 0; r < 3; ++r) {
+            result[r] = matrix[r * 3 + 0] * vector[0] + matrix[r * 3 + 1] * vector[1] + matrix[r * 3 + 2] * vector[2];
+        }
+    };
+    constexpr static const auto cross_matrix = [](const double* vector, double* matrix) {
+        matrix[0] = 0;
+        matrix[1] = -vector[2];
+        matrix[2] = vector[1];
+        matrix[3] = vector[2];
+        matrix[4] = 0;
+        matrix[5] = -vector[0];
+        matrix[6] = -vector[1];
+        matrix[7] = vector[0];
+        matrix[8] = 0;
+    };
+    constexpr static const auto frobenius_norm = [](const double* matrix) -> double {
+        double sum = 0.0;
+        for (int i = 0; i < 9; ++i) {
+            sum += matrix[i] * matrix[i];
+        }
+        return std::sqrt(sum);
+    };
+    constexpr static const auto normalize_matrix = [](double* matrix) {
+        const double norm = frobenius_norm(matrix);
+        if (norm > 0) {
+            for (int i = 0; i < 9; ++i) {
+                matrix[i] /= norm;
+            }
+        }
+    };
+    constexpr static const auto normalize_vector = [](double* vector) {
+        const double norm = std::sqrt(vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]);
+        if (norm > 0) {
+            for (int i = 0; i < 3; ++i) {
+                vector[i] /= norm;
+            }
+        }
+    };
+    constexpr static const auto matrix_determinant = [](const double* matrix) -> double {
+        return matrix[0] * (matrix[4] * matrix[8] - matrix[5] * matrix[7]) -
+               matrix[1] * (matrix[3] * matrix[8] - matrix[5] * matrix[6]) +
+               matrix[2] * (matrix[3] * matrix[7] - matrix[4] * matrix[6]);
+    };
+    constexpr static const auto matrix_transpose = [](const double* matrix, double* transposed) {
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                transposed[c * 3 + r] = matrix[r * 3 + c];
+            }
+        }
+    };
+    constexpr static const auto is_rotation_matrix = [](const double* matrix, double epsilon = 1e-6) -> bool {
+        // Compute transpose(matrix) * matrix.
+        double transposed[9];
+        matrix_transpose(matrix, transposed);
+        double identity[9];
+        matrix_multiply(transposed, matrix, identity);
+        // Compare to identity
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                const double expect = (r == c) ? 1.0 : 0.0;
+                if (!is_value_approx(identity[r * 3 + c], expect, epsilon)) {
+                    return false;
+                }
+            }
+        }
+        // Check determinant is one.
+        const double determinant = matrix_determinant(matrix);
+        if (!is_value_approx(determinant, 1.0, 1e-6)) {
+            return false;
+        }
+        return true;
+    };
+
+    constexpr static const auto project_point = [](const double* rotation, const double* translation, const double* point_xyz, double* point_xy) {
+        double point[3];
+        matrix_vector_multiply(rotation, point_xyz, point);
+        point[0] += translation[0];
+        point[1] += translation[1];
+        point[2] += translation[2];
+        point_xy[0] = point[0] / point[2];
+        point_xy[1] = point[1] / point[2];
+    };
+    constexpr static const auto reprojection_error = [](const double* observation_xy, const double* rotation, const double* translation, const double* point_xyz) -> double {
+        double xy[2];
+        project_point(rotation, translation, point_xyz, xy);
+        double dx = observation_xy[0] - xy[0];
+        double dy = observation_xy[1] - xy[1];
+        return (dx * dx) + (dy * dy);
+    };
+
+    // 1) Test composing essential matrices matches (up to scale).
+    {
+        const double rotation[3][3] = {
+            { +0.36, -0.48, +0.8 },
+            { +0.8, +0.6, 0.0 },
+            { -0.48, +0.64, +0.6 }
+        };
+        const double translation[3] = { 0.5, -1.2, 2.3 };
+        double translation_matrix[9];
+        cross_matrix(translation, translation_matrix);
+        double expected[9];
+        matrix_multiply(translation_matrix, &rotation[0][0], expected);
+        normalize_matrix(expected);
+        double essential[9];
+        pose_estimation::essential_matrix<double>::compose(&rotation[0][0], translation, essential);
+        normalize_matrix(essential);
+        REQUIRE(are_values_approx(essential, expected, 9, 1e-10));
+    }
+
+    // 2) Test decompose: compose -> decompose -> recomposition matches (up to scale).
+    {
+        const double theta = 0.37;
+        const double rotation[3][3] = {
+            { std::cos(theta), -std::sin(theta), 0.0 },
+            { std::sin(theta), std::cos(theta), 0.0 },
+            { 0.0, 0.0, 1.0 }
+        };
+        const double translation[3] = { 0.3, 0.7, 1.2 };
+        double translation_matrix[9];
+        cross_matrix(translation, translation_matrix);
+        double expected[9];
+        matrix_multiply(translation_matrix, &rotation[0][0], expected);
+        normalize_matrix(expected);
+
+        double rotation_0[9];
+        double rotation_1[9];
+        double translation_0[3];
+        double translation_1[3];
+        pose_estimation::essential_matrix<double>::decompose(expected, rotation_0, rotation_1, translation_0, translation_1);
+
+        // Rotations should be orthonormal.
+        REQUIRE(is_rotation_matrix(rotation_0));
+        REQUIRE(is_rotation_matrix(rotation_1));
+
+        // Translations should be non-zero vectors.
+        const double norm_translation_0 = std::sqrt(translation_0[0] * translation_0[0] + translation_0[1] * translation_0[1] + translation_0[2] * translation_0[2]);
+        const double norm_translation_1 = std::sqrt(translation_1[0] * translation_1[0] + translation_1[1] * translation_1[1] + translation_1[2] * translation_1[2]);
+        REQUIRE(norm_translation_0 > 1e-9);
+        REQUIRE(norm_translation_1 > 1e-9);
+
+        // Check that one combination recreates correct essential matrix (up to scale).
+        bool found_match = false;
+        for (int i = 0; i < 2 && !found_match; ++i) {
+            const double* current_rotation = (i == 0) ? rotation_0 : rotation_1;
+            for (int j = 0; j < 2 && !found_match; ++j) {
+                const double* current_translation = (j == 0) ? translation_0 : translation_1;
+                double current_translation_matrix[9];
+                cross_matrix(current_translation, current_translation_matrix);
+                double current_essential[9];
+                matrix_multiply(current_translation_matrix, current_rotation, current_essential);
+                normalize_matrix(current_essential);
+                if (are_values_approx(current_essential, expected, 9, 1e-6)) {
+                    found_match = true;
+                }
+                for (int k = 0; k < 9; ++k) {
+                    current_essential[k] = -current_essential[k];
+                }
+                if (are_values_approx(current_essential, expected, 9, 1e-5)) {
+                    found_match = true;
+                }
+            }
+        }
+        REQUIRE(found_match);
+    }
+
+    // 3) Test essential_5_point: synthetic scene with known transformation and 5 normalised correspondences.
+    {
+        const double alpha = 0.25;
+        const double beta = -0.17;
+        const double gamma = 0.1;
+        const double rotation_x[3][3] = {
+            { 1, 0, 0 },
+            { 0, std::cos(alpha), -std::sin(alpha) },
+            { 0, std::sin(alpha), std::cos(alpha) }
+        };
+        const double rotation_y[3][3] = {
+            { std::cos(beta), 0, std::sin(beta) },
+            { 0, 1, 0 },
+            { -std::sin(beta), 0, std::cos(beta) }
+        };
+        const double rotation_z[3][3] = {
+            { std::cos(gamma), -std::sin(gamma), 0 },
+            { std::sin(gamma), std::cos(gamma), 0 },
+            { 0, 0, 1 }
+        };
+        double temp[9];
+        matrix_multiply(&rotation_z[0][0], &rotation_y[0][0], temp);
+        double rotation[9];
+        // R = Rz * Ry * Rx
+        matrix_multiply(temp, &rotation_x[0][0], rotation);
+        const double translation[3] = { 0.5, -0.3, 1.0 };
+        // For other camera use the origin.
+        const double identity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+        const double zero[3] = { 0, 0, 0 };
+        // Create five world points (not coplanar).
+        const int point_count = 5;
+        double world_points[5][3] = {
+            { 0.1, 0.2, 3.0 },
+            { -0.5, 0.4, 4.2 },
+            { 0.7, -0.3, 5.1 },
+            { -0.2, -0.1, 2.7 },
+            { 0.0, 0.0, 6.0 }
+        };
+
+        // Project to normalized image coords for two cameras:
+        // Left camera is identity pose (R=I, t=0), Right camera has (R=rotation, t=translation).
+        double lhs_points[10];
+        double rhs_points[10];
+        for (int i = 0; i < point_count; ++i) {
+            project_point(identity, zero, &world_points[i][0], &lhs_points[2 * i]);
+            project_point(rotation, translation, &world_points[i][0], &rhs_points[2 * i]);
+        }
+
+        // Ground truth essential.
+        double translation_matrix[9];
+        cross_matrix(translation, translation_matrix);
+        double expected[9];
+        matrix_multiply(translation_matrix, rotation, expected);
+        normalize_matrix(expected);
+
+        // Call essential_5_point
+        double essentials[10 * 9] = {};
+        int solutions = pose_estimation::essential_5_point<double>(lhs_points, rhs_points, essentials);
+        REQUIRE(solutions >= 1);
+        REQUIRE(solutions <= 10);
+
+        // Check that among returned essentials one matches (up to scale).
+        bool found_match = false;
+        for (int s = 0; s < solutions; ++s) {
+            double* current_essential = &essentials[s * 9];
+            normalize_matrix(current_essential);
+            if (are_values_approx(current_essential, &expected[0], 9, 1e-5)) {
+                found_match = true;
+                break;
+            }
+            for (int k = 0; k < 9; ++k) {
+                current_essential[k] = -current_essential[k];
+            }
+            if (are_values_approx(current_essential, &expected[0], 9, 1e-5)) {
+                found_match = true;
+                break;
+            }
+        }
+        REQUIRE(found_match);
+    }
+
+    // 3b) Test essential_5_point: the coefficient matrix is now factorized once and reused for all ten right hand side columns.
+    {
+        constexpr static const int num_samples = 8;
+        for (int sample = 0; sample < num_samples; ++sample) {
+            const double alpha = 0.1 + 0.05 * sample;
+            const double beta = -0.05 - 0.02 * sample;
+            const double gamma = 0.01 * sample;
+            const double rotation_x[3][3] = {
+                { 1, 0, 0 },
+                { 0, std::cos(alpha), -std::sin(alpha) },
+                { 0, std::sin(alpha), std::cos(alpha) }
+            };
+            const double rotation_y[3][3] = {
+                { std::cos(beta), 0, std::sin(beta) },
+                { 0, 1, 0 },
+                { -std::sin(beta), 0, std::cos(beta) }
+            };
+            const double rotation_z[3][3] = {
+                { std::cos(gamma), -std::sin(gamma), 0 },
+                { std::sin(gamma), std::cos(gamma), 0 },
+                { 0, 0, 1 }
+            };
+            double temp[9];
+            matrix_multiply(&rotation_z[0][0], &rotation_y[0][0], temp);
+            double rotation[9];
+            matrix_multiply(temp, &rotation_x[0][0], rotation);
+            const double translation[3] = { 0.4 + 0.05 * sample, -0.2 - 0.03 * sample, 1.0 + 0.1 * sample };
+            const double identity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+            const double zero[3] = { 0, 0, 0 };
+            const double world_points[5][3] = {
+                { 0.1 + 0.02 * sample, 0.2, 3.0 },
+                { -0.5, 0.4 - 0.01 * sample, 4.2 },
+                { 0.7, -0.3 + 0.02 * sample, 5.1 },
+                { -0.2 - 0.01 * sample, -0.1, 2.7 },
+                { 0.05 * sample, 0.0, 6.0 }
+            };
+
+            double lhs_points[10];
+            double rhs_points[10];
+            for (int i = 0; i < 5; ++i) {
+                project_point(identity, zero, &world_points[i][0], &lhs_points[2 * i]);
+                project_point(rotation, translation, &world_points[i][0], &rhs_points[2 * i]);
+            }
+
+            double essentials[10 * 9] = {};
+            const int solutions = pose_estimation::essential_5_point<double>(lhs_points, rhs_points, essentials);
+            REQUIRE(solutions >= 1);
+            REQUIRE(solutions <= 10);
+
+            for (int s = 0; s < solutions; ++s) {
+                const double* e = &essentials[s * 9];
+                for (int i = 0; i < 5; ++i) {
+                    const double lx = lhs_points[2 * i + 0];
+                    const double ly = lhs_points[2 * i + 1];
+                    const double rx = rhs_points[2 * i + 0];
+                    const double ry = rhs_points[2 * i + 1];
+                    // Epipolar constraint: [rx ry 1] * E * [lx ly 1]^T == 0.
+                    const double ex0 = e[0] * lx + e[1] * ly + e[2];
+                    const double ex1 = e[3] * lx + e[4] * ly + e[5];
+                    const double ex2 = e[6] * lx + e[7] * ly + e[8];
+                    const double constraint = rx * ex0 + ry * ex1 + ex2;
+                    REQUIRE(std::abs(constraint) < 1e-8);
+                }
+            }
+
+            // Repeating the exact same call must give the exact same result (the factorize-once
+            // decomposition is a pure function of its input, so this must hold bit-for-bit).
+            double essentials_repeat[10 * 9] = {};
+            const int solutions_repeat = pose_estimation::essential_5_point<double>(lhs_points, rhs_points, essentials_repeat);
+            REQUIRE(solutions_repeat == solutions);
+            for (int i = 0; i < solutions * 9; ++i) {
+                REQUIRE(essentials[i] == essentials_repeat[i]);
+            }
+        }
+    }
+
+    // 4) Test recover_pose: use the true essential (from previous construction), call recover_pose and check reprojection of triangulated points
+    {
+        const double alpha = 0.25;
+        const double beta = -0.17;
+        const double gamma = 0.1;
+        const double rotation_x[3][3] = {
+            { 1, 0, 0 },
+            { 0, std::cos(alpha), -std::sin(alpha) },
+            { 0, std::sin(alpha), std::cos(alpha) }
+        };
+        const double rotation_y[3][3] = {
+            { std::cos(beta), 0, std::sin(beta) },
+            { 0, 1, 0 },
+            { -std::sin(beta), 0, std::cos(beta) }
+        };
+        const double rotation_z[3][3] = {
+            { std::cos(gamma), -std::sin(gamma), 0 },
+            { std::sin(gamma), std::cos(gamma), 0 },
+            { 0, 0, 1 }
+        };
+        double temp[9];
+        matrix_multiply(&rotation_z[0][0], &rotation_y[0][0], temp);
+        double rotation[9];
+        // R = Rz * Ry * Rx
+        matrix_multiply(temp, &rotation_x[0][0], rotation);
+        double translation[3] = { 0.5, -0.3, 1.0 };
+        // For other camera use the origin.
+        const double identity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+        const double zero[3] = { 0, 0, 0 };
+        // Create more than five world points (not coplanar).
+        const int point_count = 6;
+        double world_points[6][3] = {
+            { 0.1, 0.2, 3.0 },
+            { -0.5, 0.4, 4.2 },
+            { 0.7, -0.3, 5.1 },
+            { -0.2, -0.1, 2.7 },
+            { 0.0, 0.0, 6.0 },
+            { 0.3, -0.25, 4.0 }
+        };
+
+        double lhs_points[12];
+        double rhs_points[12];
+        for (int i = 0; i < point_count; ++i) {
+            project_point(identity, zero, &world_points[i][0], &lhs_points[2 * i]);
+            project_point(rotation, translation, &world_points[i][0], &rhs_points[2 * i]);
+        }
+
+        // Compute the true essential.
+        double translation_matrix[9];
+        cross_matrix(translation, translation_matrix);
+        double essential[9];
+        matrix_multiply(translation_matrix, rotation, essential);
+        normalize_matrix(essential);
+
+        // Call recover_pose with the essential.
+        double recovered_rotation[9];
+        double recovered_translation[3];
+        double points_xyz[point_count * 3] = {};
+        size_t support_count = 0;
+        const bool recovered = pose_estimation::essential_matrix<double>::recover_pose(essential, lhs_points, rhs_points, static_cast<size_t>(point_count), recovered_rotation, recovered_translation, points_xyz, &support_count);
+        REQUIRE(recovered);
+        REQUIRE(support_count == static_cast<size_t>(point_count));
+
+        // Calculate reprojection error.
+        double total_error = 0.0;
+        for (int i = 0; i < point_count; ++i) {
+            const double Xtri[3] = { points_xyz[3 * i + 0], points_xyz[3 * i + 1], points_xyz[3 * i + 2] };
+            const double e1 = reprojection_error(lhs_points + 2 * i, identity, zero, Xtri);
+            const double e2 = reprojection_error(rhs_points + 2 * i, recovered_rotation, recovered_translation, Xtri);
+            total_error += (e1 + e2);
+        }
+        const double mean_error = total_error / double(point_count);
+        REQUIRE(mean_error < 1e-5);
+
+        // Rotation should be approximately equal to true rotation (or one of the two valid rotations).
+        // Compare normalized rotation matrices (they might differ by sign conventions).
+        normalize_matrix(rotation);
+        normalize_matrix(recovered_rotation);
+        bool rotation_correct = are_values_approx(rotation, recovered_rotation, 9, 1e-3);
+        if (!rotation_correct) {
+            for (int i = 0; i < 9; ++i) {
+                recovered_rotation[i] = -recovered_rotation[i];
+            }
+            rotation_correct = are_values_approx(rotation, recovered_rotation, 9, 1e-3);
+        }
+        REQUIRE(rotation_correct);
+
+        // Translation direction should be parallel to true translation.
+        normalize_vector(translation);
+        normalize_vector(recovered_translation);
+        // The dot product should be close to +/-1.
+        double dot = std::abs(translation[0] * recovered_translation[0] + translation[1] * recovered_translation[1] + translation[2] * recovered_translation[2]);
+        REQUIRE(dot > 0.98);
+    }
+
+    // 5) Test P3P: basic pose recovery.
+    {
+        // Known camera pose.
+        const double alpha = 0.25;
+        const double beta = -0.17;
+        const double gamma = 0.1;
+        const double rotation_x[3][3] = {
+            { 1, 0, 0 },
+            { 0, std::cos(alpha), -std::sin(alpha) },
+            { 0, std::sin(alpha), std::cos(alpha) }
+        };
+        const double rotation_y[3][3] = {
+            { std::cos(beta), 0, std::sin(beta) },
+            { 0, 1, 0 },
+            { -std::sin(beta), 0, std::cos(beta) }
+        };
+        const double rotation_z[3][3] = {
+            { std::cos(gamma), -std::sin(gamma), 0 },
+            { std::sin(gamma), std::cos(gamma), 0 },
+            { 0, 0, 1 }
+        };
+        double temp_r[9];
+        matrix_multiply(&rotation_z[0][0], &rotation_y[0][0], temp_r);
+        double gt_rotation[9];
+        matrix_multiply(temp_r, &rotation_x[0][0], gt_rotation);
+        const double gt_translation[3] = { 0.5, -0.3, 1.0 };
+
+        // Three non-collinear world points.
+        const double world_points[3][3] = {
+            { 0.1, 0.2, 3.0 },
+            { -0.5, 0.4, 4.2 },
+            { 0.7, -0.3, 5.1 }
+        };
+
+        // Project world points to bearing vectors: x = R*X + t, then normalise.
+        double bearing_vectors[3][3];
+        for (int i = 0; i < 3; ++i) {
+            double p[3];
+            matrix_vector_multiply(gt_rotation, &world_points[i][0], p);
+            p[0] += gt_translation[0];
+            p[1] += gt_translation[1];
+            p[2] += gt_translation[2];
+            const double norm = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+            bearing_vectors[i][0] = p[0] / norm;
+            bearing_vectors[i][1] = p[1] / norm;
+            bearing_vectors[i][2] = p[2] / norm;
+        }
+
+        double p3p_rotations[4][9];
+        double p3p_translations[4][3];
+        int n_solutions = pose_estimation::perspective_3_point(bearing_vectors, world_points, p3p_rotations, p3p_translations);
+
+        REQUIRE(n_solutions >= 1);
+        REQUIRE(n_solutions <= 4);
+
+        // Find matching solution by checking if it matches the ground truth pose.
+        // P3P can return multiple solutions with zero reprojection error for the 3 points,
+        // so we must check if the ground truth is among them.
+        bool found_match = false;
+        for (int s = 0; s < n_solutions && !found_match; ++s) {
+            // Check rotation matches ground truth
+            bool r_match = true;
+            for (int k = 0; k < 9; ++k) {
+                if (!is_value_approx(gt_rotation[k], p3p_rotations[s][k], 1e-4)) {
+                    r_match = false;
+                    break;
+                }
+            }
+
+            // Check translation matches ground truth
+            bool t_match = true;
+            for (int k = 0; k < 3; ++k) {
+                if (!is_value_approx(gt_translation[k], p3p_translations[s][k], 1e-4)) {
+                    t_match = false;
+                    break;
+                }
+            }
+
+            if (r_match && t_match) {
+                // Verify reprojection error is also small for this valid solution
+                double total_error = 0.0;
+                for (int i = 0; i < 3; ++i) {
+                    double proj[3];
+                    matrix_vector_multiply(&p3p_rotations[s][0], &world_points[i][0], proj);
+                    proj[0] += p3p_translations[s][0];
+                    proj[1] += p3p_translations[s][1];
+                    proj[2] += p3p_translations[s][2];
+                    const double proj_norm = std::sqrt(proj[0] * proj[0] + proj[1] * proj[1] + proj[2] * proj[2]);
+                    proj[0] /= proj_norm;
+                    proj[1] /= proj_norm;
+                    proj[2] /= proj_norm;
+                    double dx = proj[0] - bearing_vectors[i][0];
+                    double dy = proj[1] - bearing_vectors[i][1];
+                    double dz = proj[2] - bearing_vectors[i][2];
+                    total_error += dx * dx + dy * dy + dz * dz;
+                }
+                REQUIRE(total_error < 1e-10);
+                // Verify the rotation is valid.
+                REQUIRE(is_rotation_matrix(&p3p_rotations[s][0], 1e-4));
+                found_match = true;
+            }
+        }
+        REQUIRE(found_match);
+    }
+
+    // 6) Test P3P: distance consistency.
+    {
+        // Camera at a known pose.
+        const double gt_rotation[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+        const double gt_translation[3] = { 0.0, 0.0, 0.5 };
+
+        const double world_points[3][3] = {
+            { -1.0, 0.0, 5.0 },
+            { 1.0, 0.0, 5.0 },
+            { 0.0, 1.0, 5.0 }
+        };
+
+        double bearing_vectors[3][3];
+        for (int i = 0; i < 3; ++i) {
+            double p[3];
+            matrix_vector_multiply(gt_rotation, &world_points[i][0], p);
+            p[0] += gt_translation[0];
+            p[1] += gt_translation[1];
+            p[2] += gt_translation[2];
+            const double norm = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+            bearing_vectors[i][0] = p[0] / norm;
+            bearing_vectors[i][1] = p[1] / norm;
+            bearing_vectors[i][2] = p[2] / norm;
+        }
+
+        double p3p_rotations[4][9];
+        double p3p_translations[4][3];
+        int n_solutions = pose_estimation::perspective_3_point(bearing_vectors, world_points, p3p_rotations, p3p_translations);
+
+        REQUIRE(n_solutions >= 1);
+
+        // For each solution, verify distance consistency:
+        // ||d_i * x_i - d_j * x_j||^2 should equal ||X_i - X_j||^2.
+        for (int s = 0; s < n_solutions; ++s) {
+            // Compute camera-space points: R*X + t
+            double cam_pts[3][3];
+            for (int i = 0; i < 3; ++i) {
+                matrix_vector_multiply(&p3p_rotations[s][0], &world_points[i][0], &cam_pts[i][0]);
+                cam_pts[i][0] += p3p_translations[s][0];
+                cam_pts[i][1] += p3p_translations[s][1];
+                cam_pts[i][2] += p3p_translations[s][2];
+            }
+            // Check pairwise distances.
+            for (int i = 0; i < 3; ++i) {
+                for (int j = i + 1; j < 3; ++j) {
+                    double d_world = 0.0, d_cam = 0.0;
+                    for (int k = 0; k < 3; ++k) {
+                        double dw = world_points[i][k] - world_points[j][k];
+                        double dc = cam_pts[i][k] - cam_pts[j][k];
+                        d_world += dw * dw;
+                        d_cam += dc * dc;
+                    }
+                    REQUIRE(is_value_approx(d_world, d_cam, 1e-6));
+                }
+            }
+        }
+    }
+
+    // 7) Test P3P: different camera pose with larger rotation.
+    {
+        const double angle = 0.7;
+        const double gt_rotation[9] = {
+            std::cos(angle),
+            0.0,
+            std::sin(angle),
+            0.0,
+            1.0,
+            0.0,
+            -std::sin(angle),
+            0.0,
+            std::cos(angle)
+        };
+        const double gt_translation[3] = { 1.0, -0.5, 2.0 };
+
+        const double world_points[3][3] = {
+            { 0.3, 0.5, 4.0 },
+            { -0.8, -0.2, 3.5 },
+            { 0.0, 0.7, 6.0 }
+        };
+
+        double bearing_vectors[3][3];
+        for (int i = 0; i < 3; ++i) {
+            double p[3];
+            matrix_vector_multiply(gt_rotation, &world_points[i][0], p);
+            p[0] += gt_translation[0];
+            p[1] += gt_translation[1];
+            p[2] += gt_translation[2];
+            const double norm = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+            bearing_vectors[i][0] = p[0] / norm;
+            bearing_vectors[i][1] = p[1] / norm;
+            bearing_vectors[i][2] = p[2] / norm;
+        }
+
+        double p3p_rotations[4][9];
+        double p3p_translations[4][3];
+        int n_solutions = pose_estimation::perspective_3_point(bearing_vectors, world_points, p3p_rotations, p3p_translations);
+
+        REQUIRE(n_solutions >= 1);
+        REQUIRE(n_solutions <= 4);
+
+        // Find matching solution by checking if it matches the ground truth pose.
+        // P3P can return multiple solutions with zero reprojection error for the 3 points,
+        // so we must check if the ground truth is among them.
+        bool found_match = false;
+        for (int s = 0; s < n_solutions && !found_match; ++s) {
+            // Check rotation matches ground truth
+            bool r_match = true;
+            for (int k = 0; k < 9; ++k) {
+                if (!is_value_approx(gt_rotation[k], p3p_rotations[s][k], 1e-4)) {
+                    r_match = false;
+                    break;
+                }
+            }
+
+            // Check translation matches ground truth
+            bool t_match = true;
+            for (int k = 0; k < 3; ++k) {
+                if (!is_value_approx(gt_translation[k], p3p_translations[s][k], 1e-4)) {
+                    t_match = false;
+                    break;
+                }
+            }
+
+            if (r_match && t_match) {
+                // Verify reprojection error is also small for this valid solution
+                double total_error = 0.0;
+                for (int i = 0; i < 3; ++i) {
+                    double proj[3];
+                    matrix_vector_multiply(&p3p_rotations[s][0], &world_points[i][0], proj);
+                    proj[0] += p3p_translations[s][0];
+                    proj[1] += p3p_translations[s][1];
+                    proj[2] += p3p_translations[s][2];
+                    const double proj_norm = std::sqrt(proj[0] * proj[0] + proj[1] * proj[1] + proj[2] * proj[2]);
+                    proj[0] /= proj_norm;
+                    proj[1] /= proj_norm;
+                    proj[2] /= proj_norm;
+                    double dx = proj[0] - bearing_vectors[i][0];
+                    double dy = proj[1] - bearing_vectors[i][1];
+                    double dz = proj[2] - bearing_vectors[i][2];
+                    total_error += dx * dx + dy * dy + dz * dz;
+                }
+                REQUIRE(total_error < 1e-10);
+                found_match = true;
+            }
+        }
+        REQUIRE(found_match);
+    }
+
+    // 8) Test decompose: pure axis-aligned translations with identity rotation.
+    // These essential matrices contain a zero row, which previously caused a division by zero.
+    {
+        const double identity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+        const double axis_translations[3][3] = {
+            { 1.0, 0.0, 0.0 },
+            { 0.0, 1.0, 0.0 },
+            { 0.0, 0.0, 1.0 }
+        };
+        for (int axis = 0; axis < 3; ++axis) {
+            double expected_translation[3] = { axis_translations[axis][0], axis_translations[axis][1], axis_translations[axis][2] };
+            double essential[9];
+            pose_estimation::essential_matrix<double>::compose(identity, expected_translation, essential);
+
+            double rotation_0[9];
+            double rotation_1[9];
+            double translation_0[3];
+            double translation_1[3];
+            pose_estimation::essential_matrix<double>::decompose(essential, rotation_0, rotation_1, translation_0, translation_1);
+
+            // All outputs must be finite.
+            for (int i = 0; i < 9; ++i) {
+                REQUIRE(std::isfinite(rotation_0[i]));
+                REQUIRE(std::isfinite(rotation_1[i]));
+            }
+            for (int i = 0; i < 3; ++i) {
+                REQUIRE(std::isfinite(translation_0[i]));
+                REQUIRE(std::isfinite(translation_1[i]));
+            }
+
+            // Rotations should be orthonormal.
+            REQUIRE(is_rotation_matrix(rotation_0));
+            REQUIRE(is_rotation_matrix(rotation_1));
+
+            // One candidate must match the identity rotation with translation +/- the axis.
+            bool found_match = false;
+            for (int i = 0; i < 2 && !found_match; ++i) {
+                const double* current_rotation = (i == 0) ? rotation_0 : rotation_1;
+                double rotation_copy[9];
+                for (int k = 0; k < 9; ++k) {
+                    rotation_copy[k] = current_rotation[k];
+                }
+                if (!are_values_approx(rotation_copy, identity, 9, 1e-6)) {
+                    continue;
+                }
+                for (int j = 0; j < 2 && !found_match; ++j) {
+                    const double* current_translation = (j == 0) ? translation_0 : translation_1;
+                    double translation_copy[3] = { current_translation[0], current_translation[1], current_translation[2] };
+                    if (are_values_approx(translation_copy, expected_translation, 3, 1e-6)) {
+                        found_match = true;
+                    }
+                    for (int k = 0; k < 3; ++k) {
+                        translation_copy[k] = -translation_copy[k];
+                    }
+                    if (are_values_approx(translation_copy, expected_translation, 3, 1e-6)) {
+                        found_match = true;
+                    }
+                }
+            }
+            REQUIRE(found_match);
+        }
+    }
+
+    // 9) Test recover_pose: distant, low-parallax scene (points at ~60x the unit baseline).
+    // Previously a hard-coded distance threshold excluded all of these points from the cheirality
+    // vote, so the candidate selection was arbitrary and returned the twisted-pair rotation.
+    {
+        const double alpha = 0.25;
+        const double beta = -0.17;
+        const double gamma = 0.1;
+        const double rotation_x[3][3] = {
+            { 1, 0, 0 },
+            { 0, std::cos(alpha), -std::sin(alpha) },
+            { 0, std::sin(alpha), std::cos(alpha) }
+        };
+        const double rotation_y[3][3] = {
+            { std::cos(beta), 0, std::sin(beta) },
+            { 0, 1, 0 },
+            { -std::sin(beta), 0, std::cos(beta) }
+        };
+        const double rotation_z[3][3] = {
+            { std::cos(gamma), -std::sin(gamma), 0 },
+            { std::sin(gamma), std::cos(gamma), 0 },
+            { 0, 0, 1 }
+        };
+        double temp[9];
+        matrix_multiply(&rotation_z[0][0], &rotation_y[0][0], temp);
+        double rotation[9];
+        // R = Rz * Ry * Rx
+        matrix_multiply(temp, &rotation_x[0][0], rotation);
+        double translation[3] = { 0.5, -0.3, 1.0 };
+        // For other camera use the origin.
+        const double identity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+        const double zero[3] = { 0, 0, 0 };
+        // Create world points at roughly 60x the baseline distance (not coplanar).
+        const int point_count = 6;
+        double world_points[6][3] = {
+            { 5.0, 8.0, 55.0 },
+            { -12.0, 6.0, 60.0 },
+            { 9.0, -7.0, 62.0 },
+            { -4.0, -3.0, 58.0 },
+            { 0.0, 1.0, 65.0 },
+            { 7.0, -5.0, 57.0 }
+        };
+
+        double lhs_points[12];
+        double rhs_points[12];
+        for (int i = 0; i < point_count; ++i) {
+            project_point(identity, zero, &world_points[i][0], &lhs_points[2 * i]);
+            project_point(rotation, translation, &world_points[i][0], &rhs_points[2 * i]);
+        }
+
+        // Compute the true essential.
+        double translation_matrix[9];
+        cross_matrix(translation, translation_matrix);
+        double essential[9];
+        matrix_multiply(translation_matrix, rotation, essential);
+        normalize_matrix(essential);
+
+        // Call recover_pose with the essential.
+        double recovered_rotation[9];
+        double recovered_translation[3];
+        double points_xyz[point_count * 3] = {};
+        size_t support_count = 0;
+        const bool recovered = pose_estimation::essential_matrix<double>::recover_pose(essential, lhs_points, rhs_points, static_cast<size_t>(point_count), recovered_rotation, recovered_translation, points_xyz, &support_count);
+        REQUIRE(recovered);
+        // At this distance the triangulation is imprecise for some points, but a majority must still support the winner.
+        REQUIRE(support_count * 2 >= static_cast<size_t>(point_count));
+
+        // Rotation should be approximately equal to true rotation, not the twisted pair.
+        normalize_matrix(rotation);
+        normalize_matrix(recovered_rotation);
+        bool rotation_correct = are_values_approx(rotation, recovered_rotation, 9, 1e-3);
+        if (!rotation_correct) {
+            for (int i = 0; i < 9; ++i) {
+                recovered_rotation[i] = -recovered_rotation[i];
+            }
+            rotation_correct = are_values_approx(rotation, recovered_rotation, 9, 1e-3);
+        }
+        REQUIRE(rotation_correct);
+
+        // Translation direction should be parallel to true translation.
+        normalize_vector(translation);
+        normalize_vector(recovered_translation);
+        // The dot product should be close to +/-1.
+        double dot = std::abs(translation[0] * recovered_translation[0] + translation[1] * recovered_translation[1] + translation[2] * recovered_translation[2]);
+        REQUIRE(dot > 0.98);
+    }
+
+    // 10) Test essential_5_point: a duplicated correspondence makes the elimination step singular.
+    // Previously the failed solve left uninitialised memory in the models; now the solver must
+    // either return no models or return models that satisfy the epipolar constraint on the inputs.
+    {
+        const double alpha = 0.25;
+        const double beta = -0.17;
+        const double gamma = 0.1;
+        const double rotation_x[3][3] = {
+            { 1, 0, 0 },
+            { 0, std::cos(alpha), -std::sin(alpha) },
+            { 0, std::sin(alpha), std::cos(alpha) }
+        };
+        const double rotation_y[3][3] = {
+            { std::cos(beta), 0, std::sin(beta) },
+            { 0, 1, 0 },
+            { -std::sin(beta), 0, std::cos(beta) }
+        };
+        const double rotation_z[3][3] = {
+            { std::cos(gamma), -std::sin(gamma), 0 },
+            { std::sin(gamma), std::cos(gamma), 0 },
+            { 0, 0, 1 }
+        };
+        double temp[9];
+        matrix_multiply(&rotation_z[0][0], &rotation_y[0][0], temp);
+        double rotation[9];
+        // R = Rz * Ry * Rx
+        matrix_multiply(temp, &rotation_x[0][0], rotation);
+        const double translation[3] = { 0.5, -0.3, 1.0 };
+        // For other camera use the origin.
+        const double identity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+        const double zero[3] = { 0, 0, 0 };
+        // Create five world points where the first two are identical, giving a duplicated correspondence.
+        const int point_count = 5;
+        double world_points[5][3] = {
+            { 0.1, 0.2, 3.0 },
+            { 0.1, 0.2, 3.0 },
+            { 0.7, -0.3, 5.1 },
+            { -0.2, -0.1, 2.7 },
+            { 0.0, 0.0, 6.0 }
+        };
+
+        double lhs_points[10];
+        double rhs_points[10];
+        for (int i = 0; i < point_count; ++i) {
+            project_point(identity, zero, &world_points[i][0], &lhs_points[2 * i]);
+            project_point(rotation, translation, &world_points[i][0], &rhs_points[2 * i]);
+        }
+
+        double essentials[10 * 9] = {};
+        int solutions = pose_estimation::essential_5_point<double>(lhs_points, rhs_points, essentials);
+        REQUIRE(solutions >= 0);
+        REQUIRE(solutions <= 10);
+
+        // Any returned model must be finite and satisfy the epipolar constraint for every input correspondence.
+        for (int s = 0; s < solutions; ++s) {
+            double* current_essential = &essentials[s * 9];
+            for (int k = 0; k < 9; ++k) {
+                REQUIRE(std::isfinite(current_essential[k]));
+            }
+            normalize_matrix(current_essential);
+            for (int i = 0; i < point_count; ++i) {
+                const double lhs_homogeneous[3] = { lhs_points[2 * i + 0], lhs_points[2 * i + 1], 1.0 };
+                const double rhs_homogeneous[3] = { rhs_points[2 * i + 0], rhs_points[2 * i + 1], 1.0 };
+                double essential_lhs[3];
+                matrix_vector_multiply(current_essential, lhs_homogeneous, essential_lhs);
+                const double residual = rhs_homogeneous[0] * essential_lhs[0] + rhs_homogeneous[1] * essential_lhs[1] + rhs_homogeneous[2] * essential_lhs[2];
+                REQUIRE(std::abs(residual) < 1e-6);
+            }
+        }
+
+        // A fully degenerate input (all correspondences identical at the origin) makes the elimination
+        // solve fail, which must be reported as zero models rather than reading uninitialised memory.
+        double degenerate_lhs_points[10] = {};
+        double degenerate_rhs_points[10] = {};
+        double degenerate_essentials[10 * 9] = {};
+        solutions = pose_estimation::essential_5_point<double>(degenerate_lhs_points, degenerate_rhs_points, degenerate_essentials);
+        REQUIRE(solutions == 0);
+    }
+
+    return EXIT_SUCCESS;
+}

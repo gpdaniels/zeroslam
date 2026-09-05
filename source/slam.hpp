@@ -18,13 +18,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef ZEROSLAM_SLAM_HPP
 #define ZEROSLAM_SLAM_HPP
 
-#include "consensus.hpp"
-#include "frame.hpp"
-#include "geometry.hpp"
-#include "image.hpp"
-#include "map.hpp"
-#include "matrix.hpp"
-#include "pose_estimation.hpp"
+#include "estimation/consensus.hpp"
+#include "estimation/pose_estimation.hpp"
+#include "geometry/geometry.hpp"
+#include "image/image.hpp"
+#include "mapping/frame.hpp"
+#include "mapping/map.hpp"
+#include "math/matrix.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
