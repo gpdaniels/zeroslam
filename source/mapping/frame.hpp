@@ -18,7 +18,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef ZEROSLAM_MAPPING_FRAME_HPP
 #define ZEROSLAM_MAPPING_FRAME_HPP
 
+#include "core/filter.hpp"
+#include "core/sort.hpp"
+#include "feature/descriptor/binary.hpp"
+#include "feature/distributor/square_covering.hpp"
 #include "feature/feature.hpp"
+#include "feature/point.hpp"
+#include "feature/refiner/subpixel.hpp"
 #include "image/blur.hpp"
 #include "image/image.hpp"
 #include "image/resize.hpp"
@@ -46,7 +52,7 @@ namespace mapping {
         sensor::pinhole camera;
         std::vector<image::image> image_pyramid;
         std::vector<std::vector<feature::point>> keypoint_pyramid;
-        std::vector<std::vector<feature::descriptor>> descriptor_pyramid;
+        std::vector<std::vector<feature::descriptor::binary<256>>> descriptor_pyramid;
 
     public:
         math::matrix<double, 3, 4> get_pose() const {
@@ -104,7 +110,7 @@ namespace mapping {
                 // - The subpixel patch samples up to 20 (patch radius) + 4 (maximum accepted refinement offset) + 1 (bilinear interpolation) = 25 pixels from the feature.
                 constexpr static const int border = 25;
                 size_t prune_edge_count = kps.size();
-                prune(kps.data(), prune_edge_count, [image_cols, image_rows](const feature::point& feature) {
+                core::filter::remove_if(kps.data(), prune_edge_count, [image_cols, image_rows](const feature::point& feature) {
                     return (feature.x < border) || (feature.x >= static_cast<float>(image_cols - border)) || (feature.y < border) || (feature.y >= static_cast<float>(image_rows - border));
                 });
                 kps.resize(static_cast<size_t>(prune_edge_count));
@@ -118,14 +124,14 @@ namespace mapping {
 
                 // Prune low score features.
                 size_t prune_score_count = kps.size();
-                prune(kps.data(), prune_score_count, [](const feature::point& feature) {
+                core::filter::remove_if(kps.data(), prune_score_count, [](const feature::point& feature) {
                     return feature.response < 0;
                 });
                 kps.resize(static_cast<size_t>(prune_score_count));
 
                 // Non maximally suppress features.
                 // Note: This suppression function assumes points are sorted in row major.
-                feature::sort(kps.data(), kps.size(), [](const feature::point& lhs, const feature::point& rhs) {
+                core::sort::quick(kps.data(), kps.size(), [](const feature::point& lhs, const feature::point& rhs) {
                     return lhs.y == rhs.y ? lhs.x < rhs.x : lhs.y < rhs.y;
                 });
                 std::vector<feature::point> features_suppressed(kps.size());
@@ -135,7 +141,7 @@ namespace mapping {
 
                 // Distribute features.
                 // Note: The distribution function assumes points are sorted by response, so sort first.
-                feature::sort(kps.data(), kps.size(), [](const feature::point& lhs, const feature::point& rhs) {
+                core::sort::quick(kps.data(), kps.size(), [](const feature::point& lhs, const feature::point& rhs) {
                     if (lhs.response != rhs.response) {
                         return lhs.response > rhs.response;
                     }
@@ -145,19 +151,19 @@ namespace mapping {
                     return lhs.x > rhs.x;
                 });
                 std::vector<feature::point> features_distributed(2000);
-                const int distributed_count = distribute(kps.data(), static_cast<int>(kps.size()), image_cols, image_rows, 500, static_cast<int>(features_distributed.size()), features_distributed.data());
+                const int distributed_count = feature::distributor::square_covering::distribute(kps.data(), static_cast<int>(kps.size()), image_cols, image_rows, 500, static_cast<int>(features_distributed.size()), features_distributed.data());
                 features_distributed.resize(static_cast<size_t>(distributed_count));
                 kps = std::move(features_distributed);
 
                 // Describe features.
-                std::vector<feature::descriptor> des;
+                std::vector<feature::descriptor::binary<256>> des;
                 des.resize(static_cast<size_t>(distributed_count));
                 for (size_t i = 0; i < static_cast<size_t>(distributed_count); ++i) {
                     const unsigned char* feature = image_grey.get_data() + static_cast<size_t>(kps[i].y) * image_grey.get_cols() + static_cast<size_t>(kps[i].x);
                     // Attempt subpixel refinement of feature.
                     float offset_x = 0;
                     float offset_y = 0;
-                    if (!feature::refine(feature, image_cols, offset_x, offset_y)) {
+                    if (!feature::refiner::subpixel::refine(feature, image_cols, offset_x, offset_y)) {
                         // If unsuccessful, proceed using unrefined feature.
                         const float angle = feature::dominant_angle(feature, image_cols);
                         feature::describe(feature, image_cols, angle, des[i]);
@@ -166,7 +172,7 @@ namespace mapping {
 
                     // If successful, calculate descriptors from a subpixel patch.
                     unsigned char patch[41][41];
-                    feature::patch_bilinear(feature, image_cols, offset_x, offset_y, &patch[0][0]);
+                    feature::refiner::subpixel::patch_41x41_bilinear(feature, image_cols, offset_x, offset_y, &patch[0][0]);
                     const float angle = feature::dominant_angle(&patch[20][20], 41);
                     feature::describe(&patch[20][20], 41, angle, des[i]);
                     kps[i].x += offset_x;

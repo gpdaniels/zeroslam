@@ -19,6 +19,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ZEROSLAM_FEATURE_FEATURE_HPP
 
 #include "core/assert.hpp"
+#include "feature/descriptor/binary.hpp"
+#include "feature/point.hpp"
+#include "match/pair.hpp"
 #include "math/math.hpp"
 
 namespace {
@@ -26,37 +29,6 @@ namespace {
 }
 
 namespace feature {
-    class point final {
-    public:
-        float x;
-        float y;
-        float response;
-        float angle;
-    };
-
-    class descriptor final {
-    public:
-        unsigned char data[256 / 8];
-
-    public:
-        const unsigned char& operator[](size_t index) const {
-            ASSERT(index < (256 / 8), "Index out of bounds.");
-            return this->data[index];
-        }
-
-        unsigned char& operator[](size_t index) {
-            ASSERT(index < (256 / 8), "Index out of bounds.");
-            return this->data[index];
-        }
-    };
-
-    class match final {
-    public:
-        size_t lhs_index;
-        size_t rhs_index;
-        float score;
-    };
-
     static inline size_t detect(
         const unsigned char* __restrict const data,
         const int width,
@@ -122,7 +94,7 @@ namespace feature {
                         if (pixel < pixel_threshold) {
                             ++valid_pixels;
                             if (valid_pixels > pattern_size_half) {
-                                feature_point_buffer[feature_count++] = { static_cast<float>(x), static_cast<float>(y), 0, 0 };
+                                feature_point_buffer[feature_count++] = { static_cast<float>(x), static_cast<float>(y), 0, 0, 0 };
                                 if (feature_count == feature_point_buffer_size) {
                                     return feature_count;
                                 }
@@ -145,7 +117,7 @@ namespace feature {
                         if (pixel > pixel_threshold) {
                             ++valid_pixels;
                             if (valid_pixels > pattern_size_half) {
-                                feature_point_buffer[feature_count++] = { static_cast<float>(x), static_cast<float>(y), 0, 0 };
+                                feature_point_buffer[feature_count++] = { static_cast<float>(x), static_cast<float>(y), 0, 0, 0 };
                                 if (feature_count == feature_point_buffer_size) {
                                     return feature_count;
                                 }
@@ -163,31 +135,6 @@ namespace feature {
             }
         }
         return feature_count;
-    }
-
-    template <typename test_function_type>
-    static inline void prune(
-        point* __restrict const features,
-        size_t& features_count,
-        const test_function_type test_function
-    ) {
-        if (features_count == 0)
-            return;
-        point* front = features;
-        point* back = features + features_count - 1;
-        while (front <= back) {
-            if (test_function(*front)) {
-                while ((back != front) && (test_function(*back))) {
-                    --back;
-                }
-                if (back != front) {
-                    *front = static_cast<point&&>(*back);
-                }
-                --back;
-            }
-            ++front;
-        }
-        features_count = static_cast<size_t>(back + 1 - features);
     }
 
     static inline float score(
@@ -337,472 +284,6 @@ namespace feature {
         return suppressed_count;
     }
 
-    template <typename comparitor_function_type>
-    static inline void sort_insertion(
-        point* __restrict const features,
-        const size_t features_count,
-        const comparitor_function_type& comparitor_function
-    ) {
-        for (size_t i = 1; i < features_count; ++i) {
-            const point value = features[i];
-            size_t j = i;
-            while ((j > 0) && comparitor_function(value, features[j - 1])) {
-                features[j] = features[j - 1];
-                --j;
-            }
-            features[j] = value;
-        }
-    }
-
-    template <typename comparitor_function_type>
-    static inline void sort_heap(
-        point* __restrict const features,
-        const size_t features_count,
-        const comparitor_function_type& comparitor_function
-    ) {
-        constexpr static const auto sift_down = [](
-                                                    point* __restrict const heap_features,
-                                                    size_t index,
-                                                    const size_t heap_size,
-                                                    const comparitor_function_type& heap_comparitor_function
-                                                ) {
-            while (true) {
-                size_t largest = index;
-                const size_t left = 2 * index + 1;
-                const size_t right = 2 * index + 2;
-                if ((left < heap_size) && heap_comparitor_function(heap_features[largest], heap_features[left])) {
-                    largest = left;
-                }
-                if ((right < heap_size) && heap_comparitor_function(heap_features[largest], heap_features[right])) {
-                    largest = right;
-                }
-                if (largest == index) {
-                    break;
-                }
-                const point temp = heap_features[index];
-                heap_features[index] = heap_features[largest];
-                heap_features[largest] = temp;
-                index = largest;
-            }
-        };
-        if (features_count < 2) {
-            return;
-        }
-        for (size_t i = features_count / 2; i-- > 0;) {
-            sift_down(features, i, features_count, comparitor_function);
-        }
-        for (size_t i = features_count - 1; i > 0; --i) {
-            const point temp = features[0];
-            features[0] = features[i];
-            features[i] = temp;
-            sift_down(features, 0, i, comparitor_function);
-        }
-    }
-
-    template <typename comparitor_function_type>
-    static inline void sort_quick(
-        point* __restrict features,
-        size_t features_count,
-        const comparitor_function_type& comparitor_function,
-        int depth_limit
-    ) {
-        constexpr static const size_t insertion_sort_threshold = 16;
-        constexpr static const auto swap = [](point& lhs, point& rhs) {
-            point lhs_copy = lhs;
-            lhs = rhs;
-            rhs = lhs_copy;
-        };
-        while (features_count > 1) {
-            if (features_count <= insertion_sort_threshold) {
-                sort_insertion(features, features_count, comparitor_function);
-                return;
-            }
-            if (depth_limit <= 0) {
-                sort_heap(features, features_count, comparitor_function);
-                return;
-            }
-            --depth_limit;
-            const size_t mid = features_count / 2;
-            const size_t last = features_count - 1;
-            if (comparitor_function(features[mid], features[0])) {
-                swap(features[0], features[mid]);
-            }
-            if (comparitor_function(features[last], features[mid])) {
-                swap(features[mid], features[last]);
-            }
-            if (comparitor_function(features[mid], features[0])) {
-                swap(features[0], features[mid]);
-            }
-            swap(features[0], features[mid]);
-
-            size_t index_left = 1;
-            size_t index_right = features_count;
-            while (index_left < index_right) {
-                if (comparitor_function(features[index_left], features[0])) {
-                    ++index_left;
-                }
-                else {
-                    --index_right;
-                    swap(features[index_left], features[index_right]);
-                }
-            }
-            --index_left;
-            swap(features[index_left], features[0]);
-            const size_t left_count = index_left + 1;
-            const size_t right_count = features_count - index_right;
-            if (left_count < right_count) {
-                sort_quick(features, left_count, comparitor_function, depth_limit);
-                features += index_right;
-                features_count = right_count;
-            }
-            else {
-                sort_quick(&features[index_right], right_count, comparitor_function, depth_limit);
-                features_count = left_count;
-            }
-        }
-    }
-
-    template <typename comparitor_function_type>
-    static inline void sort(
-        point* __restrict features,
-        const size_t features_count,
-        const comparitor_function_type comparitor_function
-    ) {
-        if (features_count < 2) {
-            return;
-        }
-        int depth_limit = 0;
-        for (size_t n = features_count; n > 1; n >>= 1) {
-            ++depth_limit;
-        }
-        depth_limit *= 2;
-        sort_quick(features, features_count, comparitor_function, depth_limit);
-    }
-
-    static inline int distribute(
-        const point* __restrict const features_detected_sorted,
-        const int features_detected_sorted_size,
-        const int max_width,
-        const int max_height,
-        const int min_features,
-        const int max_features,
-        point* __restrict features_distributed
-    ) {
-        constexpr static const int square_covering_radius = 2;
-        if (max_features >= features_detected_sorted_size) {
-            for (int i = 0; i < features_detected_sorted_size; ++i) {
-                features_distributed[i] = features_detected_sorted[i];
-            }
-            return features_detected_sorted_size;
-        }
-        const long long int delta =
-            4ll * static_cast<long long int>(max_width) +
-            4ll * static_cast<long long int>(max_features) +
-            4ll * static_cast<long long int>(max_height) * static_cast<long long int>(max_features) +
-            1ll * static_cast<long long int>(max_height) * static_cast<long long int>(max_height) +
-            1ll * static_cast<long long int>(max_width) * static_cast<long long int>(max_width) -
-            2ll * static_cast<long long int>(max_height) * static_cast<long long int>(max_width) +
-            4ll * static_cast<long long int>(max_height) * static_cast<long long int>(max_width) * static_cast<long long int>(max_features);
-        const int delta_sqrt = static_cast<int>(math::sqrt(static_cast<double>(delta)));
-        const int numerator = delta_sqrt - (max_width + max_height + 2 * max_features);
-        const int denominator = 2 * (max_features - 1);
-        int square_size_max = numerator / denominator;
-        int square_size_min = math::max(1, static_cast<int>(math::sqrt(static_cast<double>(features_detected_sorted_size) / static_cast<double>(2 * max_features))));
-        bool* covered_squares = new bool[static_cast<unsigned long int>((max_width + 1) * (max_height + 1))];
-        int* indexes = new int[static_cast<unsigned long int>(features_detected_sorted_size)];
-        int indexes_size = 0;
-        int square_size_previous = 0;
-        while ((indexes_size < min_features) || (indexes_size > max_features)) {
-            const int square_size = (square_size_max + square_size_min) / 2;
-            if (square_size == square_size_previous) {
-                break;
-            }
-            square_size_previous = square_size;
-            indexes_size = 0;
-            const int grid_width = max_width / square_size;
-            const int grid_height = max_height / square_size;
-            const int grid_stride = grid_width + 1;
-            for (int i = 0; i < (grid_width + 1) * (grid_height + 1); ++i) {
-                covered_squares[i] = false;
-            }
-            for (int i = 0; i < features_detected_sorted_size; ++i) {
-                const int cell_x = static_cast<int>(features_detected_sorted[i].x) / square_size;
-                const int cell_y = static_cast<int>(features_detected_sorted[i].y) / square_size;
-                if (covered_squares[cell_y * grid_stride + cell_x] == false) {
-                    indexes[indexes_size++] = i;
-                    const int cell_x_min = math::max(0, cell_x - square_covering_radius);
-                    const int cell_x_max = math::min(grid_width, cell_x + square_covering_radius);
-                    const int cell_y_min = math::max(0, cell_y - square_covering_radius);
-                    const int cell_y_max = math::min(grid_height, cell_y + square_covering_radius);
-                    // Mark all squares within as covered.
-                    for (int y = cell_y_min; y <= cell_y_max; ++y) {
-                        for (int x = cell_x_min; x <= cell_x_max; ++x) {
-                            covered_squares[y * grid_stride + x] = true;
-                        }
-                    }
-                }
-            }
-            if (indexes_size < min_features) {
-                square_size_max = square_size;
-            }
-            else if (indexes_size > max_features) {
-                square_size_min = square_size;
-            }
-        }
-        for (int i = 0; i < indexes_size; ++i) {
-            features_distributed[i] = features_detected_sorted[indexes[i]];
-        }
-        delete[] indexes;
-        delete[] covered_squares;
-        return indexes_size;
-    }
-
-    static inline bool refine(
-        const unsigned char* __restrict const data,
-        const int stride,
-        float& offset_x,
-        float& offset_y
-    ) {
-        const int max_iterations = 10;
-        const int window_size = 5;
-        const float max_offset = 4.0f;
-        const float eps = 1e-6f;
-
-        // Initialize offset.
-        offset_x = 0.0f;
-        offset_y = 0.0f;
-
-        // Iterative refinement.
-        for (int iteration = 0; iteration < max_iterations; iteration++) {
-            float A11 = 0.0f;
-            float A12 = 0.0f;
-            float A22 = 0.0f;
-            float b1 = 0.0f;
-            float b2 = 0.0f;
-
-            for (int dy = -window_size; dy <= window_size; dy++) {
-                for (int dx = -window_size; dx <= window_size; dx++) {
-                    const unsigned char* ptr = data + dy * stride + dx;
-
-                    // Calculate gradients
-                    const float gx = static_cast<float>(ptr[1] - ptr[-1]) * 0.5f;
-                    const float gy = static_cast<float>(ptr[stride] - ptr[-stride]) * 0.5f;
-                    const float norm = gx * gx + gy * gy;
-                    if (norm < eps) {
-                        continue;
-                    }
-
-                    // At the corner, edge normals should intersect
-                    // The edge normal at point (dx,dy) is (gx,gy)
-                    // The line equation is: gx * (offset_x - dx) + gy * (offset_y - dy) = 0
-                    // We want to find where most lines intersect.
-
-                    A11 += gx * gx;
-                    A12 += gx * gy;
-                    A22 += gy * gy;
-
-                    b1 += gx * (gx * static_cast<float>(dx) + gy * static_cast<float>(dy));
-                    b2 += gy * (gx * static_cast<float>(dx) + gy * static_cast<float>(dy));
-                }
-            }
-
-            // Solve the 2x2 system
-            const float det = A11 * A22 - A12 * A12;
-            if (math::abs(det) < eps) {
-                return false;
-            }
-
-            const float inv_det = 1.0f / det;
-            const float new_offset_x = (A22 * b1 - A12 * b2) * inv_det;
-            const float new_offset_y = (A11 * b2 - A12 * b1) * inv_det;
-
-            // Check for convergence
-            const float diff_x = new_offset_x - offset_x;
-            const float diff_y = new_offset_y - offset_y;
-
-            offset_x = new_offset_x;
-            offset_y = new_offset_y;
-
-            if (diff_x * diff_x + diff_y * diff_y < eps) {
-                // Reject refinements that converge too far from the detected feature, these are unreliable extrapolations that can teleport the feature outside the safe image border.
-                // Note: The refined location must remain strictly interior to the measurement window, as gradient estimates at the window edge already sample pixels outside it.
-                return (math::abs(offset_x) <= max_offset) && (math::abs(offset_y) <= max_offset);
-            }
-        }
-
-        // Failed to converge.
-        return false;
-    }
-
-    static inline bool refine_bilinear(
-        const unsigned char* __restrict const data,
-        const int stride,
-        float& offset_x,
-        float& offset_y
-    ) {
-        const int max_iterations = 10;
-        const int window_size = 5;
-        const float eps = 1e-6f;
-
-        // Initialize offset.
-        offset_x = 0.0f;
-        offset_y = 0.0f;
-
-        // Iterative refinement.
-        for (int iteration = 0; iteration < max_iterations; iteration++) {
-            float A11 = 0.0f;
-            float A12 = 0.0f;
-            float A22 = 0.0f;
-            float b1 = 0.0f;
-            float b2 = 0.0f;
-
-            for (int dy = -window_size; dy <= window_size; dy++) {
-                for (int dx = -window_size; dx <= window_size; dx++) {
-                    // Bilinear extraction stage
-                    const float sample_x = static_cast<float>(dx) + offset_x;
-                    const float sample_y = static_cast<float>(dy) + offset_y;
-
-                    // Get integer coordinates and fractional parts
-                    const int x0 = static_cast<int>(math::floor(static_cast<double>(sample_x)));
-                    const int y0 = static_cast<int>(math::floor(static_cast<double>(sample_y)));
-                    const int x1 = x0 + 1;
-                    const int y1 = y0 + 1;
-
-                    const float fx = sample_x - static_cast<float>(x0);
-                    const float fy = sample_y - static_cast<float>(y0);
-                    const float fx1 = 1.0f - fx;
-                    const float fy1 = 1.0f - fy;
-
-                    // Check bounds for all four pixels
-                    if (x0 < -window_size - 1 || x1 > window_size + 1 || y0 < -window_size - 1 || y1 > window_size + 1) {
-                        continue;
-                    }
-
-                    // Get pointers to the four corner pixels
-                    const unsigned char* ptr00 = data + y0 * stride + x0;
-                    const unsigned char* ptr01 = data + y0 * stride + x1;
-                    const unsigned char* ptr10 = data + y1 * stride + x0;
-                    const unsigned char* ptr11 = data + y1 * stride + x1;
-
-                    // Bilinear interpolation for intensity
-                    // const float I00 = static_cast<float>(*ptr00);
-                    // const float I01 = static_cast<float>(*ptr01);
-                    // const float I10 = static_cast<float>(*ptr10);
-                    // const float I11 = static_cast<float>(*ptr11);
-                    // const float intensity = I00 * fx1 * fy1 + I01 * fx * fy1 + I10 * fx1 * fy + I11 * fx * fy;
-
-                    // Bilinear interpolation for gradients
-                    // X-gradient using central differences with bilinear interpolation
-                    float gx = 0.0f;
-                    if (x0 >= -window_size && x1 <= window_size - 1) {
-                        const float gx00 = (ptr00[1] - ptr00[-1]) * 0.5f;
-                        const float gx01 = (ptr01[1] - ptr01[-1]) * 0.5f;
-                        const float gx10 = (ptr10[1] - ptr10[-1]) * 0.5f;
-                        const float gx11 = (ptr11[1] - ptr11[-1]) * 0.5f;
-                        gx = gx00 * fx1 * fy1 + gx01 * fx * fy1 + gx10 * fx1 * fy + gx11 * fx * fy;
-                    }
-
-                    // Y-gradient using central differences with bilinear interpolation
-                    float gy = 0.0f;
-                    if (y0 >= -window_size && y1 <= window_size - 1) {
-                        const float gy00 = (ptr00[stride] - ptr00[-stride]) * 0.5f;
-                        const float gy01 = (ptr01[stride] - ptr01[-stride]) * 0.5f;
-                        const float gy10 = (ptr10[stride] - ptr10[-stride]) * 0.5f;
-                        const float gy11 = (ptr11[stride] - ptr11[-stride]) * 0.5f;
-                        gy = gy00 * fx1 * fy1 + gy01 * fx * fy1 + gy10 * fx1 * fy + gy11 * fx * fy;
-                    }
-
-                    const float norm = gx * gx + gy * gy;
-                    if (norm < eps)
-                        continue;
-
-                    // At the corner, edge normals should intersect
-                    // The edge normal at point (sample_x, sample_y) is (gx, gy)
-                    // The line equation is: gx * (offset_x - sample_x) + gy * (offset_y - sample_y) = 0
-                    // We want to find where most lines intersect.
-
-                    A11 += gx * gx;
-                    A12 += gx * gy;
-                    A22 += gy * gy;
-
-                    b1 += gx * (gx * sample_x + gy * sample_y);
-                    b2 += gy * (gx * sample_x + gy * sample_y);
-                }
-            }
-
-            // Solve the 2x2 system
-            const float det = A11 * A22 - A12 * A12;
-            if (math::abs(det) < eps) {
-                return false;
-            }
-
-            const float inv_det = 1.0f / det;
-            const float new_offset_x = (A22 * b1 - A12 * b2) * inv_det;
-            const float new_offset_y = (A11 * b2 - A12 * b1) * inv_det;
-
-            // Check for convergence
-            const float diff_x = new_offset_x - offset_x;
-            const float diff_y = new_offset_y - offset_y;
-
-            offset_x = new_offset_x;
-            offset_y = new_offset_y;
-
-            if (diff_x * diff_x + diff_y * diff_y < eps) {
-                return true;
-            }
-        }
-
-        // Failed to converge.
-        return false;
-    }
-
-    static inline void patch_bilinear(
-        const unsigned char* __restrict const data,
-        const int stride,
-        const float offset_x,
-        const float offset_y,
-        unsigned char* __restrict patch
-    ) {
-        constexpr static const auto clamp = [](float value) -> unsigned char {
-            return static_cast<unsigned char>(math::min(math::max(int(math::round(value)), 0), 255));
-        };
-
-        constexpr int patch_size = 41;
-        constexpr int half_size = patch_size / 2;
-
-        // Split the offset into an integer part and a fractional part in [0, 1).
-        // Note: The floor ensures negative offsets are handled consistently, e.g. an offset of -0.3 becomes an integer part of -1 and a fraction of +0.7.
-        const int int_x = static_cast<int>(math::floor(static_cast<double>(offset_x)));
-        const int int_y = static_cast<int>(math::floor(static_cast<double>(offset_y)));
-        const float fx = offset_x - static_cast<float>(int_x);
-        const float fy = offset_y - static_cast<float>(int_y);
-
-        // The bilinear interpolation weights are constant across the patch.
-        const float w00 = (1 - fx) * (1 - fy);
-        const float w01 = fx * (1 - fy);
-        const float w10 = (1 - fx) * fy;
-        const float w11 = fx * fy;
-
-        // Pointer to the pixel at the integer part of the refined location, so the patch is centered on the refined subpixel location.
-        const unsigned char* __restrict const center = data + int_y * stride + int_x;
-
-        for (int dy = -half_size; dy <= half_size; ++dy) {
-            for (int dx = -half_size; dx <= half_size; ++dx) {
-                // Pointer to top-left pixel of the interpolation square
-                const unsigned char* base = center + dy * stride + dx;
-
-                const float i00 = static_cast<float>(base[0]);
-                const float i01 = static_cast<float>(base[1]);
-                const float i10 = static_cast<float>(base[stride]);
-                const float i11 = static_cast<float>(base[stride + 1]);
-
-                const float val = i00 * w00 + i01 * w01 + i10 * w10 + i11 * w11;
-
-                patch[(dy + half_size) * patch_size + (dx + half_size)] = clamp(val);
-            }
-        }
-    }
-
     static inline float dominant_angle(
         const unsigned char* __restrict const data,
         const int stride
@@ -832,7 +313,7 @@ namespace feature {
         const unsigned char* __restrict const data,
         const int stride,
         const float angle_radians,
-        descriptor& descriptor
+        descriptor::binary<256>& descriptor
     ) {
         constexpr static const int pattern_size = 256;
         constexpr static const int pattern[pattern_size][2][2] = {
@@ -1188,13 +669,13 @@ namespace feature {
     }
 
     static inline size_t find_matches(
-        const descriptor* lhs_descriptors,
+        const descriptor::binary<256>* lhs_descriptors,
         const size_t lhs_descriptors_size,
-        const descriptor* rhs_descriptors,
+        const descriptor::binary<256>* rhs_descriptors,
         const size_t rhs_descriptors_size,
         const float threshold,
         const size_t matches_count,
-        match* matches,
+        match::pair* matches,
         const size_t matches_size
     ) {
         if ((matches_count == 0) || (matches_size == 0)) {

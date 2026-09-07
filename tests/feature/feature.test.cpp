@@ -16,6 +16,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "feature/feature.hpp"
 
+#include "feature/refiner/subpixel.hpp"
+
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
@@ -23,7 +25,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -67,59 +68,6 @@ int main(int argc, char* argv[]) {
     static_cast<void>(argv);
 
     {
-        feature::point point{ 123, 456, 0.123f, 0.456f };
-        REQUIRE(point.x == 123);
-        REQUIRE(point.y == 456);
-        REQUIRE(point.response == 0.123f);
-        REQUIRE(point.angle == 0.456f);
-    }
-    {
-        feature::descriptor descriptor{
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10,
-            11,
-            12,
-            13,
-            14,
-            15,
-            16,
-            17,
-            18,
-            19,
-            20,
-            21,
-            22,
-            23,
-            24,
-            25,
-            26,
-            27,
-            28,
-            29,
-            30,
-            31
-        };
-        for (size_t i = 0; i < 32; ++i) {
-            REQUIRE(descriptor.data[i] == i);
-        }
-    }
-    {
-        feature::match match{ 1, 2, 0.123f };
-        REQUIRE(match.lhs_index == 1);
-        REQUIRE(match.rhs_index == 2);
-        REQUIRE(match.score == 0.123f);
-    }
-
-    {
         constexpr static const size_t data_width = 128;
         constexpr static const size_t data_height = 64;
         unsigned char data[data_height][data_width] = {};
@@ -129,30 +77,30 @@ int main(int argc, char* argv[]) {
             }
         }
         feature::point features_opencv[24] = {
-            { 33, 17, 0, 0 },
-            { 34, 17, 0, 0 },
-            { 35, 17, 0, 0 },
-            { 93, 17, 0, 0 },
-            { 94, 17, 0, 0 },
-            { 95, 17, 0, 0 },
-            { 33, 18, 0, 0 },
-            { 34, 18, 0, 0 },
-            { 94, 18, 0, 0 },
-            { 95, 18, 0, 0 },
-            { 33, 19, 0, 0 },
-            { 95, 19, 0, 0 },
-            { 33, 45, 0, 0 },
-            { 95, 45, 0, 0 },
-            { 33, 46, 0, 0 },
-            { 34, 46, 0, 0 },
-            { 94, 46, 0, 0 },
-            { 95, 46, 0, 0 },
-            { 33, 47, 0, 0 },
-            { 34, 47, 0, 0 },
-            { 35, 47, 0, 0 },
-            { 93, 47, 0, 0 },
-            { 94, 47, 0, 0 },
-            { 95, 47, 0, 0 }
+            { 33, 17, 0, 0, 0 },
+            { 34, 17, 0, 0, 0 },
+            { 35, 17, 0, 0, 0 },
+            { 93, 17, 0, 0, 0 },
+            { 94, 17, 0, 0, 0 },
+            { 95, 17, 0, 0, 0 },
+            { 33, 18, 0, 0, 0 },
+            { 34, 18, 0, 0, 0 },
+            { 94, 18, 0, 0, 0 },
+            { 95, 18, 0, 0, 0 },
+            { 33, 19, 0, 0, 0 },
+            { 95, 19, 0, 0, 0 },
+            { 33, 45, 0, 0, 0 },
+            { 95, 45, 0, 0, 0 },
+            { 33, 46, 0, 0, 0 },
+            { 34, 46, 0, 0, 0 },
+            { 94, 46, 0, 0, 0 },
+            { 95, 46, 0, 0, 0 },
+            { 33, 47, 0, 0, 0 },
+            { 34, 47, 0, 0, 0 },
+            { 35, 47, 0, 0, 0 },
+            { 93, 47, 0, 0, 0 },
+            { 94, 47, 0, 0, 0 },
+            { 95, 47, 0, 0, 0 }
         };
         feature::point features[data_width * data_height];
         const size_t features_10_count = feature::detect(&data[0][0], data_width, data_height, data_width, 10, data_width * data_height, features);
@@ -165,62 +113,6 @@ int main(int argc, char* argv[]) {
         }
         const size_t features_255_count = feature::detect(&data[0][0], data_width, data_height, data_width, 255, data_width * data_height, features);
         REQUIRE(features_255_count == 0);
-    }
-
-    {
-        feature::point features[25] = {
-            { -2, -2, 0, 0 },
-            { -1, -2, 0, 0 },
-            { 0, -2, 0, 0 },
-            { +1, -2, 0, 0 },
-            { +2, -2, 0, 0 },
-            { -2, -1, 0, 0 },
-            { -1, -1, 0, 0 },
-            { 0, -1, 0, 0 },
-            { +1, -1, 0, 0 },
-            { +2, -1, 0, 0 },
-            { -2, 0, 0, 0 },
-            { -1, 0, 0, 0 },
-            { 0, 0, 0, 0 },
-            { +1, 0, 0, 0 },
-            { +2, 0, 0, 0 },
-            { -2, +1, 0, 0 },
-            { -1, +1, 0, 0 },
-            { 0, +1, 0, 0 },
-            { +1, +1, 0, 0 },
-            { +2, +1, 0, 0 },
-            { -2, +2, 0, 0 },
-            { -1, +2, 0, 0 },
-            { 0, +2, 0, 0 },
-            { +1, +2, 0, 0 },
-            { +2, +2, 0, 0 }
-        };
-        size_t prune_count = 25;
-        feature::prune(&features[0], prune_count, [](const feature::point& feature) {
-            return (feature.x < -1) || (feature.x > 1) || (feature.y < -1) || (feature.y > 1);
-        });
-        REQUIRE(prune_count == 9);
-        const feature::point should_still_exist[9] = {
-            { -1, -1, 0, 0 },
-            { 0, -1, 0, 0 },
-            { +1, -1, 0, 0 },
-            { -1, 0, 0, 0 },
-            { 0, 0, 0, 0 },
-            { +1, 0, 0, 0 },
-            { -1, +1, 0, 0 },
-            { 0, +1, 0, 0 },
-            { +1, +1, 0, 0 }
-        };
-        for (size_t i = 0; i < prune_count; ++i) {
-            bool found = false;
-            for (size_t j = 0; j < 9; ++j) {
-                if (features[i].x == should_still_exist[j].x && features[i].y == should_still_exist[j].y) {
-                    REQUIRE(found == false);
-                    found = true;
-                }
-            }
-            REQUIRE(found);
-        }
     }
 
     {
@@ -237,9 +129,9 @@ int main(int argc, char* argv[]) {
         }
         constexpr static const unsigned int features_count = 3;
         feature::point features[features_count] = {
-            { 95, 19, 109, 0 },
-            { 35, 47, 77, 0 },
-            { 95, 47, 141, 0 }
+            { 95, 19, 109, 0, 0 },
+            { 35, 47, 77, 0, 0 },
+            { 95, 47, 141, 0, 0 }
         };
         for (size_t i = 0; i < features_count; ++i) {
             const float response = feature::score(&data[static_cast<size_t>(features[i].y)][static_cast<size_t>(features[i].x)], data_width);
@@ -250,18 +142,18 @@ int main(int argc, char* argv[]) {
     {
         {
             const feature::point features_detected_sorted_by_y[12] = {
-                { 0, 0, 0, 0.0f },
-                { 1, 0, 1, 0.1f },
-                { 2, 0, 2, 0.2f },
-                { 3, 0, 3, 0.3f },
-                { 4, 0, 4, 0.4f },
-                { 1, 1, 2, 0.5f },
-                { 2, 1, 4, 0.6f },
-                { 3, 1, 3, 0.7f },
-                { 1, 2, 1, 0.8f },
-                { 2, 2, 1, 0.9f },
-                { 3, 2, 8, 1.0f },
-                { 2, 20, 0, 1.1f },
+                { 0, 0, 0, 0.0f, 0 },
+                { 1, 0, 1, 0.1f, 0 },
+                { 2, 0, 2, 0.2f, 0 },
+                { 3, 0, 3, 0.3f, 0 },
+                { 4, 0, 4, 0.4f, 0 },
+                { 1, 1, 2, 0.5f, 0 },
+                { 2, 1, 4, 0.6f, 0 },
+                { 3, 1, 3, 0.7f, 0 },
+                { 1, 2, 1, 0.8f, 0 },
+                { 2, 2, 1, 0.9f, 0 },
+                { 3, 2, 8, 1.0f, 0 },
+                { 2, 20, 0, 1.1f, 0 },
             };
             feature::point features_suppressed[12] = {};
             const size_t features = feature::suppress(&features_detected_sorted_by_y[0], 12, 21, &features_suppressed[0]);
@@ -279,18 +171,18 @@ int main(int argc, char* argv[]) {
 
         {
             const feature::point features_detected_sorted_by_y[12] = {
-                { 0, 0, 0, 0.0f },
-                { 2, 2, 0, 0.1f },
-                { 4, 4, 0, 0.2f },
-                { 8, 8, 0, 0.3f },
-                { 10, 10, 0, 0.4f },
-                { 12, 12, 0, 0.5f },
-                { 14, 14, 0, 0.6f },
-                { 16, 16, 0, 0.7f },
-                { 18, 18, 0, 0.8f },
-                { 20, 20, 0, 0.9f },
-                { 22, 22, 0, 1.0f },
-                { 24, 24, 0, 1.1f },
+                { 0, 0, 0, 0.0f, 0 },
+                { 2, 2, 0, 0.1f, 0 },
+                { 4, 4, 0, 0.2f, 0 },
+                { 8, 8, 0, 0.3f, 0 },
+                { 10, 10, 0, 0.4f, 0 },
+                { 12, 12, 0, 0.5f, 0 },
+                { 14, 14, 0, 0.6f, 0 },
+                { 16, 16, 0, 0.7f, 0 },
+                { 18, 18, 0, 0.8f, 0 },
+                { 20, 20, 0, 0.9f, 0 },
+                { 22, 22, 0, 1.0f, 0 },
+                { 24, 24, 0, 1.1f, 0 },
             };
             feature::point features_suppressed[12] = {};
             const size_t features = feature::suppress(&features_detected_sorted_by_y[0], 12, 25, &features_suppressed[0]);
@@ -299,8 +191,8 @@ int main(int argc, char* argv[]) {
 
         {
             const feature::point features_detected_sorted_by_y[2] = {
-                { 10, 0, 1.0f, 0.0f },
-                { 10, 4, 2.0f, 0.0f },
+                { 10, 0, 1.0f, 0.0f, 0 },
+                { 10, 4, 2.0f, 0.0f, 0 },
             };
             feature::point features_suppressed[2] = {};
             const size_t features = feature::suppress(&features_detected_sorted_by_y[0], 2, 5, &features_suppressed[0]);
@@ -309,280 +201,6 @@ int main(int argc, char* argv[]) {
             REQUIRE(features_suppressed[0].y == features_detected_sorted_by_y[0].y);
             REQUIRE(features_suppressed[1].x == features_detected_sorted_by_y[1].x);
             REQUIRE(features_suppressed[1].y == features_detected_sorted_by_y[1].y);
-        }
-    }
-
-    {
-        feature::point features[9] = {
-            { -1, -1, 5, 0 },
-            { 0, -1, 6, 0 },
-            { +1, -1, 7, 0 },
-            { -1, 0, 4, 0 },
-            { 0, 0, 1, 0 },
-            { +1, 0, 8, 0 },
-            { -1, +1, 3, 0 },
-            { 0, +1, 2, 0 },
-            { +1, +1, 9, 0 }
-        };
-        feature::sort(&features[0], 9, [](const feature::point& lhs, const feature::point& rhs) {
-            return lhs.response > rhs.response;
-        });
-        for (unsigned int i = 0; i < 9; ++i) {
-            REQUIRE(is_value_approx(features[i].response, static_cast<float>(9 - i)));
-        }
-    }
-
-    {
-        // Edge cases: zero, one, and two elements (both already ordered and requiring a swap).
-        constexpr static const auto by_response_descending = [](const feature::point& lhs, const feature::point& rhs) {
-            return lhs.response > rhs.response;
-        };
-
-        feature::point features_empty[1] = {};
-        feature::sort(&features_empty[0], 0, by_response_descending);
-
-        feature::point features_single[1] = { { 0, 0, 42, 0 } };
-        feature::sort(&features_single[0], 1, by_response_descending);
-        REQUIRE(is_value_approx(features_single[0].response, 42));
-
-        feature::point features_pair_sorted[2] = { { 0, 0, 2, 0 }, { 0, 0, 1, 0 } };
-        feature::sort(&features_pair_sorted[0], 2, by_response_descending);
-        REQUIRE(is_value_approx(features_pair_sorted[0].response, 2));
-        REQUIRE(is_value_approx(features_pair_sorted[1].response, 1));
-
-        feature::point features_pair_unsorted[2] = { { 0, 0, 1, 0 }, { 0, 0, 2, 0 } };
-        feature::sort(&features_pair_unsorted[0], 2, by_response_descending);
-        REQUIRE(is_value_approx(features_pair_unsorted[0].response, 2));
-        REQUIRE(is_value_approx(features_pair_unsorted[1].response, 1));
-    }
-
-    {
-        // Worst-case inputs for a naive first-element-pivot quicksort: already-sorted and reverse-sorted arrays.
-        // A comparator wrapper counts comparisons, which is asserted to stay within a small constant factor of
-        // n*log2(n); an O(n^2) algorithm would blow through this budget by orders of magnitude, which is a more
-        // robust regression check than a wall-clock timing assertion would be under CI load.
-        constexpr static const size_t count = 8192;
-        constexpr static const auto log2_ceil = [](size_t n) -> double {
-            double result = 1;
-            while (n > 1) {
-                n >>= 1;
-                ++result;
-            }
-            return result;
-        };
-        const double comparison_budget = static_cast<double>(count) * log2_ceil(count) * 20.0;
-
-        std::vector<feature::point> features_reverse_sorted(count);
-        for (size_t i = 0; i < count; ++i) {
-            features_reverse_sorted[i] = { 0, 0, static_cast<float>(i), 0 };
-        }
-        size_t comparisons_reverse_sorted = 0;
-        feature::sort(features_reverse_sorted.data(), features_reverse_sorted.size(), [&comparisons_reverse_sorted](const feature::point& lhs, const feature::point& rhs) {
-            ++comparisons_reverse_sorted;
-            return lhs.response > rhs.response;
-        });
-        for (size_t i = 0; i < count; ++i) {
-            REQUIRE(is_value_approx(features_reverse_sorted[i].response, static_cast<float>(count - 1 - i)));
-        }
-        REQUIRE(static_cast<double>(comparisons_reverse_sorted) < comparison_budget);
-
-        std::vector<feature::point> features_already_sorted(count);
-        for (size_t i = 0; i < count; ++i) {
-            features_already_sorted[i] = { 0, 0, static_cast<float>(count - 1 - i), 0 };
-        }
-        size_t comparisons_already_sorted = 0;
-        feature::sort(features_already_sorted.data(), features_already_sorted.size(), [&comparisons_already_sorted](const feature::point& lhs, const feature::point& rhs) {
-            ++comparisons_already_sorted;
-            return lhs.response > rhs.response;
-        });
-        for (size_t i = 0; i < count; ++i) {
-            REQUIRE(is_value_approx(features_already_sorted[i].response, static_cast<float>(count - 1 - i)));
-        }
-        REQUIRE(static_cast<double>(comparisons_already_sorted) < comparison_budget);
-    }
-
-    {
-        // Many-duplicate-value input: FAST corner responses are small integers, so ties are common in practice,
-        // and a two-way quicksort partition always routes elements equal to the pivot to the same side, which is
-        // the actual failure mode that made the original first-element-pivot quicksort quadratic in production.
-        constexpr static const size_t count = 8192;
-        constexpr static const auto log2_ceil = [](size_t n) -> double {
-            double result = 1;
-            while (n > 1) {
-                n >>= 1;
-                ++result;
-            }
-            return result;
-        };
-        const double comparison_budget = static_cast<double>(count) * log2_ceil(count) * 20.0;
-
-        std::vector<feature::point> features_few_distinct(count);
-        for (size_t i = 0; i < count; ++i) {
-            features_few_distinct[i] = { 0, 0, static_cast<float>(i % 5), 0 };
-        }
-        size_t comparisons_few_distinct = 0;
-        feature::sort(features_few_distinct.data(), features_few_distinct.size(), [&comparisons_few_distinct](const feature::point& lhs, const feature::point& rhs) {
-            ++comparisons_few_distinct;
-            return lhs.response > rhs.response;
-        });
-        for (size_t i = 1; i < count; ++i) {
-            REQUIRE(features_few_distinct[i - 1].response >= features_few_distinct[i].response);
-        }
-        REQUIRE(static_cast<double>(comparisons_few_distinct) < comparison_budget);
-
-        std::vector<feature::point> features_all_equal(count);
-        for (size_t i = 0; i < count; ++i) {
-            features_all_equal[i] = { static_cast<float>(i), 0, 7, 0 };
-        }
-        size_t comparisons_all_equal = 0;
-        feature::sort(features_all_equal.data(), features_all_equal.size(), [&comparisons_all_equal](const feature::point& lhs, const feature::point& rhs) {
-            ++comparisons_all_equal;
-            return lhs.response > rhs.response;
-        });
-        for (size_t i = 1; i < count; ++i) {
-            REQUIRE(features_all_equal[i - 1].response >= features_all_equal[i].response);
-        }
-        REQUIRE(static_cast<double>(comparisons_all_equal) < comparison_budget);
-    }
-
-    {
-        const feature::point features_detected_sorted_by_response[10] = {
-            { 1, 21, 89, 0.2f },
-            { 42, 42, 65, 0.6f },
-            { 26, 1, 35, 0.3f },
-            { 21, 15, 21, 0.4f },
-            { 48, 72, 10, 0.7f },
-            { 72, 2, 3, 0.9f },
-            { 7, 3, 2, 0.1f },
-            { 63, 16, 2, 0.8f },
-            { 79, 68, 2, 1.0f },
-            { 24, 29, 1, 0.5f }
-        };
-        const int features_detected_sorted_size = 10;
-        const int max_width = 80;
-        const int max_height = 80;
-        feature::point features_distributed[20] = {};
-        const int max_sizes[10] = {
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10,
-            20
-        };
-        const int distributed_sizes[10] = {
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10,
-            10
-        };
-        const int distributed_indexes[10][10] = {
-            { 0, 8, 0, 0, 0, 0, 0, 0, 0, 0 },
-            { 0, 1, 5, 0, 0, 0, 0, 0, 0, 0 },
-            { 0, 1, 5, 8, 0, 0, 0, 0, 0, 0 },
-            { 0, 1, 4, 5, 8, 0, 0, 0, 0, 0 },
-            { 0, 1, 2, 4, 5, 8, 0, 0, 0, 0 },
-            { 0, 1, 2, 4, 5, 8, 9, 0, 0, 0 },
-            { 0, 1, 2, 4, 5, 6, 8, 9, 0, 0 },
-            { 0, 1, 2, 3, 4, 5, 6, 7, 8, 0 },
-            { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 },
-            { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 }
-        };
-        for (int i = 0; i < 10; ++i) {
-            const int min_features = max_sizes[i];
-            const int max_features = max_sizes[i];
-            const int features = feature::distribute(&features_detected_sorted_by_response[0], features_detected_sorted_size, max_width, max_height, min_features, max_features, &features_distributed[0]);
-            REQUIRE(features == distributed_sizes[i]);
-            for (int j = 0; j < features; ++j) {
-                const int distributed_index = distributed_indexes[i][j];
-                REQUIRE(features_distributed[j].x == features_detected_sorted_by_response[distributed_index].x);
-                REQUIRE(features_distributed[j].y == features_detected_sorted_by_response[distributed_index].y);
-                REQUIRE(is_value_approx(features_distributed[j].response, features_detected_sorted_by_response[distributed_index].response));
-                REQUIRE(is_value_approx(features_distributed[j].angle, features_detected_sorted_by_response[distributed_index].angle));
-            }
-        }
-    }
-
-    {
-        constexpr static const size_t data_width = 128;
-        constexpr static const size_t data_height = 64;
-        unsigned char data[data_height][data_width] = {};
-        for (size_t y = 0; y < data_height; ++y) {
-            for (size_t x = 0; x < data_width; ++x) {
-                if ((x >= data_width / 2) || (y >= data_height / 2)) {
-                    if ((x == data_width / 2) || (y == data_height / 2)) {
-                        data[y][x] = 128;
-                    }
-                    else {
-                        data[y][x] = 255;
-                    }
-                }
-                else {
-                    data[y][x] = 0;
-                }
-            }
-        }
-        for (int y = -2; y <= 2; ++y) {
-            for (int x = -2; x <= 2; ++x) {
-                float offset_x = 0;
-                float offset_y = 0;
-                REQUIRE(feature::refine(&data[static_cast<size_t>(static_cast<int>(data_height) / 2 + y)][static_cast<size_t>(static_cast<int>(data_width) / 2 + x)], data_width, offset_x, offset_y));
-                REQUIRE(is_value_approx(offset_x, static_cast<float>(-x), 1e-2));
-                REQUIRE(is_value_approx(offset_y, static_cast<float>(-y), 1e-2));
-            }
-        }
-        {
-            // Refinements that converge more than four pixels from the detected feature must be rejected by the acceptance gate.
-            // Note: The subpixel corner sits a fraction of a pixel inside the dark quadrant, so starting 4 pixels beyond the
-            // corner the refinement converges to an offset just over 4 pixels and is rejected, whereas starting 4 pixels
-            // before the corner it converges to an offset just under 4 pixels and is accepted.
-            float offset_x = 0;
-            float offset_y = 0;
-            REQUIRE(!feature::refine(&data[data_height / 2 + 4][data_width / 2 + 4], data_width, offset_x, offset_y));
-            REQUIRE(!feature::refine(&data[data_height / 2 + 6][data_width / 2 + 6], data_width, offset_x, offset_y));
-            REQUIRE(feature::refine(&data[data_height / 2 - 4][data_width / 2 - 4], data_width, offset_x, offset_y));
-            REQUIRE(is_value_approx(offset_x, +4.0f, 1e-2));
-            REQUIRE(is_value_approx(offset_y, +4.0f, 1e-2));
-        }
-    }
-
-    {
-        constexpr static const size_t data_width = 128;
-        constexpr static const size_t data_height = 64;
-        unsigned char data[data_height][data_width] = {};
-        for (size_t y = 0; y < data_height; ++y) {
-            for (size_t x = 0; x < data_width; ++x) {
-                if ((x >= data_width / 2) || (y >= data_height / 2)) {
-                    if ((x == data_width / 2) || (y == data_height / 2)) {
-                        data[y][x] = 128;
-                    }
-                    else {
-                        data[y][x] = 255;
-                    }
-                }
-                else {
-                    data[y][x] = 0;
-                }
-            }
-        }
-        for (int y = -2; y <= 2; ++y) {
-            for (int x = -2; x <= 2; ++x) {
-                float offset_x = 0;
-                float offset_y = 0;
-                REQUIRE(feature::refine_bilinear(&data[static_cast<size_t>(static_cast<int>(data_height) / 2 + y)][static_cast<size_t>(static_cast<int>(data_width) / 2 + x)], data_width, offset_x, offset_y));
-                REQUIRE(is_value_approx(offset_x, static_cast<float>(-x), 1e-2));
-                REQUIRE(is_value_approx(offset_y, static_cast<float>(-y), 1e-2));
-            }
         }
     }
 
@@ -641,7 +259,7 @@ int main(int argc, char* argv[]) {
                 data[y][x] = static_cast<unsigned char>(x + y);
             }
         }
-        feature::descriptor descriptor_expected = {
+        feature::descriptor::binary<256> descriptor_expected = {
             0x06,
             0x41,
             0x10,
@@ -675,7 +293,7 @@ int main(int argc, char* argv[]) {
             0x0D,
             0x86
         };
-        feature::descriptor descriptor;
+        feature::descriptor::binary<256> descriptor;
         feature::describe(&data[data_height / 2][data_width / 2], data_width, 190.0f * (3.141592653589793f / 180.0f), descriptor);
         REQUIRE(are_values_approx(&descriptor.data[0], &descriptor_expected.data[0], 256 / 8));
     }
@@ -702,9 +320,9 @@ int main(int argc, char* argv[]) {
             }
         }
         constexpr static const float pi = 3.141592653589793f;
-        feature::descriptor descriptor_0a;
-        feature::descriptor descriptor_0b;
-        feature::descriptor descriptor_90;
+        feature::descriptor::binary<256> descriptor_0a;
+        feature::descriptor::binary<256> descriptor_0b;
+        feature::descriptor::binary<256> descriptor_90;
         feature::describe(&data[data_center][data_center], data_size, 0.0f, descriptor_0a);
         feature::describe(&data[data_center][data_center], data_size, 0.0f, descriptor_0b);
         feature::describe(&data_rotated[data_center][data_center], data_size, pi / 2.0f, descriptor_90);
@@ -731,8 +349,8 @@ int main(int argc, char* argv[]) {
                 for (float oy : offsets) {
                     for (float ox : offsets) {
                         unsigned char patch[41][41];
-                        feature::patch_bilinear(feature, data_size, ox, oy, &patch[0][0]);
-                        feature::descriptor descriptor;
+                        feature::refiner::subpixel::patch_41x41_bilinear(feature, data_size, ox, oy, &patch[0][0]);
+                        feature::descriptor::binary<256> descriptor;
                         feature::describe(&patch[20][20], 41, feature::dominant_angle(&patch[20][20], 41), descriptor);
                         // The patch must be centered on the refined location, for integer offsets it is an exact copy of the shifted image.
                         for (int dy = -20; dy <= 20; ++dy) {
@@ -743,7 +361,7 @@ int main(int argc, char* argv[]) {
                     }
                 }
                 // The unrefined path samples the image directly.
-                feature::descriptor descriptor;
+                feature::descriptor::binary<256> descriptor;
                 feature::describe(feature, data_size, feature::dominant_angle(feature, data_size), descriptor);
             }
         }
@@ -753,7 +371,7 @@ int main(int argc, char* argv[]) {
             const int px = data_size / 2;
             const unsigned char* feature = data + py * data_size + px;
             unsigned char patch[41][41];
-            feature::patch_bilinear(feature, data_size, -0.25f, +0.5f, &patch[0][0]);
+            feature::refiner::subpixel::patch_41x41_bilinear(feature, data_size, -0.25f, +0.5f, &patch[0][0]);
             const float expected =
                 0.25f * 0.5f * static_cast<float>(data[(py + 0) * data_size + (px - 1)]) +
                 0.75f * 0.5f * static_cast<float>(data[(py + 0) * data_size + (px + 0)]) +
@@ -782,7 +400,7 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        feature::descriptor lhs[10] = {
+        feature::descriptor::binary<256> lhs[10] = {
             { 1, 2, 3, 4 },
             { 5, 6, 7, 8 },
             { 0, 0, 0, 0 },
@@ -794,7 +412,7 @@ int main(int argc, char* argv[]) {
             { 4, 4, 4, 4 },
             { 3, 3, 4, 4 }
         };
-        feature::descriptor rhs[10] = {
+        feature::descriptor::binary<256> rhs[10] = {
             { 4, 3, 2, 1 },
             { 8, 7, 6, 5 },
             { 8, 8, 8, 8 },
@@ -806,7 +424,7 @@ int main(int argc, char* argv[]) {
             { 4, 4, 4, 4 },
             { 1, 1, 2, 2 }
         };
-        feature::match matches[20];
+        match::pair matches[20];
         size_t matches_count = feature::find_matches(&lhs[0], 10, &rhs[0], 10, 1, 2, &matches[0], 20);
         REQUIRE(matches_count == 12);
     }
@@ -833,7 +451,7 @@ int main(int argc, char* argv[]) {
         render(&data_base[0], data_center, data_center);
         render(&data_shifted[0], data_center + shift_x, data_center + shift_y);
 
-        feature::descriptor descriptor_base;
+        feature::descriptor::binary<256> descriptor_base;
         feature::describe(
             &data_base[data_center * data_size + data_center],
             data_size,
@@ -841,7 +459,7 @@ int main(int argc, char* argv[]) {
             descriptor_base
         );
 
-        feature::descriptor descriptor_shifted;
+        feature::descriptor::binary<256> descriptor_shifted;
         feature::describe(
             &data_shifted[(data_center + shift_y) * data_size + (data_center + shift_x)],
             data_size,
@@ -853,10 +471,10 @@ int main(int argc, char* argv[]) {
 
         unsigned char patch_unshifted[41 * 41];
         unsigned char patch_subpixel[41 * 41];
-        feature::patch_bilinear(&data_base[data_center * data_size + data_center], data_size, 0.0f, 0.0f, &patch_unshifted[0]);
-        feature::patch_bilinear(&data_base[data_center * data_size + data_center], data_size, 0.25f, 0.25f, &patch_subpixel[0]);
-        feature::descriptor descriptor_unshifted;
-        feature::descriptor descriptor_subpixel;
+        feature::refiner::subpixel::patch_41x41_bilinear(&data_base[data_center * data_size + data_center], data_size, 0.0f, 0.0f, &patch_unshifted[0]);
+        feature::refiner::subpixel::patch_41x41_bilinear(&data_base[data_center * data_size + data_center], data_size, 0.25f, 0.25f, &patch_subpixel[0]);
+        feature::descriptor::binary<256> descriptor_unshifted;
+        feature::descriptor::binary<256> descriptor_subpixel;
         feature::describe(&patch_unshifted[20 * 41 + 20], 41, feature::dominant_angle(&patch_unshifted[20 * 41 + 20], 41), descriptor_unshifted);
         feature::describe(&patch_subpixel[20 * 41 + 20], 41, feature::dominant_angle(&patch_subpixel[20 * 41 + 20], 41), descriptor_subpixel);
         const unsigned int distance_subpixel_shift = feature::distance<256>(&descriptor_unshifted.data[0], &descriptor_subpixel.data[0]);
@@ -868,7 +486,7 @@ int main(int argc, char* argv[]) {
                 data_unrelated[y * data_size + x] = static_cast<unsigned char>((x * 5 + y * 11 + 37) % 256);
             }
         }
-        feature::descriptor descriptor_unrelated;
+        feature::descriptor::binary<256> descriptor_unrelated;
         feature::describe(
             &data_unrelated[data_center * data_size + data_center],
             data_size,

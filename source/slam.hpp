@@ -21,10 +21,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "core/logger.hpp"
 #include "estimation/consensus.hpp"
 #include "estimation/pose_estimation.hpp"
+#include "feature/descriptor/binary.hpp"
 #include "geometry/geometry.hpp"
 #include "image/image.hpp"
 #include "mapping/frame.hpp"
 #include "mapping/map.hpp"
+#include "match/pair.hpp"
 #include "math/matrix.hpp"
 
 #if defined(_MSC_VER)
@@ -47,10 +49,10 @@ public:
     mapping::map reconstruction;
 
 private:
-    static void ratio_test(std::vector<feature::match>& matches) {
-        std::vector<feature::match>::iterator keep = matches.begin();
-        for (std::vector<feature::match>::iterator i = matches.begin(); i != matches.end();) {
-            std::vector<feature::match>::iterator group_end = i + 1;
+    static void ratio_test(std::vector<match::pair>& matches) {
+        std::vector<match::pair>::iterator keep = matches.begin();
+        for (std::vector<match::pair>::iterator i = matches.begin(); i != matches.end();) {
+            std::vector<match::pair>::iterator group_end = i + 1;
             while ((group_end != matches.end()) && (group_end->lhs_index == i->lhs_index)) {
                 ++group_end;
             }
@@ -58,8 +60,8 @@ private:
                 *keep++ = *i;
             }
             else if (group_end - i == 2) {
-                const std::vector<feature::match>::iterator best = (i->score <= (i + 1)->score) ? i : (i + 1);
-                const std::vector<feature::match>::iterator worst = (i->score <= (i + 1)->score) ? (i + 1) : i;
+                const std::vector<match::pair>::iterator best = (i->score <= (i + 1)->score) ? i : (i + 1);
+                const std::vector<match::pair>::iterator worst = (i->score <= (i + 1)->score) ? (i + 1) : i;
                 if ((worst->score > 0.0f) && (best->score <= 0.75f * worst->score)) {
                     *keep++ = *best;
                 }
@@ -69,7 +71,7 @@ private:
         matches.erase(keep, matches.end());
     }
 
-    static void symmetry_test(const std::vector<feature::match>& lhs, const std::vector<feature::match>& rhs, std::vector<feature::match>& matches) {
+    static void symmetry_test(const std::vector<match::pair>& lhs, const std::vector<match::pair>& rhs, std::vector<match::pair>& matches) {
         matches.clear();
         matches.reserve(std::min(lhs.size(), rhs.size()));
         std::unordered_set<size_t> rhs_index_set;
@@ -81,7 +83,7 @@ private:
         for (const auto& lhs_match : lhs) {
             const size_t key = (lhs_match.rhs_index << 32) | lhs_match.lhs_index;
             if (rhs_index_set.find(key) != rhs_index_set.end()) {
-                matches.push_back(feature::match{ lhs_match.lhs_index, lhs_match.rhs_index, lhs_match.score });
+                matches.push_back(match::pair{ lhs_match.lhs_index, lhs_match.rhs_index, lhs_match.score });
             }
         }
     }
@@ -126,7 +128,7 @@ public:
         }
 
         // Compute matches.
-        std::vector<feature::match> matches_cp(math::max(frame_current.descriptor_pyramid[0].size(), frame_previous.descriptor_pyramid[0].size()) * 2);
+        std::vector<match::pair> matches_cp(math::max(frame_current.descriptor_pyramid[0].size(), frame_previous.descriptor_pyramid[0].size()) * 2);
         const size_t found_cp = feature::find_matches(
             frame_current.descriptor_pyramid[0].data(),
             frame_current.descriptor_pyramid[0].size(),
@@ -138,7 +140,7 @@ public:
             matches_cp.size()
         );
         matches_cp.resize(found_cp);
-        std::vector<feature::match> matches_pc(math::max(frame_current.descriptor_pyramid[0].size(), frame_previous.descriptor_pyramid[0].size()) * 2);
+        std::vector<match::pair> matches_pc(math::max(frame_current.descriptor_pyramid[0].size(), frame_previous.descriptor_pyramid[0].size()) * 2);
         const size_t found_pc = feature::find_matches(
             frame_previous.descriptor_pyramid[0].data(),
             frame_previous.descriptor_pyramid[0].size(),
@@ -153,14 +155,14 @@ public:
         // Filter matches.
         ratio_test(matches_cp);
         ratio_test(matches_pc);
-        std::vector<feature::match> matches;
+        std::vector<match::pair> matches;
         symmetry_test(matches_cp, matches_pc, matches);
         // Create final arrays of good matches.
         std::vector<int> match_index_current;
         std::vector<int> match_index_previous;
         std::vector<math::matrix<double, 2, 1>> match_point_current;
         std::vector<math::matrix<double, 2, 1>> match_point_previous;
-        for (const feature::match& m : matches) {
+        for (const match::pair& m : matches) {
             match_index_current.push_back(static_cast<int>(m.lhs_index));
             match_point_current.push_back({ { static_cast<double>(frame_current.keypoint_pyramid[0][m.lhs_index].x), static_cast<double>(frame_current.keypoint_pyramid[0][m.lhs_index].y) } });
             match_index_previous.push_back(static_cast<int>(m.rhs_index));
@@ -183,7 +185,7 @@ public:
         if (frame_current.id < 2) {
             estimation::model_essential<double> model;
             std::vector<estimation::correspondence_2d_2d<double>> essential_correspondencies;
-            for (const feature::match& m : matches) {
+            for (const match::pair& m : matches) {
                 const double lhs_point[2] = {
                     static_cast<double>(frame_current.keypoint_pyramid[0][m.lhs_index].x),
                     static_cast<double>(frame_current.keypoint_pyramid[0][m.lhs_index].y)
@@ -383,8 +385,8 @@ public:
                     continue;
                 }
                 // Check similarity.
-                const feature::descriptor& des_landmark = this->reconstruction.frames.at(landmark_observations[0].first).descriptor_pyramid[0][static_cast<size_t>(landmark_observations[0].second)];
-                const feature::descriptor& des_current = frame_current.descriptor_pyramid[0][static_cast<size_t>(match_index_current[i])];
+                const feature::descriptor::binary<256>& des_landmark = this->reconstruction.frames.at(landmark_observations[0].first).descriptor_pyramid[0][static_cast<size_t>(landmark_observations[0].second)];
+                const feature::descriptor::binary<256>& des_current = frame_current.descriptor_pyramid[0][static_cast<size_t>(match_index_current[i])];
                 if (feature::distance<256>(des_landmark.data, des_current.data) < 64) {
                     this->reconstruction.add_observation(frame_current, landmark, static_cast<size_t>(match_index_current[i]));
                     frame_previous_points[match_index_previous[i]] = -1;

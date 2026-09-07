@@ -111,10 +111,10 @@ int main(int argc, char* argv[]) {
         mapping::map m;
         mapping::frame f1;
         f1.id = 0;
-        f1.keypoint_pyramid = { { { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f } } } };
+        f1.keypoint_pyramid = { { { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f, 0 } } } };
         mapping::frame f2;
         f2.id = 1;
-        f2.keypoint_pyramid = { { { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f } } } };
+        f2.keypoint_pyramid = { { { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f, 0 } } } };
         mapping::point l1;
         l1.id = 0;
         m.add_frame(f1);
@@ -130,7 +130,7 @@ int main(int argc, char* argv[]) {
         mapping::map m;
         mapping::frame f1;
         f1.id = 0;
-        f1.keypoint_pyramid = { { { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f } } } };
+        f1.keypoint_pyramid = { { { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f, 0 } } } };
         mapping::point l1;
         l1.id = 0;
         m.add_frame(f1);
