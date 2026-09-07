@@ -173,7 +173,7 @@ namespace math {
         const size_t k = (j + 1) % 3;
         const type square_root_trace_plus_one = math::sqrt(initial_rotation_matrix[i][i] - initial_rotation_matrix[j][j] - initial_rotation_matrix[k][k] + 1.0);
         const type inverse_two_square_root_trace_plus_one = 0.5 / square_root_trace_plus_one;
-        this->rotation_quaternion[0 + 0] = (initial_rotation_matrix[j][k] - initial_rotation_matrix[k][j]) * inverse_two_square_root_trace_plus_one;
+        this->rotation_quaternion[0 + 0] = (initial_rotation_matrix[k][j] - initial_rotation_matrix[j][k]) * inverse_two_square_root_trace_plus_one;
         this->rotation_quaternion[1 + i] = 0.5 * square_root_trace_plus_one;
         this->rotation_quaternion[1 + j] = (initial_rotation_matrix[i][j] + initial_rotation_matrix[j][i]) * inverse_two_square_root_trace_plus_one;
         this->rotation_quaternion[1 + k] = (initial_rotation_matrix[i][k] + initial_rotation_matrix[k][i]) * inverse_two_square_root_trace_plus_one;

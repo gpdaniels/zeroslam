@@ -114,6 +114,38 @@ int main(int argc, char* argv[]) {
     }
 
     {
+        const double quaternions[4][4] = {
+            { 0.9, 0.1, 0.1, 0.4 },
+            { 0.1, 0.9, 0.1, 0.4 },
+            { 0.1, 0.1, 0.9, 0.4 },
+            { 0.1, 0.1, 0.4, 0.9 },
+        };
+        for (const double* quaternion : quaternions) {
+            const double length = math::sqrt(math::sqr(quaternion[0]) + math::sqr(quaternion[1]) + math::sqr(quaternion[2]) + math::sqr(quaternion[3]));
+            const math::so3<double> so3(quaternion[0] / length, quaternion[1] / length, quaternion[2] / length, quaternion[3] / length);
+            const math::so3<double> so3_round_trip(so3.get_matrix());
+            const math::matrix<double, 4, 1> quaternion_expected = so3.get_quaternion();
+            const math::matrix<double, 4, 1> quaternion_round_trip = so3_round_trip.get_quaternion();
+            for (size_t i = 0; i < 4; ++i) {
+                REQUIRE(is_value_approx(quaternion_round_trip[i], quaternion_expected[i], 1e-9));
+            }
+            const math::matrix<double, 3, 3> matrix_expected = so3.get_matrix();
+            const math::matrix<double, 3, 3> matrix_round_trip = so3_round_trip.get_matrix();
+            for (size_t row = 0; row < 3; ++row) {
+                for (size_t col = 0; col < 3; ++col) {
+                    REQUIRE(is_value_approx(matrix_round_trip[row][col], matrix_expected[row][col], 1e-9));
+                }
+            }
+            const math::matrix<double, 3, 1> point = { { 1.0, 2.0, 3.0 } };
+            const math::matrix<double, 3, 1> rotated_expected = so3 * point;
+            const math::matrix<double, 3, 1> rotated_round_trip = so3_round_trip * point;
+            for (size_t i = 0; i < 3; ++i) {
+                REQUIRE(is_value_approx(rotated_round_trip[i], rotated_expected[i], 1e-9));
+            }
+        }
+    }
+
+    {
         {
             math::so3<double> so3 = math::so3<double>::identity();
             math::so3<double> so3_inverse = so3.inverse();
