@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ZEROSLAM_OPTIMISATION_FACTOR_GRAPH_HPP
 
 #include "core/assert.hpp"
+#include "core/logger.hpp"
 #include "math/lie.hpp"
 #include "math/matrix.hpp"
 #include "math/matrix_decomposition_cholesky.hpp"
@@ -30,7 +31,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 #include <algorithm>
-#include <cstdio>
 #include <unordered_map>
 #include <vector>
 
@@ -488,13 +488,9 @@ namespace optimisation {
     public:
         // Solve the factor graph using Levenberg-Marquardt with Schur complement.
         int solve(int iterations = 10, bool use_relative_convergence = false) {
-            if (this->verbose) {
-                std::fflush(stdout);
-            }
-
             if ((this->edges.size() == 0) || ((this->vertices_general.size() == 0) && (this->vertices_marginalised.size() == 0))) {
                 if (this->verbose) {
-                    std::fprintf(stderr, "Cannot solve problem without edges or vertices\n");
+                    core::logger::log(core::logger::level::warn, "Cannot solve problem without edges or vertices");
                 }
                 return 0;
             }
@@ -524,7 +520,7 @@ namespace optimisation {
 
             // Log initial state.
             if (this->verbose) {
-                std::fprintf(stderr, "[INIT] iter: XXX, attempt XXX, chi = % 7.7f, rho = XXXX.XXXXXXX, base lambda = % 8.7f\n", this->chi_squared, this->damping_lambda);
+                core::logger::log(core::logger::level::debug, "[INIT] iter: XXX, attempt XXX, chi = % 7.7f, rho = XXXX.XXXXXXX, base lambda = % 8.7f", this->chi_squared, this->damping_lambda);
             }
 
             // Levenberg-Marquardt optimisation loop.
@@ -579,7 +575,7 @@ namespace optimisation {
                         good_step = true;
                         ++success_count;
                         if (this->verbose) {
-                            std::fprintf(stderr, "[GOOD] iter: % 3d, attempt % 3d, chi2 = % 7.7f, rho = % 7.7f, next lambda = % 8.7f\n", iter, failure_count, tempChi, rho, this->damping_lambda);
+                            core::logger::log(core::logger::level::debug, "[GOOD] iter: % 3d, attempt % 3d, chi2 = % 7.7f, rho = % 7.7f, next lambda = % 8.7f", iter, failure_count, tempChi, rho, this->damping_lambda);
                         }
                     }
                     else {
@@ -587,7 +583,7 @@ namespace optimisation {
                         this->damping_factor *= 2.0;
                         good_step = false;
                         if (this->verbose) {
-                            std::fprintf(stderr, "[ BAD] iter: % 3d, attempt % 3d, chi2 = % 7.7f, rho = % 7.7f, next lambda = % 8.7f\n", iter, failure_count, tempChi, rho, this->damping_lambda);
+                            core::logger::log(core::logger::level::debug, "[ BAD] iter: % 3d, attempt % 3d, chi2 = % 7.7f, rho = % 7.7f, next lambda = % 8.7f", iter, failure_count, tempChi, rho, this->damping_lambda);
                         }
                     }
                     if (!math::isfinite(this->damping_lambda)) {
@@ -784,7 +780,7 @@ namespace optimisation {
             math::matrix<double, 0, 0> delta_xpp = math::matrix<double, 0, 0>::zero(static_cast<size_t>(this->count_general_params), 1);
             if (!math::decompose_cholesky(hpp_schur_dense.data(), this->count_general_params, this->count_general_params, matrix_lower.data()) || !math::solve_cholesky(matrix_lower.data(), b_pp_schur.data(), this->count_general_params, this->count_general_params, delta_xpp.data())) {
                 if (this->verbose) {
-                    std::fprintf(stderr, "Cholesky solver failed!\n");
+                    core::logger::log(core::logger::level::warn, "Cholesky solver failed!");
                 }
                 // Restore Hessian if solver fails and clear any stale step.
                 this->h_pp = h_pp_backup;

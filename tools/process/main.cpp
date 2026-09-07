@@ -15,6 +15,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #include "cdr.hpp"
+#include "core/logger.hpp"
 #include "file.hpp"
 #include "mcap.hpp"
 #include "slam.hpp"
@@ -271,7 +272,7 @@ inline bool save_trajectory_and_map_as_ply(const char* path, int image_width, in
 int main(int argc, char* argv[]) {
     // Extract the optional --frames and --verbose limits, leaving the positional arguments in place.
     size_t frame_limit = static_cast<size_t>(-1);
-    int verbose = 0;
+    int verbose = static_cast<int>(core::logger::level::error);
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--frames") == 0) {
             if (i + 1 >= argc) {
@@ -298,8 +299,8 @@ int main(int argc, char* argv[]) {
             }
             char* end_pointer = nullptr;
             const long value = std::strtol(argv[i + 1], &end_pointer, 10);
-            if ((end_pointer == argv[i + 1]) || (*end_pointer != 0) || (value < 0) || (value > 2)) {
-                std::fprintf(stderr, "Invalid value for --verbose: '%s' (must be 0, 1, or 2).\n", argv[i + 1]);
+            if ((end_pointer == argv[i + 1]) || (*end_pointer != 0) || (value < 0) || (value > 5)) {
+                std::fprintf(stderr, "Invalid value for --verbose: '%s' (must be 0 to 5).\n", argv[i + 1]);
                 return EXIT_FAILURE;
             }
             verbose = static_cast<int>(value);
@@ -315,18 +316,18 @@ int main(int argc, char* argv[]) {
         std::printf("Usage %s [scene] [--frames count] [--verbose level]\n", argv[0]);
         std::printf("    scene     - Scene mcap file path.\n");
         std::printf("    --frames  - Optional limit, process only the first [count] frames.\n");
-        std::printf("    --verbose - Optional verbosity level (0=quiet, 1=progress, 2=detailed), default is 0.\n");
+        std::printf("    --verbose - Optional log verbosity (0=silent, 1=errors, 2=warnings, 3=notes, 4=progress, 5=debug), default is 1.\n");
         return EXIT_SUCCESS;
     }
 
-    if (verbose >= 2) {
-        std::printf("Provided arguments...\n");
-        std::printf("    scene:    %s\n", argv[1]);
-        if (frame_limit != static_cast<size_t>(-1)) {
-            std::printf("    limit:    %zu frames\n", frame_limit);
-        }
-        std::printf("Loading scene...\n");
+    // The tool and the library share the log, its verbosity is the --verbose level.
+    core::logger::set_verbosity(verbose);
+
+    core::logger::log(core::logger::level::info, "Scene: %s", argv[1]);
+    if (frame_limit != static_cast<size_t>(-1)) {
+        core::logger::log(core::logger::level::info, "Frame limit: %zu frames", frame_limit);
     }
+    core::logger::log(core::logger::level::info, "Loading scene...");
     std::size_t file_length = 0;
     unsigned char* file_data = file_load(argv[1], file_length);
     if (file_data == nullptr) {
@@ -365,17 +366,12 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    if (verbose >= 2) {
-        std::printf("Loading slam system...\n");
-    }
+    core::logger::log(core::logger::level::info, "Loading slam system...");
     std::signal(SIGINT, signal_handler);
     slam slam;
 
-    if (verbose >= 2) {
-        std::printf("Ready.\n");
-        std::printf("\n");
-        std::printf("Processing frames...\n");
-    }
+    core::logger::log(core::logger::level::info, "Ready.");
+    core::logger::log(core::logger::level::info, "Processing frames...");
     size_t frames = 0;
     size_t rows = 0;
     size_t cols = 0;
@@ -414,10 +410,7 @@ int main(int argc, char* argv[]) {
             cols = image.width;
             rows = image.height;
             timestamps.push_back(static_cast<long long>(img_msg->log_time));
-            if (verbose >= 2) {
-                std::printf("\n");
-                std::printf("Starting frame %zu\n", frames + 1);
-            }
+            core::logger::log(core::logger::level::info, "Starting frame %zu", frames + 1);
             std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
             math::matrix<double, 3, 3> intrinsic = { { { fx, 0.0, cx },
                                                        { 0.0, fy, cy },
@@ -425,31 +418,37 @@ int main(int argc, char* argv[]) {
             image::image frame(rows, cols, image.data.data());
             slam.process_frame(intrinsic, frame);
             std::chrono::duration<double> frame_duration = std::chrono::steady_clock::now() - start;
-            if (verbose >= 2) {
-                std::printf("Finished frame %zu, took: %f seconds\n", frames + 1, frame_duration.count());
-                std::fflush(stdout);
-            }
+            core::logger::log(core::logger::level::info, "Finished frame %zu, took: %f seconds", frames + 1, frame_duration.count());
             ++frames;
         }
         image_messages.clear();
         return true;
     };
 
+    size_t progress_percent = static_cast<size_t>(-1);
+    const auto log_progress = [&]() {
+        if (frame_limit != static_cast<size_t>(-1)) {
+            const size_t percent = (frames * 100) / frame_limit;
+            if (percent != progress_percent) {
+                progress_percent = percent;
+                core::logger::log(core::logger::level::info, "Processing: %3zu%% (%zu / %zu frames)", percent, frames, frame_limit);
+            }
+        }
+        else {
+            const size_t percent = (processed_messages * 100) / (total_messages == 0 ? 1 : total_messages);
+            if (percent != progress_percent) {
+                progress_percent = percent;
+                core::logger::log(core::logger::level::info, "Processing: %3zu%% (%zu / %zu messages)", percent, processed_messages, total_messages);
+            }
+        }
+    };
+
     for (const mcap::message_type& message : reader.get_messages()) {
         ++processed_messages;
-        if (verbose == 1) {
-            if (frame_limit != static_cast<size_t>(-1)) {
-                std::printf("\rProcessing: %3zu%% (%zu / %zu frames)", (frames * 100) / frame_limit, frames, frame_limit);
-            }
-            else {
-                std::printf("\rProcessing: %3zu%% (%zu / %zu messages)", (processed_messages * 100) / (total_messages == 0 ? 1 : total_messages), processed_messages, total_messages);
-            }
-            std::fflush(stdout);
-        }
+        log_progress();
 
         if (shutdown_requested) {
-            if (verbose >= 1)
-                std::printf("\nInterrupt received, stopping...\n");
+            core::logger::log(core::logger::level::note, "Interrupt received, stopping...");
             break;
         }
 
@@ -485,22 +484,14 @@ int main(int argc, char* argv[]) {
     }
     delete[] file_data;
 
-    if (verbose == 1) {
-        if (frame_limit != static_cast<size_t>(-1)) {
-            std::printf("\rProcessing: %3zu%% (%zu / %zu frames)", (frames * 100) / frame_limit, frames, frame_limit);
-        }
-        std::printf("\n");
-    }
+    log_progress();
 
     if (frames < 2) {
         std::fprintf(stderr, "At least two frames must be provided to create a map.\n");
         return EXIT_FAILURE;
     }
 
-    if (verbose >= 2) {
-        std::printf("\n");
-        std::printf("Saving map and camera trajectory...\n");
-    }
+    core::logger::log(core::logger::level::info, "Saving map and camera trajectory...");
 
     // Note: This can be easily plotted using evo: `evo_traj tum trajectory.txt -p`.
     if (!save_trajectory_as_txt("trajectory.txt", slam.reconstruction, timestamps)) {
@@ -511,7 +502,5 @@ int main(int argc, char* argv[]) {
         std::fprintf(stderr, "Failed to save map and camera trajectory to ply file.\n");
     }
 
-    if (verbose >= 2) {
-        std::printf("Done.\n");
-    }
+    core::logger::log(core::logger::level::info, "Done.");
 }

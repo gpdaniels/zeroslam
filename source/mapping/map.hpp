@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef ZEROSLAM_MAPPING_MAP_HPP
 #define ZEROSLAM_MAPPING_MAP_HPP
 
+#include "core/logger.hpp"
 #include "mapping/frame.hpp"
 #include "mapping/landmark.hpp"
 #include "optimisation/factor_graph.hpp"
@@ -26,7 +27,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
-#include <cstdio>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -195,7 +195,7 @@ namespace mapping {
 
             // Check for some invalid optimiser states.
             if (non_fixed_poses == 0 && non_fixed_landmarks == 0) {
-                std::printf("Optimised: No non fixed poses or landmarks [frames: %d landmarks: %d edges: %d]\n", non_fixed_poses, non_fixed_landmarks, non_fixed_edges);
+                core::logger::log(core::logger::level::note, "Optimised: No non fixed poses or landmarks [frames: %d landmarks: %d edges: %d]", non_fixed_poses, non_fixed_landmarks, non_fixed_edges);
                 // Cleanup
                 for (const auto& [frame_id, vertex] : camera_vertexes) {
                     static_cast<void>(frame_id);
@@ -214,7 +214,7 @@ namespace mapping {
                 return;
             }
             if (camera_vertexes.empty() || landmark_vertexes.empty()) {
-                std::printf("Optimised: Nothing to optimise [frames: %zu, landmarks: %zu]\n", camera_vertexes.size(), landmark_vertexes.size());
+                core::logger::log(core::logger::level::note, "Optimised: Nothing to optimise [frames: %zu, landmarks: %zu]", camera_vertexes.size(), landmark_vertexes.size());
                 // Cleanup
                 for (const auto& [frame_id, vertex] : camera_vertexes) {
                     static_cast<void>(frame_id);
@@ -236,7 +236,7 @@ namespace mapping {
             // Run the optimisation.
             double initial_chi = ba.get_current_chi();
             int number_of_accepted_rounds = ba.solve(rounds, use_relative_convergence);
-            std::printf("Optimised: %f to %f error [frames: %d landmarks: %d edges: %d] [%d/%d valid rounds]\n", initial_chi, ba.get_current_chi(), non_fixed_poses, non_fixed_landmarks, non_fixed_edges, number_of_accepted_rounds, rounds);
+            core::logger::log(core::logger::level::info, "Optimised: %f to %f error [frames: %d landmarks: %d edges: %d] [%d/%d valid rounds]", initial_chi, ba.get_current_chi(), non_fixed_poses, non_fixed_landmarks, non_fixed_edges, number_of_accepted_rounds, rounds);
             // Apply optimised vertices to frames and landmarks.
             for (const auto& [frame_id, vertex] : camera_vertexes) {
                 mapping::frame& frame = frames.at(frame_id);
@@ -321,7 +321,7 @@ namespace mapping {
                 ++it;
             }
             const size_t landmarks_after_cull = this->landmarks.size();
-            std::printf("Culled: %zu points\n", landmarks_before_cull - landmarks_after_cull);
+            core::logger::log(core::logger::level::info, "Culled: %zu points", landmarks_before_cull - landmarks_after_cull);
         }
     };
 }

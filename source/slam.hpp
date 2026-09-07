@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef ZEROSLAM_SLAM_HPP
 #define ZEROSLAM_SLAM_HPP
 
+#include "core/logger.hpp"
 #include "estimation/consensus.hpp"
 #include "estimation/pose_estimation.hpp"
 #include "geometry/geometry.hpp"
@@ -91,11 +92,15 @@ public:
             sensor::pinhole camera_intrinsics(math::matrix<double, 1, 4>({ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }).data(), 4);
             mapping::frame frame(camera_intrinsics, image_grey);
 
-            std::printf("Detected Features: ");
-            for (size_t i = 0; i < frame.keypoint_pyramid.size(); ++i) {
-                std::printf("%zu ", frame.keypoint_pyramid[i].size());
+            if (core::logger::enabled(core::logger::level::info)) {
+                char counts[256] = "";
+                size_t offset = 0;
+                for (size_t i = 0; (i < frame.keypoint_pyramid.size()) && (offset < sizeof(counts)); ++i) {
+                    const int length = std::snprintf(counts + offset, sizeof(counts) - offset, "%zu ", frame.keypoint_pyramid[i].size());
+                    offset += (length > 0) ? static_cast<size_t>(length) : 0;
+                }
+                core::logger::log(core::logger::level::info, "Detected Features: %sfeatures (at each pyramid level).", counts);
             }
-            std::printf("features (at each pyramid level).\n");
 
             // Add the frame to the reconstruction.
             this->reconstruction.add_frame(frame);
@@ -110,11 +115,15 @@ public:
         const mapping::frame& frame_previous = reconstruction.frames.at(mapping::frame::id_generator - 2);
         mapping::frame& frame_current = reconstruction.frames.at(mapping::frame::id_generator - 1);
 
-        std::printf("Previous Features: ");
-        for (size_t i = 0; i < frame_previous.keypoint_pyramid.size(); ++i) {
-            std::printf("%zu ", frame_previous.keypoint_pyramid[i].size());
+        if (core::logger::enabled(core::logger::level::info)) {
+            char counts[256] = "";
+            size_t offset = 0;
+            for (size_t i = 0; (i < frame_previous.keypoint_pyramid.size()) && (offset < sizeof(counts)); ++i) {
+                const int length = std::snprintf(counts + offset, sizeof(counts) - offset, "%zu ", frame_previous.keypoint_pyramid[i].size());
+                offset += (length > 0) ? static_cast<size_t>(length) : 0;
+            }
+            core::logger::log(core::logger::level::info, "Previous Features: %sfeatures (at each pyramid level).", counts);
         }
-        std::printf("features (at each pyramid level).\n");
 
         // Compute matches.
         std::vector<feature::match> matches_cp(math::max(frame_current.descriptor_pyramid[0].size(), frame_previous.descriptor_pyramid[0].size()) * 2);
@@ -157,8 +166,8 @@ public:
             match_index_previous.push_back(static_cast<int>(m.rhs_index));
             match_point_previous.push_back({ { static_cast<double>(frame_previous.keypoint_pyramid[0][m.rhs_index].x), static_cast<double>(frame_previous.keypoint_pyramid[0][m.rhs_index].y) } });
         }
-        std::printf("Matched: %zu features to previous frame.\n", matches.size());
-        std::printf("  (Starting Matches: %zu & %zu -> After Ratio: %zu & %zu -> After Symmetry: %zu)\n", found_cp, found_pc, matches_cp.size(), matches_pc.size(), matches.size());
+        core::logger::log(core::logger::level::info, "Matched: %zu features to previous frame.", matches.size());
+        core::logger::log(core::logger::level::debug, "  (Starting Matches: %zu & %zu -> After Ratio: %zu & %zu -> After Symmetry: %zu)", found_cp, found_pc, matches_cp.size(), matches_pc.size(), matches.size());
 
         // Cache observations from the previous frame that are in this one.
         std::unordered_map<int, int> frame_previous_points; // key is kp_index and data is landmark_id.
@@ -197,7 +206,7 @@ public:
             std::vector<size_t> essential_inliers(essential_correspondencies.size());
             size_t inliers = essential_correspondencies.size();
             if (!estimation::solve_ransac_essential(essential_correspondencies.data(), essential_correspondencies.size(), essential_residuals.data(), essential_inliers.data(), inliers, model)) {
-                std::fprintf(stderr, "Failed to calculate the initial pose transform.\n");
+                core::logger::log(core::logger::level::warn, "Failed to calculate the initial pose transform.");
                 std::exit(1);
             }
             std::vector<math::matrix<double, 2, 1>> match_point_current_inlier;
@@ -214,10 +223,10 @@ public:
             std::vector<math::matrix<double, 3, 1>> match_point_triangulated_inlier(inliers);
             size_t recover_pose_support = 0;
             if (!estimation::essential_matrix<double>::recover_pose(&model.essential[0][0], match_point_current_inlier.data()->data(), match_point_previous_inlier.data()->data(), inliers, rotation.data(), translation.data(), match_point_triangulated_inlier.data()->data(), &recover_pose_support)) {
-                std::fprintf(stderr, "Failed to calculate the initial pose transform.\n");
+                core::logger::log(core::logger::level::warn, "Failed to calculate the initial pose transform.");
                 std::exit(1);
             }
-            std::printf("Support: %zu of %zu inliers support the recovered pose.\n", recover_pose_support, inliers);
+            core::logger::log(core::logger::level::debug, "Support: %zu of %zu inliers support the recovered pose.", recover_pose_support, inliers);
 
             // Recover pose returns pose 2 to pose 1 rather than pose 1 to pose 2, so invert it.
             rotation = math::transpose(rotation);
@@ -227,10 +236,11 @@ public:
             frame_current.rotation = rotation * frame_previous.rotation;
             frame_current.translation = (rotation * frame_previous.translation) + translation;
 
-            std::printf("Inliers: %zu inliers in pose estimation.\n", inliers);
-            std::printf("Initial pose:\n");
-            std::printf(
-                "{\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f }\n}\n",
+            core::logger::log(core::logger::level::info, "Inliers: %zu inliers in pose estimation.", inliers);
+            core::logger::log(
+                core::logger::level::debug,
+                "%s:\n{\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f }\n}",
+                "Initial pose",
                 frame_current.rotation[0][0],
                 frame_current.rotation[0][1],
                 frame_current.rotation[0][2],
@@ -290,7 +300,7 @@ public:
                                                                              { model.translation[1] },
                                                                              { model.translation[2] } });
                     pnp_success = true;
-                    std::printf("Inliers: %zu inliers in PnP pose estimation out of %zu correspondencies.\n", inliers_size, pnp_correspondencies.size());
+                    core::logger::log(core::logger::level::info, "Inliers: %zu inliers in PnP pose estimation out of %zu correspondencies.", inliers_size, pnp_correspondencies.size());
                 }
             }
 
@@ -310,14 +320,15 @@ public:
                 ++observations_of_landmarks;
             }
         }
-        std::printf("Matched: %d features to previous frame landmarks.\n", observations_of_landmarks);
+        core::logger::log(core::logger::level::info, "Matched: %d features to previous frame landmarks.", observations_of_landmarks);
         // Optimise the pose of the new frame using the points that match the current map.
         this->reconstruction.optimise(1, true, 50);
         this->reconstruction.cull();
         if (observations_of_landmarks > 0) {
-            std::printf("Initial Optimised pose:\n");
-            std::printf(
-                "{\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f }\n}\n",
+            core::logger::log(
+                core::logger::level::debug,
+                "%s:\n{\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f }\n}",
+                "Initial Optimised pose",
                 frame_current.rotation[0][0],
                 frame_current.rotation[0][1],
                 frame_current.rotation[0][2],
@@ -381,7 +392,7 @@ public:
                 }
             }
         }
-        std::printf("Matched: %d features to map landmarks.\n", observations_of_map);
+        core::logger::log(core::logger::level::info, "Matched: %d features to map landmarks.", observations_of_map);
         // Optimise the pose of the new frame using reprojected points from the current map.
         this->reconstruction.optimise(1, true, 50);
         this->reconstruction.cull();
@@ -463,7 +474,7 @@ public:
             this->reconstruction.add_observation(frame_current, landmark, static_cast<size_t>(match_index_current[i]));
             ++new_landmarks;
         }
-        std::printf("Created: %d/%d new landmarks [invalid: %d, behind: %d, unprojectable: %d, poor: %d]\n", new_landmarks, potential_landmarks, invalid_landmarks, behind_landmarks, unprojectable_landmarks, poor_landmarks);
+        core::logger::log(core::logger::level::info, "Created: %d/%d new landmarks [invalid: %d, behind: %d, unprojectable: %d, poor: %d]", new_landmarks, potential_landmarks, invalid_landmarks, behind_landmarks, unprojectable_landmarks, poor_landmarks);
         // Optimise the pose of the new frame again.
         this->reconstruction.optimise(1, true, 50);
         this->reconstruction.cull();
@@ -471,10 +482,11 @@ public:
         this->reconstruction.optimise(10, false, 50, true);
         this->reconstruction.cull();
         // Print the map status and pose.
-        std::printf("Map status: %zu frames, %zu landmarks.\n", this->reconstruction.frames.size(), this->reconstruction.landmarks.size());
-        std::printf("Current pose:\n");
-        std::printf(
-            "{\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f }\n}\n",
+        core::logger::log(core::logger::level::info, "Map status: %zu frames, %zu landmarks.", this->reconstruction.frames.size(), this->reconstruction.landmarks.size());
+        core::logger::log(
+            core::logger::level::debug,
+            "%s:\n{\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f },\n  { % 10.8f, % 10.8f, % 10.8f, % 10.8f }\n}",
+            "Current pose",
             frame_current.rotation[0][0],
             frame_current.rotation[0][1],
             frame_current.rotation[0][2],
