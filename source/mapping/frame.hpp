@@ -19,7 +19,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ZEROSLAM_MAPPING_FRAME_HPP
 
 #include "feature/feature.hpp"
+#include "image/blur.hpp"
 #include "image/image.hpp"
+#include "image/resize.hpp"
 #include "math/matrix.hpp"
 #include "sensor/camera.hpp"
 
@@ -80,9 +82,9 @@ namespace mapping {
                     // Copy, blur, resize.
                     const image::image& previous = this->image_pyramid.back();
                     image::image blurred(previous.get_rows(), previous.get_cols());
-                    image::blur(previous.get_data(), static_cast<int>(previous.get_cols()), static_cast<int>(previous.get_rows()), static_cast<int>(previous.get_cols()), blurred.get_data());
+                    image::blur::gaussian_7x7(previous.get_data(), static_cast<int>(previous.get_cols()), static_cast<int>(previous.get_rows()), static_cast<int>(previous.get_cols()), blurred.get_data());
                     image::image next(previous.get_rows() / 2, previous.get_cols() / 2);
-                    image::resize(blurred.get_data(), blurred.get_cols(), blurred.get_rows(), next.get_cols(), next.get_rows(), next.get_data());
+                    image::resize::nearest(blurred.get_data(), blurred.get_cols(), blurred.get_rows(), next.get_cols(), next.get_rows(), next.get_data());
                     this->image_pyramid.push_back(next);
                 }
 

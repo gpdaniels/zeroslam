@@ -18,8 +18,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef ZEROSLAM_IMAGE_IMAGE_HPP
 #define ZEROSLAM_IMAGE_IMAGE_HPP
 
-#include "math/math.hpp"
-
 namespace {
     using size_t = decltype(sizeof(0));
 }
@@ -48,7 +46,7 @@ namespace image {
             , data(new unsigned char[rows * cols]) {
         }
 
-        image(size_t image_rows, size_t image_cols, unsigned char* image_data)
+        image(size_t image_rows, size_t image_cols, const unsigned char* image_data)
             : rows(image_rows)
             , cols(image_cols)
             , data(new unsigned char[image_rows * image_cols]) {
@@ -117,156 +115,6 @@ namespace image {
             return this->data;
         }
     };
-
-    template <int kernel_size = 7>
-    static inline void convolution_horizontal(
-        const unsigned char* data,
-        const int width,
-        const int height,
-        const int stride,
-        const int* __restrict const kernel,
-        unsigned char* __restrict const convolved
-    ) {
-        constexpr static const int kernel_radius = kernel_size / 2;
-        int divisor = 0;
-        for (int k = 0; k < kernel_size; ++k) {
-            divisor += kernel[k];
-        }
-        for (int y = 0; y < height; ++y) {
-            for (int x = 0; x < math::min(kernel_radius, width); ++x) {
-                convolved[(y + 0) * stride + x] = 0;
-            }
-            for (int x = 0; x < width - (kernel_size - 1); ++x) {
-                int sum = 0;
-                for (int k = 0; k < kernel_size; ++k) {
-                    sum += data[y * stride + (x + k)] * kernel[k];
-                }
-                convolved[y * stride + (x + kernel_radius)] = static_cast<unsigned char>((static_cast<float>(sum) / static_cast<float>(divisor)) + 0.5f);
-            }
-            for (int x = math::max(0, width - kernel_radius); x < width; ++x) {
-                convolved[y * stride + x] = 0;
-            }
-        }
-    }
-
-    template <int kernel_size = 7>
-    static inline void convolution_vertical(
-        const unsigned char* __restrict const data,
-        const int width,
-        const int height,
-        const int stride,
-        const int* __restrict const kernel,
-        unsigned char* __restrict const convolved
-    ) {
-        constexpr static const int kernel_radius = kernel_size / 2;
-        int divisor = 0;
-        for (int k = 0; k < kernel_size; ++k) {
-            divisor += kernel[k];
-        }
-        for (int y = 0; y < math::min(kernel_radius, height); ++y) {
-            for (int x = 0; x < width; ++x) {
-                convolved[y * stride + x] = 0;
-            }
-        }
-        for (int y = 0; y < height - (kernel_size - 1); ++y) {
-            for (int x = 0; x < width; ++x) {
-                int sum = 0;
-                for (int k = 0; k < kernel_size; ++k) {
-                    sum += data[(y + k) * stride + x] * kernel[k];
-                }
-                convolved[(y + kernel_radius) * stride + x] = static_cast<unsigned char>((static_cast<float>(sum) / static_cast<float>(divisor)) + 0.5f);
-            }
-        }
-        for (int y = math::max(0, height - kernel_radius); y < height; ++y) {
-            for (int x = 0; x < width; ++x) {
-                convolved[y * stride + x] = 0;
-            }
-        }
-    }
-
-    static inline void blur(
-        const unsigned char* __restrict const data,
-        const int width,
-        const int height,
-        const int stride,
-        unsigned char* __restrict const convolved
-    ) {
-        constexpr static const int kernel_size = 7;
-        constexpr static const int kernel[kernel_size] = {
-            18,
-            34,
-            49,
-            55,
-            49,
-            34,
-            18
-        };
-        unsigned char* vertically_convolved = new unsigned char[static_cast<unsigned long int>(height * stride)];
-        convolution_vertical<kernel_size>(data, width, height, stride, kernel, vertically_convolved);
-        convolution_horizontal<kernel_size>(vertically_convolved, width, height, stride, kernel, convolved);
-        delete[] vertically_convolved;
-    }
-
-    static inline unsigned char interpolate_nearest(
-        const unsigned char* __restrict data,
-        size_t source_width,
-        size_t source_height,
-        float offset_x,
-        float offset_y
-    ) {
-        const int nearest_x = math::max(0, math::min(math::round(offset_x), static_cast<int>(source_width) - 1));
-        const int nearest_y = math::max(0, math::min(math::round(offset_y), static_cast<int>(source_height) - 1));
-        return data[static_cast<size_t>(nearest_y) * source_width + static_cast<size_t>(nearest_x)];
-    }
-
-    static inline unsigned char interpolate_linear(
-        const unsigned char* __restrict data,
-        size_t source_width,
-        size_t source_height,
-        float offset_x,
-        float offset_y
-    ) {
-        const int floor_x = math::max(0, math::min(static_cast<int>(math::floor(offset_x)), static_cast<int>(source_width) - 1));
-        const int floor_y = math::max(0, math::min(static_cast<int>(math::floor(offset_y)), static_cast<int>(source_height) - 1));
-        const int ceil_x = math::min(floor_x + 1, static_cast<int>(source_width) - 1);
-        const int ceil_y = math::min(floor_y + 1, static_cast<int>(source_height) - 1);
-        const float weight_x = math::max(0.0f, math::min(offset_x - static_cast<float>(floor_x), 1.0f));
-        const float weight_y = math::max(0.0f, math::min(offset_y - static_cast<float>(floor_y), 1.0f));
-        return static_cast<unsigned char>(
-            math::round(
-                static_cast<float>(data[static_cast<size_t>(floor_y) * source_width + static_cast<size_t>(floor_x)]) * (1.0f - weight_x) * (1.0f - weight_y) +
-                static_cast<float>(data[static_cast<size_t>(floor_y) * source_width + static_cast<size_t>(ceil_x)]) * (weight_x) * (1.0f - weight_y) +
-                static_cast<float>(data[static_cast<size_t>(ceil_y) * source_width + static_cast<size_t>(floor_x)]) * (1.0f - weight_x) * (weight_y) +
-                static_cast<float>(data[static_cast<size_t>(ceil_y) * source_width + static_cast<size_t>(ceil_x)]) * (weight_x) * (weight_y)
-            )
-        );
-    }
-
-    using interpolate_function_type = unsigned char (*)(
-        const unsigned char* __restrict data,
-        size_t source_width,
-        size_t source_height,
-        float offset_x,
-        float offset_y
-    );
-
-    static inline void resize(
-        const unsigned char* __restrict const source_data,
-        const size_t source_width,
-        const size_t source_height,
-        const size_t target_width,
-        const size_t target_height,
-        unsigned char* __restrict const target_data,
-        interpolate_function_type interpolate_function = interpolate_nearest
-    ) {
-        for (size_t y = 0; y < target_height; ++y) {
-            const float offset_y = ((static_cast<float>(y) + 0.5f) * (static_cast<float>(source_height) / static_cast<float>(target_height))) - 0.5f;
-            for (size_t x = 0; x < target_width; ++x) {
-                const float offset_x = ((static_cast<float>(x) + 0.5f) * (static_cast<float>(source_width) / static_cast<float>(target_width))) - 0.5f;
-                target_data[y * target_width + x] = interpolate_function(source_data, source_width, source_height, offset_x, offset_y);
-            }
-        }
-    }
 }
 
 #endif // ZEROSLAM_IMAGE_IMAGE_HPP
