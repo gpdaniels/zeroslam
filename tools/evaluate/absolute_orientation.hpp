@@ -18,7 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef ZEROSLAM_TOOLS_EVALUATE_ABSOLUTE_ORIENTATION_HPP
 #define ZEROSLAM_TOOLS_EVALUATE_ABSOLUTE_ORIENTATION_HPP
 
-#include "matrix_decomposition_singular_value.hpp"
+#include "math/matrix_decomposition_singular_value.hpp"
 
 namespace {
     using size_t = decltype(sizeof(0));
