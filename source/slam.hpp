@@ -30,6 +30,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "match/matcher/bruteforce.hpp"
 #include "match/pair.hpp"
 #include "math/matrix.hpp"
+#include "sensor/camera/pinhole.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -93,7 +94,7 @@ private:
 public:
     void process_frame(const math::matrix<double, 3, 3>& intrinsics, const image::image& image_grey) {
         {
-            sensor::pinhole camera_intrinsics(math::matrix<double, 1, 4>({ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }).data(), 4);
+            sensor::camera::pinhole<double> camera_intrinsics(math::matrix<double, 1, 4>({ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }).data(), 4);
             mapping::frame frame(camera_intrinsics, image_grey);
 
             if (core::logger::enabled(core::logger::level::info)) {

@@ -16,6 +16,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "mapping/frame.hpp"
 
+#include "sensor/camera/pinhole.hpp"
+
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
@@ -42,7 +44,7 @@ int main(int argc, char* argv[]) {
     }
     {
         const math::matrix<double, 3, 3> intrinsics = { { { 1.0, 0.0, 0.5 }, { 0.0, 1.0, 0.5 }, { 0.0, 0.0, 1.0 } } };
-        sensor::pinhole camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }.data(), 4);
+        sensor::camera::pinhole<double> camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }.data(), 4);
         image::image image(256, 256);
         for (size_t i = 0; i < image.get_rows(); ++i) {
             for (size_t j = 0; j < image.get_cols(); ++j) {
@@ -60,7 +62,7 @@ int main(int argc, char* argv[]) {
 
     {
         const math::matrix<double, 3, 3> intrinsics = { { { 1.0, 0.0, 0.5 }, { 0.0, 1.0, 0.5 }, { 0.0, 0.0, 1.0 } } };
-        sensor::pinhole camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }.data(), 4);
+        sensor::camera::pinhole<double> camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }.data(), 4);
 
         image::image tiny(16, 16);
         for (size_t i = 0; i < tiny.get_rows(); ++i) {

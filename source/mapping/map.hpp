@@ -22,6 +22,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "mapping/frame.hpp"
 #include "mapping/landmark.hpp"
 #include "optimisation/factor_graph.hpp"
+#include "sensor/camera/pinhole.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -167,8 +168,8 @@ namespace mapping {
                     }
                     // Now add the edge.
                     const mapping::frame& frame = frames.at(frame_id);
-                    sensor::pinhole camera_model(camera_parameters, 4);
-                    optimisation::edge_base* m = new optimisation::edge_reprojection<sensor::pinhole>(camera_model);
+                    sensor::camera::pinhole<double> camera_model(camera_parameters, 4);
+                    optimisation::edge_base* m = new optimisation::edge_reprojection<sensor::camera::pinhole<double>>(camera_model);
                     m->set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].x), static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].y) } }.data()));
                     m->add_vertex(camera_vertexes[frame_id]);
                     m->add_vertex(landmark_vertexes[landmark_id]);

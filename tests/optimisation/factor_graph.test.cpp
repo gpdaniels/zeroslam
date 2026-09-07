@@ -16,7 +16,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "optimisation/factor_graph.hpp"
 
-#include "sensor/camera.hpp"
+#include "sensor/camera/pinhole.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -86,7 +86,7 @@ int main(int argc, char* argv[]) {
 
         random_pcg rng;
 
-        sensor::pinhole camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
+        sensor::camera::pinhole<double> camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
         // gtl::pinhole_arctangent<double> camera_model(std::vector<double>{1.0,1.0,0.0,0.0,0.5}.data(), 5);
 
         optimisation::factor_graph factor_graph(true);
@@ -143,8 +143,8 @@ int main(int argc, char* argv[]) {
                 math::matrix<double, 3, 1> world_point = camera * landmark;
                 math::matrix<double, 2, 1> point;
                 REQUIRE(camera_model.project(world_point.data(), point.data()));
-                sensor::pinhole edge_camera(camera_parameters, 4);
-                std::unique_ptr<optimisation::edge_base> m = std::make_unique<optimisation::edge_reprojection<sensor::pinhole>>(edge_camera);
+                sensor::camera::pinhole<double> edge_camera(camera_parameters, 4);
+                std::unique_ptr<optimisation::edge_base> m = std::make_unique<optimisation::edge_reprojection<sensor::camera::pinhole<double>>>(edge_camera);
                 m->set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { point[0] + (static_cast<double>(static_cast<int>(rng.get_random_raw() % 10) - 5) * 0.0001), point[1] + (static_cast<double>(static_cast<int>(rng.get_random_raw() % 10) - 5) * 0.0001) } }.data()));
                 m->add_vertex(camera_vertexes[static_cast<size_t>(camera_id)].get());
                 m->add_vertex(landmark_vertexes[static_cast<size_t>(landmark_id)].get());
@@ -184,7 +184,7 @@ int main(int argc, char* argv[]) {
     {
         // Construct a graph whose reduced pose system is not positive definite, forcing the Cholesky solver to fail.
         // The solve should treat failed attempts as bad steps and complete without corrupting the vertex states.
-        sensor::pinhole camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
+        sensor::camera::pinhole<double> camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
         double camera_parameters[4];
         camera_model.get_parameters(camera_parameters, 4);
 
@@ -206,8 +206,8 @@ int main(int argc, char* argv[]) {
         landmark_vertex->set_marginalised(true);
         factor_graph.add_vertex(landmark_vertex.get());
 
-        sensor::pinhole edge_camera(camera_parameters, 4);
-        std::unique_ptr<optimisation::edge_base> edge = std::make_unique<optimisation::edge_reprojection<sensor::pinhole>>(edge_camera);
+        sensor::camera::pinhole<double> edge_camera(camera_parameters, 4);
+        std::unique_ptr<optimisation::edge_base> edge = std::make_unique<optimisation::edge_reprojection<sensor::camera::pinhole<double>>>(edge_camera);
         edge->set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { 0.15, 0.25 } }.data()));
         edge->add_vertex(free_camera_vertex.get());
         edge->add_vertex(landmark_vertex.get());
@@ -227,7 +227,7 @@ int main(int argc, char* argv[]) {
 
     {
         // A landmark behind the camera must not produce a zero residual/jacobian, and the normal (in front) case must be completely unaffected by the `behind_camera_penalty`.
-        sensor::pinhole camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
+        sensor::camera::pinhole<double> camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
         double camera_parameters[4];
         camera_model.get_parameters(camera_parameters, 4);
 
@@ -242,8 +242,8 @@ int main(int argc, char* argv[]) {
             landmark_vertex->set_fixed(false);
             landmark_vertex->set_marginalised(true);
 
-            sensor::pinhole edge_camera(camera_parameters, 4);
-            std::unique_ptr<optimisation::edge_base> edge = std::make_unique<optimisation::edge_reprojection<sensor::pinhole>>(edge_camera);
+            sensor::camera::pinhole<double> edge_camera(camera_parameters, 4);
+            std::unique_ptr<optimisation::edge_base> edge = std::make_unique<optimisation::edge_reprojection<sensor::camera::pinhole<double>>>(edge_camera);
             edge->set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { 0.1, -0.2 } }.data()));
             edge->add_vertex(camera_vertex.get());
             edge->add_vertex(landmark_vertex.get());
@@ -283,8 +283,8 @@ int main(int argc, char* argv[]) {
             landmark_vertex->set_fixed(false);
             landmark_vertex->set_marginalised(true);
 
-            sensor::pinhole edge_camera(camera_parameters, 4);
-            std::unique_ptr<optimisation::edge_base> edge = std::make_unique<optimisation::edge_reprojection<sensor::pinhole>>(edge_camera);
+            sensor::camera::pinhole<double> edge_camera(camera_parameters, 4);
+            std::unique_ptr<optimisation::edge_base> edge = std::make_unique<optimisation::edge_reprojection<sensor::camera::pinhole<double>>>(edge_camera);
             edge->set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { 0.1, -0.2 } }.data()));
             edge->add_vertex(camera_vertex.get());
             edge->add_vertex(landmark_vertex.get());

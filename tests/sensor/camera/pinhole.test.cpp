@@ -14,7 +14,7 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include "sensor/camera.hpp"
+#include "sensor/camera/pinhole.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -23,6 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -52,37 +53,35 @@ int main(int argc, char* argv[]) {
     static_cast<void>(argv);
 
     {
-        sensor::pinhole pinhole;
+        sensor::camera::pinhole<double> pinhole;
         double parameters[4]{};
-        pinhole.get_parameters(&parameters[0], 4);
+        REQUIRE(pinhole.get_parameters(&parameters[0], 4));
         REQUIRE(is_value_approx(parameters[0], 1.0));
         REQUIRE(is_value_approx(parameters[1], 1.0));
         REQUIRE(is_value_approx(parameters[2], 0.5));
         REQUIRE(is_value_approx(parameters[3], 0.5));
         const double parameters_new[4] = { 1.0, 2.0, 3.0, 4.0 };
         pinhole.set_parameters(&parameters_new[0], 4);
-        pinhole.get_parameters(&parameters[0], 4);
+        REQUIRE(pinhole.get_parameters(&parameters[0], 4));
         REQUIRE(is_value_approx(parameters_new[0], parameters[0]));
         REQUIRE(is_value_approx(parameters_new[1], parameters[1]));
         REQUIRE(is_value_approx(parameters_new[2], parameters[2]));
         REQUIRE(is_value_approx(parameters_new[3], parameters[3]));
     }
-
     {
-        sensor::pinhole pinhole;
+        sensor::camera::pinhole<double> pinhole;
         const double parameters_new[4] = { 1.0, 2.0, 3.0, 4.0 };
         pinhole.set_parameters(&parameters_new[0], 4);
         double parameters[4];
-        pinhole.get_parameters(&parameters[0], 4);
+        REQUIRE(pinhole.get_parameters(&parameters[0], 4));
         REQUIRE(is_value_approx(parameters_new[0], parameters[0]));
         REQUIRE(is_value_approx(parameters_new[1], parameters[1]));
         REQUIRE(is_value_approx(parameters_new[2], parameters[2]));
         REQUIRE(is_value_approx(parameters_new[3], parameters[3]));
     }
-
     {
         {
-            sensor::pinhole pinhole;
+            sensor::camera::pinhole<double> pinhole;
             const double world_point[3] = { 0, 0, 1 };
             const double image_point_expected[2] = { 0.5, 0.5 };
             double image_point[2]{};
@@ -92,7 +91,7 @@ int main(int argc, char* argv[]) {
         }
 
         {
-            sensor::pinhole pinhole;
+            sensor::camera::pinhole<double> pinhole;
             const double world_point[3] = { 0, 0, 1 };
             const double image_point_expected[2] = { 0.5, 0.5 };
             const double jacobian_projection_expected[2][3] = { { 1, 0, 0 }, { 0, 1, 0 } };
@@ -108,7 +107,7 @@ int main(int argc, char* argv[]) {
             }
         }
         {
-            sensor::pinhole pinhole;
+            sensor::camera::pinhole<double> pinhole;
             const double world_point[3] = { 0, 0, 1 };
             const double image_point_expected[2] = { 0.5, 0.5 };
             const double jacobian_parameter_expected[2][pinhole.parameter_count] = { { 0, 0, 1, 0 }, { 0, 0, 0, 1 } };
@@ -124,7 +123,7 @@ int main(int argc, char* argv[]) {
             }
         }
         {
-            sensor::pinhole pinhole;
+            sensor::camera::pinhole<double> pinhole;
             const double world_point[3] = { -1, 1, 2 };
             const double image_point_expected[2] = { 0.0, 1.0 };
             const double jacobian_projection_expected[2][3] = { { 0.5, 0, 0.25 }, { 0, 0.5, -0.25 } };
@@ -145,10 +144,9 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-
     {
         {
-            sensor::pinhole pinhole;
+            sensor::camera::pinhole<double> pinhole;
             const double image_point[2] = { 0.5, 0.5 };
             const double world_ray_expected[3] = { 0, 0, 1 };
             double world_ray[3]{};
@@ -158,7 +156,7 @@ int main(int argc, char* argv[]) {
             REQUIRE(is_value_approx(world_ray[2], world_ray_expected[2]));
         }
         {
-            sensor::pinhole pinhole;
+            sensor::camera::pinhole<double> pinhole;
             const double image_point[2] = { 0.5, 0.5 };
             const double world_ray_expected[3] = { 0, 0, 1 };
             double jacobian_unprojection_expected[3][2] = { { 1, 0 }, { 0, 1 }, { 0, 0 } };
@@ -175,13 +173,12 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-
     {
-        sensor::pinhole pinhole;
+        sensor::camera::pinhole<double> pinhole;
         const double parameters_new[4] = { 525, 525, 640 / 2, 480 / 2 };
         pinhole.set_parameters(&parameters_new[0], 4);
         double parameters[4];
-        pinhole.get_parameters(&parameters[0], 4);
+        REQUIRE(pinhole.get_parameters(&parameters[0], 4));
         REQUIRE(is_value_approx(parameters_new[0], parameters[0]));
         REQUIRE(is_value_approx(parameters_new[1], parameters[1]));
         REQUIRE(is_value_approx(parameters_new[2], parameters[2]));
@@ -202,10 +199,9 @@ int main(int argc, char* argv[]) {
         REQUIRE(is_value_approx(image_point[0], image_point_expected[0]));
         REQUIRE(is_value_approx(image_point[1], image_point_expected[1]));
     }
-
     {
         const double parameters[4] = { 525, 525, 640 / 2, 480 / 2 };
-        const sensor::pinhole pinhole(&parameters[0], 4);
+        const sensor::camera::pinhole<double> pinhole(&parameters[0], 4);
         const double image_point_expected[2] = { 640 / 4, 3 * (480 / 4) };
         const double world_ray_expected[3] = {
             ((image_point_expected[0] - parameters[2]) / parameters[0]) * 0.25,
@@ -217,10 +213,9 @@ int main(int argc, char* argv[]) {
         REQUIRE(is_value_approx(image_point[0], image_point_expected[0]));
         REQUIRE(is_value_approx(image_point[1], image_point_expected[1]));
     }
-
     {
         const double parameters[4] = { 525, 525, 320, 240 };
-        sensor::pinhole pinhole(&parameters[0], 4);
+        sensor::camera::pinhole<double> pinhole(&parameters[0], 4);
 
         const double step = 1e-6;
 
@@ -278,13 +273,13 @@ int main(int argc, char* argv[]) {
             for (size_t i = 0; i < 4; ++i) {
                 double params_plus[4] = { parameters[0], parameters[1], parameters[2], parameters[3] };
                 params_plus[i] += step;
-                sensor::pinhole pinhole_plus(params_plus, 4);
+                sensor::camera::pinhole<double> pinhole_plus(params_plus, 4);
                 double projected_plus[2] = { 0.0, 0.0 };
                 REQUIRE(pinhole_plus.project(point, projected_plus));
 
                 double params_minus[4] = { parameters[0], parameters[1], parameters[2], parameters[3] };
                 params_minus[i] -= step;
-                sensor::pinhole pinhole_minus(params_minus, 4);
+                sensor::camera::pinhole<double> pinhole_minus(params_minus, 4);
                 double projected_minus[2] = { 0.0, 0.0 };
                 REQUIRE(pinhole_minus.project(point, projected_minus));
 
@@ -336,9 +331,8 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-
     {
-        sensor::pinhole pinhole;
+        sensor::camera::pinhole<double> pinhole;
         double image_point[2] = { 0.0, 0.0 };
         const double point_behind[3] = { 0.1, 0.2, -1.0 };
         const double point_at_camera[3] = { 0.1, 0.2, 0.0 };
@@ -346,6 +340,15 @@ int main(int argc, char* argv[]) {
         REQUIRE(pinhole.project(&point_behind[0], &image_point[0]) == false);
         REQUIRE(pinhole.project(&point_at_camera[0], &image_point[0]) == false);
         REQUIRE(pinhole.project(&point_in_front[0], &image_point[0]) == true);
+    }
+
+    {
+        const double parameters[4] = { 500.0, 500.0, 320.0, 240.0 };
+        const sensor::camera::pinhole<double> pinhole(&parameters[0], 4);
+        double recovered[4] = {};
+        REQUIRE(!pinhole.get_parameters(&recovered[0], 3));
+        REQUIRE(!pinhole.get_parameters(nullptr, 4));
+        REQUIRE(recovered[0] == 0.0);
     }
 
     return EXIT_SUCCESS;

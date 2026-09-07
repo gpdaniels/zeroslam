@@ -32,7 +32,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "image/image.hpp"
 #include "image/pyramid.hpp"
 #include "math/matrix.hpp"
-#include "sensor/camera.hpp"
+#include "sensor/camera/pinhole.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -52,7 +52,7 @@ namespace mapping {
         int id;
         math::matrix<double, 3, 3> rotation;
         math::matrix<double, 3, 1> translation;
-        sensor::pinhole camera;
+        sensor::camera::pinhole<double> camera;
         image::pyramid image_pyramid;
         std::vector<std::vector<feature::point>> keypoint_pyramid;
         std::vector<std::vector<feature::descriptor::binary<256>>> descriptor_pyramid;
@@ -71,7 +71,7 @@ namespace mapping {
             this->translation = math::matrix<double, 3, 1>::zero();
         }
 
-        frame(const sensor::pinhole camera_intrinsics, const image::image& input_image_grey) {
+        frame(const sensor::camera::pinhole<double> camera_intrinsics, const image::image& input_image_grey) {
             this->id = frame::id_generator++;
             this->rotation = math::matrix<double, 3, 3>::identity();
             this->translation = math::matrix<double, 3, 1>::zero();
