@@ -29,9 +29,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "feature/refiner/subpixel.hpp"
 #include "feature/score/fast.hpp"
 #include "feature/suppressor/fast.hpp"
-#include "image/blur.hpp"
 #include "image/image.hpp"
-#include "image/resize.hpp"
+#include "image/pyramid.hpp"
 #include "math/matrix.hpp"
 #include "sensor/camera.hpp"
 
@@ -54,7 +53,7 @@ namespace mapping {
         math::matrix<double, 3, 3> rotation;
         math::matrix<double, 3, 1> translation;
         sensor::pinhole camera;
-        std::vector<image::image> image_pyramid;
+        image::pyramid image_pyramid;
         std::vector<std::vector<feature::point>> keypoint_pyramid;
         std::vector<std::vector<feature::descriptor::binary<256>>> descriptor_pyramid;
 
@@ -78,27 +77,11 @@ namespace mapping {
             this->translation = math::matrix<double, 3, 1>::zero();
             this->camera = camera_intrinsics;
 
-            // Pyramid.
-            // Note: The number of octaves is calculated from floored powers of two required to represent the smallest image dimension.
-            // Note: We subtract five levels to ensure the smalles image size has a minimum dimension of at least 32 pixels.
-            // Note: The clamp to a minimum of one guarantees that at least the base level (level 0) is always processed, even for tiny images whose smaller dimension is under 64 pixels (which would otherwise yield a non-positive octave count).
-            const int octaves = math::max(1, static_cast<int>(math::floor(math::log(static_cast<double>(math::min(input_image_grey.get_cols(), input_image_grey.get_rows()))) / math::log(2.0))) - 5);
-            this->image_pyramid.reserve(static_cast<size_t>(octaves));
-            this->keypoint_pyramid.reserve(static_cast<size_t>(octaves));
-            this->descriptor_pyramid.reserve(static_cast<size_t>(octaves));
-            this->image_pyramid.push_back(input_image_grey);
-            for (int o = 0; o < octaves; ++o) {
-                if (o > 0) {
-                    // Copy, blur, resize.
-                    const image::image& previous = this->image_pyramid.back();
-                    image::image blurred(previous.get_rows(), previous.get_cols());
-                    image::blur::gaussian_7x7(previous.get_data(), static_cast<int>(previous.get_cols()), static_cast<int>(previous.get_rows()), static_cast<int>(previous.get_cols()), blurred.get_data());
-                    image::image next(previous.get_rows() / 2, previous.get_cols() / 2);
-                    image::resize::nearest(blurred.get_data(), blurred.get_cols(), blurred.get_rows(), next.get_cols(), next.get_rows(), next.get_data());
-                    this->image_pyramid.push_back(next);
-                }
-
-                const image::image& image_grey = this->image_pyramid.back();
+            this->image_pyramid = image::pyramid(input_image_grey);
+            this->keypoint_pyramid.reserve(this->image_pyramid.size());
+            this->descriptor_pyramid.reserve(this->image_pyramid.size());
+            for (size_t o = 0; o < this->image_pyramid.size(); ++o) {
+                const image::image& image_grey = this->image_pyramid[o];
                 const int image_cols = static_cast<int>(image_grey.get_cols());
                 const int image_rows = static_cast<int>(image_grey.get_rows());
 
