@@ -62,43 +62,43 @@ int main(int argc, char* argv[]) {
     static_cast<void>(argv);
     {
         {
-            matrix::matrix<double, 0, 0> m;
+            math::matrix<double, 0, 0> m;
             static_cast<void>(m);
         }
         {
-            matrix::matrix<double, 1, 1> m;
+            math::matrix<double, 1, 1> m;
             static_cast<void>(m);
         }
         {
-            matrix::matrix<double, 1, 2> m;
+            math::matrix<double, 1, 2> m;
             static_cast<void>(m);
         }
         {
-            matrix::matrix<double, 2, 1> m;
+            math::matrix<double, 2, 1> m;
             static_cast<void>(m);
         }
         {
-            matrix::matrix<double, 2, 2> m;
+            math::matrix<double, 2, 2> m;
             static_cast<void>(m);
         }
     }
 
     {
-        matrix::matrix<double, 3, 2> m1 = { { {} } };
+        math::matrix<double, 3, 2> m1 = { { {} } };
         m1[2][1] = 1234567890;
-        matrix::matrix<double, 3, 2> m2(m1);
+        math::matrix<double, 3, 2> m2(m1);
         REQUIRE(m2[2][1] == 1234567890);
     }
 
     {
         {
-            matrix::matrix<double, 1, 1> m = { { 101.0 } };
+            math::matrix<double, 1, 1> m = { { 101.0 } };
             REQUIRE(m[0] == 101.0);
             REQUIRE(m(0, 0) == 101.0);
         }
 
         {
-            matrix::matrix<double, 5, 1> m = { { 101.0, 202.0, 303.0, 404.0, 505.0 } };
+            math::matrix<double, 5, 1> m = { { 101.0, 202.0, 303.0, 404.0, 505.0 } };
             REQUIRE(m[0] == 101.0);
             REQUIRE(m[1] == 202.0);
             REQUIRE(m[2] == 303.0);
@@ -111,7 +111,7 @@ int main(int argc, char* argv[]) {
             REQUIRE(m(4, 0) == 505.0);
         }
         {
-            matrix::matrix<double, 1, 5> m = { { 101.0, 202.0, 303.0, 404.0, 505.0 } };
+            math::matrix<double, 1, 5> m = { { 101.0, 202.0, 303.0, 404.0, 505.0 } };
             REQUIRE(m[0] == 101.0);
             REQUIRE(m[1] == 202.0);
             REQUIRE(m[2] == 303.0);
@@ -124,7 +124,7 @@ int main(int argc, char* argv[]) {
             REQUIRE(m(0, 4) == 505.0);
         }
         {
-            matrix::matrix<double, 3, 2> m = { { { 1.0, 2.0 }, { 3.0, 4.0 }, { 5.0, 6.0 } } };
+            math::matrix<double, 3, 2> m = { { { 1.0, 2.0 }, { 3.0, 4.0 }, { 5.0, 6.0 } } };
             REQUIRE(m[0][0] == 1.0);
             REQUIRE(m[0][1] == 2.0);
             REQUIRE(m[1][0] == 3.0);
@@ -143,7 +143,7 @@ int main(int argc, char* argv[]) {
     {
         double data[3][2] = { { 1, 2 }, { 3, 4 }, { 5, 6 } };
         const double* data_pointer = &data[0][0];
-        matrix::matrix<double, 3, 2> m(data_pointer);
+        math::matrix<double, 3, 2> m(data_pointer);
         REQUIRE(m[0][0] == 1);
         REQUIRE(m[0][1] == 2);
         REQUIRE(m[1][0] == 3);
@@ -153,7 +153,7 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        matrix::matrix<double, 3, 2> m = matrix::matrix<double, 3, 2>::zero();
+        math::matrix<double, 3, 2> m = math::matrix<double, 3, 2>::zero();
         REQUIRE(m[0][0] == 0);
         REQUIRE(m[0][1] == 0);
         REQUIRE(m[1][0] == 0);
@@ -163,20 +163,20 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        matrix::matrix<double, 3, 2> m1;
+        math::matrix<double, 3, 2> m1;
         REQUIRE(m1[0][0] == 0);
         REQUIRE(m1[0][1] == 0);
         REQUIRE(m1[1][0] == 0);
         REQUIRE(m1[1][1] == 0);
         REQUIRE(m1[2][0] == 0);
         REQUIRE(m1[2][1] == 0);
-        matrix::matrix<double, 3, 2> m2(m1);
-        matrix::matrix<double, 3, 2> zero = matrix::matrix<double, 3, 2>::zero();
+        math::matrix<double, 3, 2> m2(m1);
+        math::matrix<double, 3, 2> zero = math::matrix<double, 3, 2>::zero();
         REQUIRE(m2 == zero);
     }
 
     {
-        matrix::matrix<double, 3, 2> m = matrix::matrix<double, 3, 2>::identity();
+        math::matrix<double, 3, 2> m = math::matrix<double, 3, 2>::identity();
         REQUIRE(m[0][0] == 1);
         REQUIRE(m[0][1] == 0);
         REQUIRE(m[1][0] == 0);
@@ -186,7 +186,7 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        matrix::matrix<double, 3, 2> m;
+        math::matrix<double, 3, 2> m;
         double* data_pointer_in = m.data();
         data_pointer_in[0] = 1;
         data_pointer_in[1] = 2;
@@ -204,29 +204,29 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        matrix::matrix<double, 3, 2> m;
+        math::matrix<double, 3, 2> m;
         REQUIRE(m.size() == (3 * 2));
     }
 
     {
-        matrix::matrix<double, 3, 2> m;
+        math::matrix<double, 3, 2> m;
         REQUIRE(m.rows() == 3);
     }
 
     {
-        matrix::matrix<double, 3, 2> m;
+        math::matrix<double, 3, 2> m;
         REQUIRE(m.cols() == 2);
     }
 
     {
-        matrix::matrix<double, 0, 0> m(3, 2);
+        math::matrix<double, 0, 0> m(3, 2);
         m[0][0] = 1;
         m[0][1] = 2;
         m[1][0] = 3;
         m[1][1] = 4;
         m[2][0] = 5;
         m[2][1] = 6;
-        matrix::matrix<double, 0, 0> block = get_block(m, 1, 0, 2, 1);
+        math::matrix<double, 0, 0> block = get_block(m, 1, 0, 2, 1);
         REQUIRE(block[0][0] == 3);
         REQUIRE(block[1][0] == 5);
         block[0][0] = 20;
@@ -242,7 +242,7 @@ int main(int argc, char* argv[]) {
 
     {
         {
-            matrix::matrix<double, 2, 2> m;
+            math::matrix<double, 2, 2> m;
             m[0][0] = 1;
             m[0][1] = 2;
             m[1][0] = 3;
@@ -254,14 +254,14 @@ int main(int argc, char* argv[]) {
             REQUIRE(m[1][1] == 4);
         }
         {
-            matrix::matrix<double, 3, 2> m1;
+            math::matrix<double, 3, 2> m1;
             m1[0][0] = 1;
             m1[0][1] = 2;
             m1[1][0] = 3;
             m1[1][1] = 4;
             m1[2][0] = 5;
             m1[2][1] = 6;
-            matrix::matrix<double, 2, 3> m2 = transpose(m1);
+            math::matrix<double, 2, 3> m2 = transpose(m1);
             REQUIRE(m2[0][0] == 1);
             REQUIRE(m2[1][0] == 2);
             REQUIRE(m2[0][1] == 3);
@@ -270,14 +270,14 @@ int main(int argc, char* argv[]) {
             REQUIRE(m2[1][2] == 6);
         }
         {
-            matrix::matrix<double, 0, 0> m1(3, 2);
+            math::matrix<double, 0, 0> m1(3, 2);
             m1[0][0] = 1;
             m1[0][1] = 2;
             m1[1][0] = 3;
             m1[1][1] = 4;
             m1[2][0] = 5;
             m1[2][1] = 6;
-            matrix::matrix<double, 0, 0> m2 = transpose(m1);
+            math::matrix<double, 0, 0> m2 = transpose(m1);
             REQUIRE(m2[0][0] == 1);
             REQUIRE(m2[1][0] == 2);
             REQUIRE(m2[0][1] == 3);
@@ -289,102 +289,102 @@ int main(int argc, char* argv[]) {
 
     {
         {
-            matrix::matrix<double, 1, 1> m = { { 0.1 } };
-            matrix::matrix<double, 1, 1> inverse = { { 10.0 } };
-            matrix::matrix<double, 1, 1> result;
+            math::matrix<double, 1, 1> m = { { 0.1 } };
+            math::matrix<double, 1, 1> inverse = { { 10.0 } };
+            math::matrix<double, 1, 1> result;
             REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 1 * 1, 1e-6));
         }
         {
-            matrix::matrix<double, 2, 2> m = { { { 1.0, 2.0 }, { 3.0, 4.0 } } };
-            matrix::matrix<double, 2, 2> inverse = { { { -2.0, +1.0 }, { +1.5, -0.5 } } };
-            matrix::matrix<double, 2, 2> result;
+            math::matrix<double, 2, 2> m = { { { 1.0, 2.0 }, { 3.0, 4.0 } } };
+            math::matrix<double, 2, 2> inverse = { { { -2.0, +1.0 }, { +1.5, -0.5 } } };
+            math::matrix<double, 2, 2> result;
             REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 2 * 2, 1e-6));
         }
         {
-            matrix::matrix<double, 3, 3> m = {
+            math::matrix<double, 3, 3> m = {
                 { { 1.0, 2.0, 0.0 }, { 0.0, 1.0, 2.0 }, { 2.0, 0.0, 1.0 } }
             };
-            matrix::matrix<double, 3, 3> inverse = { { { +1.0 / 9.0, -2.0 / 9.0, +4.0 / 9.0 }, { +4.0 / 9.0, +1.0 / 9.0, -2.0 / 9.0 }, { -2.0 / 9.0, +4.0 / 9.0, +1.0 / 9.0 } } };
-            matrix::matrix<double, 3, 3> result;
+            math::matrix<double, 3, 3> inverse = { { { +1.0 / 9.0, -2.0 / 9.0, +4.0 / 9.0 }, { +4.0 / 9.0, +1.0 / 9.0, -2.0 / 9.0 }, { -2.0 / 9.0, +4.0 / 9.0, +1.0 / 9.0 } } };
+            math::matrix<double, 3, 3> result;
             REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 3 * 3, 1e-6));
         }
         {
-            matrix::matrix<double, 4, 4> m = { { { 0.0, 0.0, 0.0, 1.0 }, { 0.0, 0.0, 1.0, 0.0 }, { 0.0, 1.0, 0.0, 0.0 }, { 1.0, 0.0, 0.0, 1.0 } } };
-            matrix::matrix<double, 4, 4> inverse = { { { -1.0, 0.0, 0.0, 1.0 }, { 0.0, 0.0, 1.0, 0.0 }, { 0.0, 1.0, 0.0, 0.0 }, { 1.0, 0.0, 0.0, 0.0 } } };
-            matrix::matrix<double, 4, 4> result;
+            math::matrix<double, 4, 4> m = { { { 0.0, 0.0, 0.0, 1.0 }, { 0.0, 0.0, 1.0, 0.0 }, { 0.0, 1.0, 0.0, 0.0 }, { 1.0, 0.0, 0.0, 1.0 } } };
+            math::matrix<double, 4, 4> inverse = { { { -1.0, 0.0, 0.0, 1.0 }, { 0.0, 0.0, 1.0, 0.0 }, { 0.0, 1.0, 0.0, 0.0 }, { 1.0, 0.0, 0.0, 0.0 } } };
+            math::matrix<double, 4, 4> result;
             REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 4 * 4, 1e-6));
         }
         {
-            matrix::matrix<double, 5, 5> m = { { { 2.0, 12.0, 5.0, 12.0, 14.0 }, { 16.0, 0.0, 12.0, 16.0, 16.0 }, { 10.0, 14.0, 15.0, 10.0, 11.0 }, { 14.0, 1.0, 1.0, 18.0, 0.0 }, { 9.0, 13.0, 1.0, 6.0, 6.0 } } };
-            matrix::matrix<double, 5, 5> inverse = {
+            math::matrix<double, 5, 5> m = { { { 2.0, 12.0, 5.0, 12.0, 14.0 }, { 16.0, 0.0, 12.0, 16.0, 16.0 }, { 10.0, 14.0, 15.0, 10.0, 11.0 }, { 14.0, 1.0, 1.0, 18.0, 0.0 }, { 9.0, 13.0, 1.0, 6.0, 6.0 } } };
+            math::matrix<double, 5, 5> inverse = {
                 { { -0.0717574493, 0.0417861176, -0.0144209886, -0.0087742159, 0.0824428807 },
                   { 0.0102365852, -0.0419779631, 0.0274809602, 0.0026641183, 0.0376741088 },
                   { -0.0234847826, -0.0129586192, 0.0897112906, 0.0023745402, -0.0751165551 },
                   { 0.0565473604, -0.0294482813, 0.0047056438, 0.0621000202, -0.0620421046 },
                   { 0.0328236759, 0.0598811281, -0.0575681232, -0.0551067095, 0.0359366403 } }
             };
-            matrix::matrix<double, 5, 5> result;
+            math::matrix<double, 5, 5> result;
             REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 5 * 5, 1e-6));
         }
         // Un-invertible
         {
-            matrix::matrix<double, 1, 1> m = { { 0.0 } };
-            matrix::matrix<double, 1, 1> result;
+            math::matrix<double, 1, 1> m = { { 0.0 } };
+            math::matrix<double, 1, 1> result;
             REQUIRE(!invert(m, result));
-            REQUIRE(are_values_approx(result.data(), matrix::matrix<double, 1, 1>::zero().data(), 1 * 1, 1e-6));
+            REQUIRE(are_values_approx(result.data(), math::matrix<double, 1, 1>::zero().data(), 1 * 1, 1e-6));
         }
         {
-            matrix::matrix<double, 2, 2> m = { { { 0.0, 0.0 }, { 0.0, 1.0 } } };
-            matrix::matrix<double, 2, 2> result;
+            math::matrix<double, 2, 2> m = { { { 0.0, 0.0 }, { 0.0, 1.0 } } };
+            math::matrix<double, 2, 2> result;
             REQUIRE(!invert(m, result));
-            REQUIRE(are_values_approx(result.data(), matrix::matrix<double, 2, 2>::zero().data(), 2 * 2, 1e-6));
+            REQUIRE(are_values_approx(result.data(), math::matrix<double, 2, 2>::zero().data(), 2 * 2, 1e-6));
         }
         {
-            matrix::matrix<double, 3, 3> m = {
+            math::matrix<double, 3, 3> m = {
                 { { 1.0, 2.0, 3.0 }, { 4.0, 5.0, 6.0 }, { 7.0, 8.0, 9.0 } }
             };
-            matrix::matrix<double, 3, 3> result;
+            math::matrix<double, 3, 3> result;
             REQUIRE(!invert(m, result));
-            REQUIRE(are_values_approx(result.data(), matrix::matrix<double, 3, 3>::zero().data(), 3 * 3, 1e-6));
+            REQUIRE(are_values_approx(result.data(), math::matrix<double, 3, 3>::zero().data(), 3 * 3, 1e-6));
         }
         {
-            matrix::matrix<double, 4, 4> m = { { { 0.0, 0.0, 0.0, 0.0 }, { 0.0, 1.0, 0.0, 0.0 }, { 0.0, 0.0, 1.0, 0.0 }, { 0.0, 0.0, 0.0, 1.0 } } };
-            matrix::matrix<double, 4, 4> result;
+            math::matrix<double, 4, 4> m = { { { 0.0, 0.0, 0.0, 0.0 }, { 0.0, 1.0, 0.0, 0.0 }, { 0.0, 0.0, 1.0, 0.0 }, { 0.0, 0.0, 0.0, 1.0 } } };
+            math::matrix<double, 4, 4> result;
             REQUIRE(!invert(m, result));
-            REQUIRE(are_values_approx(result.data(), matrix::matrix<double, 4, 4>::zero().data(), 4 * 4, 1e-6));
+            REQUIRE(are_values_approx(result.data(), math::matrix<double, 4, 4>::zero().data(), 4 * 4, 1e-6));
         }
         // Small-scale but well-conditioned matrices must still be invertible.
         {
-            matrix::matrix<double, 3, 3> m = { { { 1e-3, 0.0, 0.0 }, { 0.0, 1e-3, 0.0 }, { 0.0, 0.0, 1e-3 } } };
-            matrix::matrix<double, 3, 3> inverse = { { { 1e3, 0.0, 0.0 }, { 0.0, 1e3, 0.0 }, { 0.0, 0.0, 1e3 } } };
-            matrix::matrix<double, 3, 3> result;
+            math::matrix<double, 3, 3> m = { { { 1e-3, 0.0, 0.0 }, { 0.0, 1e-3, 0.0 }, { 0.0, 0.0, 1e-3 } } };
+            math::matrix<double, 3, 3> inverse = { { { 1e3, 0.0, 0.0 }, { 0.0, 1e3, 0.0 }, { 0.0, 0.0, 1e3 } } };
+            math::matrix<double, 3, 3> result;
             REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 3 * 3, 1e-6));
         }
         {
-            matrix::matrix<double, 4, 4> m = { { { 1e-3, 0.0, 0.0, 0.0 }, { 0.0, 1e-3, 0.0, 0.0 }, { 0.0, 0.0, 1e-3, 0.0 }, { 0.0, 0.0, 0.0, 1e-3 } } };
-            matrix::matrix<double, 4, 4> inverse = { { { 1e3, 0.0, 0.0, 0.0 }, { 0.0, 1e3, 0.0, 0.0 }, { 0.0, 0.0, 1e3, 0.0 }, { 0.0, 0.0, 0.0, 1e3 } } };
-            matrix::matrix<double, 4, 4> result;
+            math::matrix<double, 4, 4> m = { { { 1e-3, 0.0, 0.0, 0.0 }, { 0.0, 1e-3, 0.0, 0.0 }, { 0.0, 0.0, 1e-3, 0.0 }, { 0.0, 0.0, 0.0, 1e-3 } } };
+            math::matrix<double, 4, 4> inverse = { { { 1e3, 0.0, 0.0, 0.0 }, { 0.0, 1e3, 0.0, 0.0 }, { 0.0, 0.0, 1e3, 0.0 }, { 0.0, 0.0, 0.0, 1e3 } } };
+            math::matrix<double, 4, 4> result;
             REQUIRE(invert(m, result));
             REQUIRE(are_values_approx(result.data(), inverse.data(), 4 * 4, 1e-6));
         }
         // A rank deficiency that only appears at the final pivot must still return the zero matrix, the last row is the sum of the first three.
         {
-            matrix::matrix<double, 4, 4> m = { { { 2.0, 0.0, 0.0, 1.0 }, { 0.0, 2.0, 0.0, 1.0 }, { 0.0, 0.0, 2.0, 1.0 }, { 2.0, 2.0, 2.0, 3.0 } } };
-            matrix::matrix<double, 4, 4> result;
+            math::matrix<double, 4, 4> m = { { { 2.0, 0.0, 0.0, 1.0 }, { 0.0, 2.0, 0.0, 1.0 }, { 0.0, 0.0, 2.0, 1.0 }, { 2.0, 2.0, 2.0, 3.0 } } };
+            math::matrix<double, 4, 4> result;
             REQUIRE(!invert(m, result));
-            REQUIRE(are_values_approx(result.data(), matrix::matrix<double, 4, 4>::zero().data(), 4 * 4, 1e-6));
+            REQUIRE(are_values_approx(result.data(), math::matrix<double, 4, 4>::zero().data(), 4 * 4, 1e-6));
         }
     }
 
     {
         {
-            matrix::matrix<double, 3, 1> m{ { 0, 2, 4 } };
+            math::matrix<double, 3, 1> m{ { 0, 2, 4 } };
             REQUIRE(m[0] == 0);
             REQUIRE(m[1] == 2);
             REQUIRE(m[2] == 4);
@@ -398,7 +398,7 @@ int main(int argc, char* argv[]) {
             REQUIRE(m[2] == 4);
         }
         {
-            matrix::matrix<double, 1, 3> m = { { 0, 1, 2 } };
+            math::matrix<double, 1, 3> m = { { 0, 1, 2 } };
             REQUIRE(m[0] == 0);
             REQUIRE(m[1] == 1);
             REQUIRE(m[2] == 2);
@@ -412,7 +412,7 @@ int main(int argc, char* argv[]) {
             REQUIRE(m[2] == 2);
         }
         {
-            matrix::matrix<double, 3, 2> m{ { { 0, 1 }, { 2, 3 }, { 4, 5 } } };
+            math::matrix<double, 3, 2> m{ { { 0, 1 }, { 2, 3 }, { 4, 5 } } };
             REQUIRE(m[0][0] == 0);
             REQUIRE(m[0][1] == 1);
             REQUIRE(m[1][0] == 2);
@@ -430,9 +430,9 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        matrix::matrix<double, 2, 2> m1 = { { { 1, 2 }, { 3, 4 } } };
-        matrix::matrix<double, 2, 2> m2 = { { { 1, 2 }, { 3, 4 } } };
-        matrix::matrix<double, 2, 2> m3 = { { { 1, 2 }, { 3, 5 } } };
+        math::matrix<double, 2, 2> m1 = { { { 1, 2 }, { 3, 4 } } };
+        math::matrix<double, 2, 2> m2 = { { { 1, 2 }, { 3, 4 } } };
+        math::matrix<double, 2, 2> m3 = { { { 1, 2 }, { 3, 5 } } };
         REQUIRE((m1 == m2) == true);
         REQUIRE((m1 == m3) == false);
         REQUIRE((m1 != m2) == false);
@@ -440,8 +440,8 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        matrix::matrix<double, 2, 2> m1 = { { { 1, 2 }, { 3, 4 } } };
-        matrix::matrix<double, 2, 2> m2 = { { { -1, -2 }, { -3, -4 } } };
+        math::matrix<double, 2, 2> m1 = { { { 1, 2 }, { 3, 4 } } };
+        math::matrix<double, 2, 2> m2 = { { { -1, -2 }, { -3, -4 } } };
         REQUIRE(m1 == -m2);
         REQUIRE(m1 != +m2);
         REQUIRE(m1 == +m1);
@@ -449,19 +449,19 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        matrix::matrix<double, 2, 2> m1 = { { { 1.0, 2.0 }, { 3.0, 4.0 } } };
-        matrix::matrix<double, 2, 2> m2 = { { { -1.0, -2.0 }, { -3.0, -40.0 } } };
-        matrix::matrix<double, 2, 2> result1 = m1 + m2;
+        math::matrix<double, 2, 2> m1 = { { { 1.0, 2.0 }, { 3.0, 4.0 } } };
+        math::matrix<double, 2, 2> m2 = { { { -1.0, -2.0 }, { -3.0, -40.0 } } };
+        math::matrix<double, 2, 2> result1 = m1 + m2;
         REQUIRE(result1[0][0] == 0.0);
         REQUIRE(result1[0][1] == 0.0);
         REQUIRE(result1[1][0] == 0.0);
         REQUIRE(result1[1][1] == -36.0);
-        matrix::matrix<double, 2, 2> result2 = m2 + 7.0;
+        math::matrix<double, 2, 2> result2 = m2 + 7.0;
         REQUIRE(result2[0][0] == 6.0);
         REQUIRE(result2[0][1] == 5.0);
         REQUIRE(result2[1][0] == 4.0);
         REQUIRE(result2[1][1] == -33.0);
-        matrix::matrix<double, 2, 2> result3 = 7.0 + m2;
+        math::matrix<double, 2, 2> result3 = 7.0 + m2;
         REQUIRE(result3[0][0] == 6.0);
         REQUIRE(result3[0][1] == 5.0);
         REQUIRE(result3[1][0] == 4.0);
@@ -469,20 +469,20 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        matrix::matrix<double, 2, 2> m1 = { { { 1.0, 2.0 }, { 3.0, 4.0 } } };
-        matrix::matrix<double, 2, 2> m2 = { { { -1.0, -2.0 }, { -3.0, -40.0 } } };
-        matrix::matrix<double, 2, 2> result1 = m1 - m2;
+        math::matrix<double, 2, 2> m1 = { { { 1.0, 2.0 }, { 3.0, 4.0 } } };
+        math::matrix<double, 2, 2> m2 = { { { -1.0, -2.0 }, { -3.0, -40.0 } } };
+        math::matrix<double, 2, 2> result1 = m1 - m2;
         REQUIRE(result1[0][0] == 2.0);
         REQUIRE(result1[0][1] == 4.0);
         REQUIRE(result1[1][0] == 6.0);
         REQUIRE(result1[1][1] == 44.0);
-        matrix::matrix<double, 2, 2> result2 = m2 - 7.0;
+        math::matrix<double, 2, 2> result2 = m2 - 7.0;
         REQUIRE(result2[0][0] == -8.0);
         REQUIRE(result2[0][1] == -9.0);
         REQUIRE(result2[1][0] == -10.0);
         REQUIRE(result2[1][1] == -47.0);
-        matrix::matrix<double, 2, 2> m3 = { { { 1.0, 2.0 }, { 3.0, 4.0 } } };
-        matrix::matrix<double, 2, 2> result3 = 10.0 - m3;
+        math::matrix<double, 2, 2> m3 = { { { 1.0, 2.0 }, { 3.0, 4.0 } } };
+        math::matrix<double, 2, 2> result3 = 10.0 - m3;
         REQUIRE(result3[0][0] == 9.0);
         REQUIRE(result3[0][1] == 8.0);
         REQUIRE(result3[1][0] == 7.0);
@@ -491,33 +491,33 @@ int main(int argc, char* argv[]) {
 
     {
         {
-            matrix::matrix<double, 2, 2> m1 = { { { 1.0, 2.0 }, { 3.0, 4.0 } } };
-            matrix::matrix<double, 2, 2> m2 = { { { -1.0, -2.0 }, { -3.0, -40.0 } } };
-            matrix::matrix<double, 2, 2> result1 = m1 * m2;
+            math::matrix<double, 2, 2> m1 = { { { 1.0, 2.0 }, { 3.0, 4.0 } } };
+            math::matrix<double, 2, 2> m2 = { { { -1.0, -2.0 }, { -3.0, -40.0 } } };
+            math::matrix<double, 2, 2> result1 = m1 * m2;
             REQUIRE(result1[0][0] == -7.0);
             REQUIRE(result1[0][1] == -82.0);
             REQUIRE(result1[1][0] == -15.0);
             REQUIRE(result1[1][1] == -166.0);
-            matrix::matrix<double, 2, 2> result2 = m2 * 7.0;
+            math::matrix<double, 2, 2> result2 = m2 * 7.0;
             REQUIRE(result2[0][0] == -7.0);
             REQUIRE(result2[0][1] == -14.0);
             REQUIRE(result2[1][0] == -21.0);
             REQUIRE(result2[1][1] == -280.0);
-            matrix::matrix<double, 2, 2> result3 = 7.0 * m2;
+            math::matrix<double, 2, 2> result3 = 7.0 * m2;
             REQUIRE(result3[0][0] == -7.0);
             REQUIRE(result3[0][1] == -14.0);
             REQUIRE(result3[1][0] == -21.0);
             REQUIRE(result3[1][1] == -280.0);
         }
         {
-            matrix::matrix<double, 3, 2> m;
+            math::matrix<double, 3, 2> m;
             m[0][0] = 1;
             m[0][1] = 2;
             m[1][0] = 3;
             m[1][1] = 4;
             m[2][0] = 5;
             m[2][1] = 6;
-            matrix::matrix<double, 2, 2> result = transpose(m) * m;
+            math::matrix<double, 2, 2> result = transpose(m) * m;
             REQUIRE(result[0][0] == 35);
             REQUIRE(result[0][1] == 44);
             REQUIRE(result[1][0] == 44);

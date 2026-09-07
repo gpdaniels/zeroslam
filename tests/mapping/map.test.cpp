@@ -38,9 +38,9 @@ int main(int argc, char* argv[]) {
 
     // Basic insert / lookup tests.
     {
-        map::map m;
+        mapping::map m;
 
-        frame::frame f;
+        mapping::frame f;
         f.id = 1;
         REQUIRE(m.frames.find(f.id) == m.frames.end());
         m.add_frame(f);
@@ -48,7 +48,7 @@ int main(int argc, char* argv[]) {
         REQUIRE(itf != m.frames.end());
         REQUIRE(itf->second.id == f.id);
 
-        landmark::point p;
+        mapping::point p;
         p.id = 10;
         REQUIRE(m.landmarks.find(p.id) == m.landmarks.end());
         m.add_landmark(p);
@@ -64,7 +64,7 @@ int main(int argc, char* argv[]) {
         REQUIRE(ito->second[0].first == f.id);
         REQUIRE(ito->second[0].second == kp_index);
 
-        frame::frame f2;
+        mapping::frame f2;
         f2.id = 2;
         m.add_frame(f2);
 
@@ -85,21 +85,21 @@ int main(int argc, char* argv[]) {
 
     // Edge cases: repeated add_frame / add_landmark with same id should overwrite existing entry.
     {
-        map::map m;
-        frame::frame f;
+        mapping::map m;
+        mapping::frame f;
         f.id = 100;
         m.add_frame(f);
 
-        frame::frame f_modified;
+        mapping::frame f_modified;
         f_modified.id = 100;
         m.add_frame(f_modified);
         REQUIRE(m.frames.find(100) != m.frames.end());
         REQUIRE(m.frames.at(100).id == 100);
 
-        landmark::point p;
+        mapping::point p;
         p.id = 200;
         m.add_landmark(p);
-        landmark::point p_modified;
+        mapping::point p_modified;
         p_modified.id = 200;
         m.add_landmark(p_modified);
         REQUIRE(m.landmarks.find(200) != m.landmarks.end());
@@ -108,14 +108,14 @@ int main(int argc, char* argv[]) {
 
     // Verify optimise() runs safely even with trivial data.
     {
-        map::map m;
-        frame::frame f1;
+        mapping::map m;
+        mapping::frame f1;
         f1.id = 0;
         f1.keypoint_pyramid = { { { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f } } } };
-        frame::frame f2;
+        mapping::frame f2;
         f2.id = 1;
         f2.keypoint_pyramid = { { { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f } } } };
-        landmark::point l1;
+        mapping::point l1;
         l1.id = 0;
         m.add_frame(f1);
         m.add_frame(f2);
@@ -127,11 +127,11 @@ int main(int argc, char* argv[]) {
 
     // Verify cull() removes bad landmarks.
     {
-        map::map m;
-        frame::frame f1;
+        mapping::map m;
+        mapping::frame f1;
         f1.id = 0;
         f1.keypoint_pyramid = { { { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f } } } };
-        landmark::point l1;
+        mapping::point l1;
         l1.id = 0;
         m.add_frame(f1);
         m.add_landmark(l1);
@@ -144,7 +144,7 @@ int main(int argc, char* argv[]) {
 
     // Empty map can be optimised.
     {
-        map::map m;
+        mapping::map m;
         REQUIRE(m.frames.empty());
         m.optimise(10, false, 50);
         m.optimise(1, true, 50);
@@ -153,8 +153,8 @@ int main(int argc, char* argv[]) {
 
     // A landmark with no observations will be culled.
     {
-        map::map m;
-        landmark::point p;
+        mapping::map m;
+        mapping::point p;
         p.id = 42;
         m.add_landmark(p);
         REQUIRE(m.observations.find(p.id) == m.observations.end());

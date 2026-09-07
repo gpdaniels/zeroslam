@@ -53,9 +53,9 @@ int main(int argc, char* argv[]) {
 
     // Basic construction and access tests for sparse_block_diagonal.
     {
-        REQUIRE(matrix::sparse_block_diagonal<2>::block_size == 2);
+        REQUIRE(math::sparse_block_diagonal<2>::block_size == 2);
 
-        matrix::sparse_block_diagonal<2> diag;
+        math::sparse_block_diagonal<2> diag;
         // Initially empty (0x0).
         REQUIRE(diag.rows() == 0);
         REQUIRE(diag.cols() == 0);
@@ -67,7 +67,7 @@ int main(int argc, char* argv[]) {
         REQUIRE(diag.cols() == 4);
 
         // Fill block 0.
-        matrix::sparse_block_diagonal<2>::block_type b0;
+        math::sparse_block_diagonal<2>::block_type b0;
         b0(0, 0) = 1.0;
         b0(0, 1) = 2.0;
         b0(1, 0) = 3.0;
@@ -75,7 +75,7 @@ int main(int argc, char* argv[]) {
         diag.diagonal()[0] = b0;
 
         // Fill block 1.
-        matrix::sparse_block_diagonal<2>::block_type b1;
+        math::sparse_block_diagonal<2>::block_type b1;
         b1(0, 0) = 5.0;
         b1(0, 1) = 6.0;
         b1(1, 0) = 7.0;
@@ -102,15 +102,15 @@ int main(int argc, char* argv[]) {
 
     // Multiply (matrix * vector) and (vector * matrix) tests.
     {
-        matrix::sparse_block_diagonal<2> diag;
+        math::sparse_block_diagonal<2> diag;
         diag.diagonal().resize(2);
 
-        matrix::sparse_block_diagonal<2>::block_type b0;
+        math::sparse_block_diagonal<2>::block_type b0;
         b0(0, 0) = 1;
         b0(0, 1) = 2;
         b0(1, 0) = 3;
         b0(1, 1) = 4;
-        matrix::sparse_block_diagonal<2>::block_type b1;
+        math::sparse_block_diagonal<2>::block_type b1;
         b1(0, 0) = 5;
         b1(0, 1) = 6;
         b1(1, 0) = 7;
@@ -119,13 +119,13 @@ int main(int argc, char* argv[]) {
         diag.diagonal()[1] = b1;
 
         // RHS column vector 4x1.
-        matrix::matrix<double, 0, 0> rhs = matrix::matrix<double, 0, 0>::zero(4, 1);
+        math::matrix<double, 0, 0> rhs = math::matrix<double, 0, 0>::zero(4, 1);
         rhs(0, 0) = 1.0;
         rhs(1, 0) = 2.0;
         rhs(2, 0) = 3.0;
         rhs(3, 0) = 4.0;
 
-        matrix::matrix<double, 0, 0> out = diag.multiply(rhs);
+        math::matrix<double, 0, 0> out = diag.multiply(rhs);
         REQUIRE(out.rows() == 4);
         REQUIRE(out.cols() == 1);
         // Test multiply left.
@@ -137,13 +137,13 @@ int main(int argc, char* argv[]) {
         REQUIRE(is_value_approx(out(3, 0), 53.0));
 
         // LHS row vector 1x4.
-        matrix::matrix<double, 0, 0> lhs = matrix::matrix<double, 0, 0>::zero(1, 4);
+        math::matrix<double, 0, 0> lhs = math::matrix<double, 0, 0>::zero(1, 4);
         lhs(0, 0) = 1.0;
         lhs(0, 1) = 2.0;
         lhs(0, 2) = 3.0;
         lhs(0, 3) = 4.0;
 
-        matrix::matrix<double, 0, 0> out_right = diag.multiply_right(lhs);
+        math::matrix<double, 0, 0> out_right = diag.multiply_right(lhs);
         REQUIRE(out_right.rows() == 1);
         REQUIRE(out_right.cols() == 4);
         // Test multiply right.
@@ -158,14 +158,14 @@ int main(int argc, char* argv[]) {
     // Multiply (sparse_block * sparse_block_diagonal) tests.
     {
         // We'll use block size 2 and a 2-block diagonal -> 4x4 matrix.
-        matrix::sparse_block_diagonal<2> rhs;
+        math::sparse_block_diagonal<2> rhs;
         rhs.diagonal().resize(2);
-        matrix::sparse_block_diagonal<2>::block_type db0;
+        math::sparse_block_diagonal<2>::block_type db0;
         db0(0, 0) = 2;
         db0(0, 1) = 0;
         db0(1, 0) = 0;
         db0(1, 1) = 2;
-        matrix::sparse_block_diagonal<2>::block_type db1;
+        math::sparse_block_diagonal<2>::block_type db1;
         db1(0, 0) = 3;
         db1(0, 1) = 1;
         db1(1, 0) = 4;
@@ -174,18 +174,18 @@ int main(int argc, char* argv[]) {
         rhs.diagonal()[1] = db1;
 
         // Create lhs sparse_block 4x4 (block dims 2x2)
-        matrix::sparse_block<2, 2> lhs(4, 4);
-        matrix::sparse_block<2, 2>::block_type lb00;
+        math::sparse_block<2, 2> lhs(4, 4);
+        math::sparse_block<2, 2>::block_type lb00;
         lb00(0, 0) = 1;
         lb00(0, 1) = 2;
         lb00(1, 0) = 3;
         lb00(1, 1) = 4;
-        matrix::sparse_block<2, 2>::block_type lb01;
+        math::sparse_block<2, 2>::block_type lb01;
         lb01(0, 0) = 5;
         lb01(0, 1) = 6;
         lb01(1, 0) = 7;
         lb01(1, 1) = 8;
-        matrix::sparse_block<2, 2>::block_type lb10;
+        math::sparse_block<2, 2>::block_type lb10;
         lb10(0, 0) = 9;
         lb10(0, 1) = 10;
         lb10(1, 0) = 11;
@@ -195,13 +195,13 @@ int main(int argc, char* argv[]) {
         lhs.blocks()[{ 1, 0 }] = lb10;
 
         // Multiply: result.blocks()[{i,j}] = lhs.blocks()[{i,j}] * rhs.diagonal()[j].
-        matrix::sparse_block<2, 2> product = matrix::multiply(lhs, rhs);
+        math::sparse_block<2, 2> product = math::multiply(lhs, rhs);
         REQUIRE(product.rows() == 4);
         REQUIRE(product.cols() == 4);
 
         // Check block (0,0) = lb00 * db0  (db0 = 2*I) => each entry scaled by 2.
-        matrix::sparse_block<2, 2>::block_type expected00 = lb00 * db0;
-        matrix::sparse_block<2, 2>::block_type actual00 = product.blocks().at({ 0, 0 });
+        math::sparse_block<2, 2>::block_type expected00 = lb00 * db0;
+        math::sparse_block<2, 2>::block_type actual00 = product.blocks().at({ 0, 0 });
         for (size_t r = 0; r < 2; ++r) {
             for (size_t c = 0; c < 2; ++c) {
                 REQUIRE(is_value_approx(expected00(r, c), actual00(r, c)));
@@ -209,8 +209,8 @@ int main(int argc, char* argv[]) {
         }
 
         // Check block (0,1) = lb01 * db1.
-        matrix::sparse_block<2, 2>::block_type expected01 = lb01 * db1;
-        matrix::sparse_block<2, 2>::block_type actual01 = product.blocks().at({ 0, 1 });
+        math::sparse_block<2, 2>::block_type expected01 = lb01 * db1;
+        math::sparse_block<2, 2>::block_type actual01 = product.blocks().at({ 0, 1 });
         for (size_t r = 0; r < 2; ++r) {
             for (size_t c = 0; c < 2; ++c) {
                 REQUIRE(is_value_approx(expected01(r, c), actual01(r, c)));
@@ -218,8 +218,8 @@ int main(int argc, char* argv[]) {
         }
 
         // Check block (1,0) = lb10 * db0.
-        matrix::sparse_block<2, 2>::block_type expected10 = lb10 * db0;
-        matrix::sparse_block<2, 2>::block_type actual10 = product.blocks().at({ 1, 0 });
+        math::sparse_block<2, 2>::block_type expected10 = lb10 * db0;
+        math::sparse_block<2, 2>::block_type actual10 = product.blocks().at({ 1, 0 });
         for (size_t r = 0; r < 2; ++r) {
             for (size_t c = 0; c < 2; ++c) {
                 REQUIRE(is_value_approx(expected10(r, c), actual10(r, c)));
@@ -233,14 +233,14 @@ int main(int argc, char* argv[]) {
     // Subtract (sparse_block_diagonal - sparse_block) tests.
     {
         // lhs diagonal: two blocks.
-        matrix::sparse_block_diagonal<2> lhs;
+        math::sparse_block_diagonal<2> lhs;
         lhs.diagonal().resize(2);
-        matrix::sparse_block_diagonal<2>::block_type da0;
+        math::sparse_block_diagonal<2>::block_type da0;
         da0(0, 0) = 10;
         da0(0, 1) = 0;
         da0(1, 0) = 0;
         da0(1, 1) = 10;
-        matrix::sparse_block_diagonal<2>::block_type da1;
+        math::sparse_block_diagonal<2>::block_type da1;
         da1(0, 0) = 20;
         da1(0, 1) = 1;
         da1(1, 0) = 2;
@@ -249,19 +249,19 @@ int main(int argc, char* argv[]) {
         lhs.diagonal()[1] = da1;
 
         // rhs sparse_block with some blocks to subtract.
-        matrix::sparse_block<2, 2> rhs(4, 4);
-        matrix::sparse_block<2, 2>::block_type r00;
+        math::sparse_block<2, 2> rhs(4, 4);
+        math::sparse_block<2, 2>::block_type r00;
         r00(0, 0) = 1;
         r00(0, 1) = 1;
         r00(1, 0) = 1;
         r00(1, 1) = 1;
-        matrix::sparse_block<2, 2>::block_type r11;
+        math::sparse_block<2, 2>::block_type r11;
         r11(0, 0) = 2;
         r11(0, 1) = 2;
         r11(1, 0) = 2;
         r11(1, 1) = 2;
         // Also an off-diagonal block to ensure it is negated and included.
-        matrix::sparse_block<2, 2>::block_type r01;
+        math::sparse_block<2, 2>::block_type r01;
         r01(0, 0) = 3;
         r01(0, 1) = 3;
         r01(1, 0) = 3;
@@ -270,14 +270,14 @@ int main(int argc, char* argv[]) {
         rhs.blocks()[{ 1, 1 }] = r11;
         rhs.blocks()[{ 0, 1 }] = r01;
 
-        matrix::sparse_block<2, 2> result = matrix::subtract(lhs, rhs);
+        math::sparse_block<2, 2> result = math::subtract(lhs, rhs);
         // Result should contain diagonal blocks from lhs minus any rhs blocks on same position and negative of rhs blocks that had no lhs counterpart.
-        matrix::sparse_block<2, 2>::block_type expect00;
+        math::sparse_block<2, 2>::block_type expect00;
         expect00(0, 0) = da0(0, 0) - r00(0, 0);
         expect00(0, 1) = da0(0, 1) - r00(0, 1);
         expect00(1, 0) = da0(1, 0) - r00(1, 0);
         expect00(1, 1) = da0(1, 1) - r00(1, 1);
-        matrix::sparse_block<2, 2>::block_type actual00 = result.blocks().at({ 0, 0 });
+        math::sparse_block<2, 2>::block_type actual00 = result.blocks().at({ 0, 0 });
         for (size_t r = 0; r < 2; ++r) {
             for (size_t c = 0; c < 2; ++c) {
                 REQUIRE(is_value_approx(expect00(r, c), actual00(r, c)));
@@ -285,13 +285,13 @@ int main(int argc, char* argv[]) {
         }
 
         // Check (1,1) = da1 - r11.
-        matrix::sparse_block<2, 2>::block_type expect11;
+        math::sparse_block<2, 2>::block_type expect11;
         for (size_t r = 0; r < 2; ++r) {
             for (size_t c = 0; c < 2; ++c) {
                 expect11(r, c) = da1(r, c) - r11(r, c);
             }
         }
-        matrix::sparse_block<2, 2>::block_type actual11 = result.blocks().at({ 1, 1 });
+        math::sparse_block<2, 2>::block_type actual11 = result.blocks().at({ 1, 1 });
         for (size_t r = 0; r < 2; ++r) {
             for (size_t c = 0; c < 2; ++c) {
                 REQUIRE(is_value_approx(expect11(r, c), actual11(r, c)));
@@ -299,7 +299,7 @@ int main(int argc, char* argv[]) {
         }
 
         // Check (0,1) existed only in rhs; result should contain -r01.
-        matrix::sparse_block<2, 2>::block_type actual01 = result.blocks().at({ 0, 1 });
+        math::sparse_block<2, 2>::block_type actual01 = result.blocks().at({ 0, 1 });
         for (size_t r = 0; r < 2; ++r) {
             for (size_t c = 0; c < 2; ++c) {
                 REQUIRE(is_value_approx(-r01(r, c), actual01(r, c)));

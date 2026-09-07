@@ -92,7 +92,7 @@ int main(int argc, char* argv[]) {
         test_type U1[height][width];
         test_type P1[height][height];
         int swaps;
-        REQUIRE(matrix::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
+        REQUIRE(math::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
 
         test_type PA[height][width];
         matrix_multiply(&P1[0][0], height, height, &matrix[0][0], width, height, &PA[0][0]);
@@ -122,7 +122,7 @@ int main(int argc, char* argv[]) {
         test_type U1[height][width];
         test_type P1[height][height];
         int swaps;
-        REQUIRE(matrix::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
+        REQUIRE(math::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
 
         test_type PA[height][width];
         matrix_multiply(&P1[0][0], height, height, &matrix[0][0], width, height, &PA[0][0]);
@@ -151,7 +151,7 @@ int main(int argc, char* argv[]) {
         test_type U1[height][width];
         test_type P1[height][height];
         int swaps;
-        REQUIRE(matrix::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
+        REQUIRE(math::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
 
         test_type PA[height][width];
         matrix_multiply(&P1[0][0], height, height, &matrix[0][0], width, height, &PA[0][0]);
@@ -181,7 +181,7 @@ int main(int argc, char* argv[]) {
         test_type U1[height][width];
         test_type P1[height][height];
         int swaps;
-        REQUIRE(matrix::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
+        REQUIRE(math::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
 
         test_type PA[height][width];
         matrix_multiply(&P1[0][0], height, height, &matrix[0][0], width, height, &PA[0][0]);
@@ -212,7 +212,7 @@ int main(int argc, char* argv[]) {
         };
 
         float result[4];
-        REQUIRE(matrix::solve_lower_upper<float>(&A[0][0], &B[0], 4, 4, &result[0]));
+        REQUIRE(math::solve_lower_upper<float>(&A[0][0], &B[0], 4, 4, &result[0]));
 
         REQUIRE(is_value_approx(result[0], 1.0f, 1e-6));
         REQUIRE(is_value_approx(result[1], 0.0f, 1e-6));
@@ -230,7 +230,7 @@ int main(int argc, char* argv[]) {
         };
 
         float result2[2];
-        REQUIRE(matrix::solve_lower_upper<float>(&A2[0][0], &B2[0], 2, 2, &result2[0]) == false);
+        REQUIRE(math::solve_lower_upper<float>(&A2[0][0], &B2[0], 2, 2, &result2[0]) == false);
 
         float A3[2][2] = {
             { 1.0f, 2.0f },
@@ -243,7 +243,7 @@ int main(int argc, char* argv[]) {
         };
 
         float result3[2];
-        REQUIRE(matrix::solve_lower_upper<float>(&A3[0][0], &B3[0], 2, 2, &result3[0]));
+        REQUIRE(math::solve_lower_upper<float>(&A3[0][0], &B3[0], 2, 2, &result3[0]));
 
         REQUIRE(is_value_approx(result3[0], 0.0f, 1e-6));
         REQUIRE(is_value_approx(result3[1], 4.0f, 1e-6));
@@ -343,7 +343,7 @@ int main(int argc, char* argv[]) {
         test_type U1[height][width];
         test_type P1[height][height];
         int swaps;
-        REQUIRE(matrix::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
+        REQUIRE(math::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
 
         test_type PA[height][width];
         matrix_multiply(&P1[0][0], height, height, &matrix[0][0], width, height, &PA[0][0]);
@@ -372,7 +372,7 @@ int main(int argc, char* argv[]) {
 
         const test_type rhs[height] = { 1.0, 2.0, 3.0 };
         test_type solution[height];
-        REQUIRE(matrix::solve_lower_upper<test_type>(&matrix[0][0], &rhs[0], width, height, &solution[0]));
+        REQUIRE(math::solve_lower_upper<test_type>(&matrix[0][0], &rhs[0], width, height, &solution[0]));
 
         // Verify matrix * solution == rhs.
         for (int i = 0; i < height; ++i) {
@@ -454,7 +454,7 @@ int main(int argc, char* argv[]) {
             double matrix_u[max_size * max_size];
             double matrix_p[max_size * max_size];
             int swaps;
-            REQUIRE(matrix::decompose_lower_upper<double>(&A[0], n, n, &matrix_l[0], &matrix_u[0], &matrix_p[0], &swaps));
+            REQUIRE(math::decompose_lower_upper<double>(&A[0], n, n, &matrix_l[0], &matrix_u[0], &matrix_p[0], &swaps));
 
             // Verify the returned permutation is a valid permutation matrix: exactly one entry equal
             // to one in every row and every column.
@@ -486,7 +486,7 @@ int main(int argc, char* argv[]) {
                 rhs[i] = (4.0 * rng.get_random_exclusive_top()) - 2.0;
             }
             double solution[max_size];
-            REQUIRE(matrix::solve_lower_upper<double>(&matrix_l[0], &matrix_u[0], &matrix_p[0], &rhs[0], n, n, &solution[0]));
+            REQUIRE(math::solve_lower_upper<double>(&matrix_l[0], &matrix_u[0], &matrix_p[0], &rhs[0], n, n, &solution[0]));
 
             for (int i = 0; i < n; ++i) {
                 double sum = 0.0;
@@ -513,7 +513,7 @@ int main(int argc, char* argv[]) {
         test_type U1[height][width];
         test_type P1[height][height];
         int swaps;
-        REQUIRE(matrix::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
+        REQUIRE(math::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps));
 
         // A pivot swap that only elimination fill-in reveals must actually have happened.
         REQUIRE(swaps >= 1);
@@ -544,7 +544,7 @@ int main(int argc, char* argv[]) {
         // Solve A * x == b for a known x = { 1, 2, 3 }, so b = { 7, 13, 13 }, and recover x.
         const test_type rhs[height] = { 7.0, 13.0, 13.0 };
         test_type solution[height];
-        REQUIRE(matrix::solve_lower_upper<test_type>(&matrix[0][0], &rhs[0], width, height, &solution[0]));
+        REQUIRE(math::solve_lower_upper<test_type>(&matrix[0][0], &rhs[0], width, height, &solution[0]));
         REQUIRE(is_value_approx(solution[0], 1.0, 1e-9));
         REQUIRE(is_value_approx(solution[1], 2.0, 1e-9));
         REQUIRE(is_value_approx(solution[2], 3.0, 1e-9));
@@ -574,11 +574,11 @@ int main(int argc, char* argv[]) {
         test_type U1[height][width];
         test_type P1[height][height];
         int swaps;
-        REQUIRE(matrix::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps) == false);
+        REQUIRE(math::decompose_lower_upper<test_type>(&matrix[0][0], width, height, &L1[0][0], &U1[0][0], &P1[0][0], &swaps) == false);
 
         const test_type rhs[height] = { 1.0, 2.0, 3.0 };
         test_type solution[height];
-        REQUIRE(matrix::solve_lower_upper<test_type>(&matrix[0][0], &rhs[0], width, height, &solution[0]) == false);
+        REQUIRE(math::solve_lower_upper<test_type>(&matrix[0][0], &rhs[0], width, height, &solution[0]) == false);
     }
 
     return EXIT_SUCCESS;

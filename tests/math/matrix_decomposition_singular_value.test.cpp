@@ -69,7 +69,7 @@ void check_decomposition(const double* A, int width, int height, double toleranc
     double* s = new double[static_cast<unsigned int>(height * width)];
     double* vt = new double[static_cast<unsigned int>(width * width)];
 
-    REQUIRE(matrix::decompose_singular_value(A, static_cast<size_t>(width), static_cast<size_t>(height), u, s, vt));
+    REQUIRE(math::decompose_singular_value(A, static_cast<size_t>(width), static_cast<size_t>(height), u, s, vt));
 
     double scale = 0.0;
     for (int i = 0; i < (width * height); ++i) {
@@ -169,7 +169,7 @@ int main(int argc, char* argv[]) {
         double s[height][width];
         double vt[width][width];
 
-        REQUIRE(matrix::decompose_singular_value(&A[0][0], width, height, &u[0][0], &s[0][0], &vt[0][0]));
+        REQUIRE(math::decompose_singular_value(&A[0][0], width, height, &u[0][0], &s[0][0], &vt[0][0]));
 
         for (int i = 0; i < height; ++i) {
             for (int j = 0; j < height; ++j) {
@@ -221,7 +221,7 @@ int main(int argc, char* argv[]) {
         double s[height][width];
         double vt[width][width];
 
-        REQUIRE(matrix::decompose_singular_value(&A[0][0], width, height, &u[0][0], &s[0][0], &vt[0][0]));
+        REQUIRE(math::decompose_singular_value(&A[0][0], width, height, &u[0][0], &s[0][0], &vt[0][0]));
 
         for (int i = 0; i < height; ++i) {
             for (int j = 0; j < height; ++j) {
@@ -258,7 +258,7 @@ int main(int argc, char* argv[]) {
         double s[height][width];
         double vt[width][width];
 
-        REQUIRE(matrix::decompose_singular_value(&A[0][0], width, height, &u[0][0], &s[0][0], &vt[0][0]));
+        REQUIRE(math::decompose_singular_value(&A[0][0], width, height, &u[0][0], &s[0][0], &vt[0][0]));
 
         double t[height][width];
         matrix_multiply(&u[0][0], height, height, &s[0][0], width, height, &t[0][0]);
@@ -310,7 +310,7 @@ int main(int argc, char* argv[]) {
         double s[height][width];
         double vt[width][width];
 
-        REQUIRE(matrix::decompose_singular_value(&A[0][0], width, height, &u[0][0], &s[0][0], &vt[0][0]));
+        REQUIRE(math::decompose_singular_value(&A[0][0], width, height, &u[0][0], &s[0][0], &vt[0][0]));
 
         for (int i = 0; i < height; ++i) {
             for (int j = 0; j < height; ++j) {
@@ -364,7 +364,7 @@ int main(int argc, char* argv[]) {
         double s[height][width];
         double vt[width][width];
 
-        REQUIRE(matrix::decompose_singular_value(&A[0][0], width, height, &u[0][0], &s[0][0], &vt[0][0]));
+        REQUIRE(math::decompose_singular_value(&A[0][0], width, height, &u[0][0], &s[0][0], &vt[0][0]));
 
         for (int i = 0; i < height; ++i) {
             for (int j = 0; j < height; ++j) {
@@ -421,7 +421,7 @@ int main(int argc, char* argv[]) {
                 double* s = new double[static_cast<size_t>(height * width)];
                 double* vt = new double[static_cast<size_t>(width * width)];
 
-                REQUIRE(matrix::decompose_singular_value(A, static_cast<size_t>(width), static_cast<size_t>(height), u, s, vt));
+                REQUIRE(math::decompose_singular_value(A, static_cast<size_t>(width), static_cast<size_t>(height), u, s, vt));
 
                 double* t = new double[static_cast<size_t>(height * width)];
                 matrix_multiply(u, height, height, s, width, height, t);
@@ -465,7 +465,7 @@ int main(int argc, char* argv[]) {
         double u[3][3];
         double s[3][3];
         double vt[3][3];
-        REQUIRE(matrix::decompose_singular_value(&A[0][0], 3, 3, &u[0][0], &s[0][0], &vt[0][0]));
+        REQUIRE(math::decompose_singular_value(&A[0][0], 3, 3, &u[0][0], &s[0][0], &vt[0][0]));
         REQUIRE(is_value_approx(s[0][0], 14.0, 1e-12));
         REQUIRE(is_value_approx(s[1][1], 0.0, 1e-12));
         REQUIRE(is_value_approx(s[2][2], 0.0, 1e-12));
@@ -480,7 +480,7 @@ int main(int argc, char* argv[]) {
         double u[2][2];
         double s[2][2];
         double vt[2][2];
-        REQUIRE(matrix::decompose_singular_value(&A[0][0], 2, 2, &u[0][0], &s[0][0], &vt[0][0]));
+        REQUIRE(math::decompose_singular_value(&A[0][0], 2, 2, &u[0][0], &s[0][0], &vt[0][0]));
         REQUIRE(is_value_approx(s[0][0], 1.0, 1e-12));
         REQUIRE(is_value_approx(s[1][1], 0.0, 1e-12));
     }
@@ -511,7 +511,7 @@ int main(int argc, char* argv[]) {
         double u[3][3];
         double s[3][3];
         double vt[3][3];
-        REQUIRE(matrix::decompose_singular_value(&A[0][0], 3, 3, &u[0][0], &s[0][0], &vt[0][0]));
+        REQUIRE(math::decompose_singular_value(&A[0][0], 3, 3, &u[0][0], &s[0][0], &vt[0][0]));
         for (int i = 0; i < 3; ++i) {
             REQUIRE(is_value_approx(s[i][i], 2.0, 1e-12));
         }
@@ -569,7 +569,7 @@ int main(int argc, char* argv[]) {
         double u[3][3];
         double s[3][3];
         double vt[3][3];
-        REQUIRE(matrix::decompose_singular_value(&B[0][0], 3, 3, &u[0][0], &s[0][0], &vt[0][0]));
+        REQUIRE(math::decompose_singular_value(&B[0][0], 3, 3, &u[0][0], &s[0][0], &vt[0][0]));
         const double reference[3] = { s[0][0], s[1][1], s[2][2] };
 
         const double scales[6] = { 1.0e-20, 1.0e-15, 1.0e-8, 1.0e8, 1.0e15, 1.0e20 };
@@ -586,7 +586,7 @@ int main(int argc, char* argv[]) {
             double scaled_u[3][3];
             double scaled_s[3][3];
             double scaled_vt[3][3];
-            REQUIRE(matrix::decompose_singular_value(&A[0][0], 3, 3, &scaled_u[0][0], &scaled_s[0][0], &scaled_vt[0][0]));
+            REQUIRE(math::decompose_singular_value(&A[0][0], 3, 3, &scaled_u[0][0], &scaled_s[0][0], &scaled_vt[0][0]));
             for (int i = 0; i < 3; ++i) {
                 REQUIRE(std::abs((scaled_s[i][i] / scale) - reference[i]) < (1e-12 * reference[i]));
             }
@@ -601,8 +601,8 @@ int main(int argc, char* argv[]) {
         double u[4];
         double s[4];
         double vt[4];
-        REQUIRE(!matrix::decompose_singular_value(&A[0][0], 0, 2, &u[0], &s[0], &vt[0]));
-        REQUIRE(!matrix::decompose_singular_value(&A[0][0], 2, 0, &u[0], &s[0], &vt[0]));
+        REQUIRE(!math::decompose_singular_value(&A[0][0], 0, 2, &u[0], &s[0], &vt[0]));
+        REQUIRE(!math::decompose_singular_value(&A[0][0], 2, 0, &u[0], &s[0], &vt[0]));
     }
 
     {
@@ -615,11 +615,11 @@ int main(int argc, char* argv[]) {
             { 7, 8, 9 }
         };
         A[1][1] = std::nan("");
-        REQUIRE(!matrix::decompose_singular_value(&A[0][0], 3, 3, &u[0], &s[0], &vt[0]));
+        REQUIRE(!math::decompose_singular_value(&A[0][0], 3, 3, &u[0], &s[0], &vt[0]));
         A[1][1] = HUGE_VAL;
-        REQUIRE(!matrix::decompose_singular_value(&A[0][0], 3, 3, &u[0], &s[0], &vt[0]));
+        REQUIRE(!math::decompose_singular_value(&A[0][0], 3, 3, &u[0], &s[0], &vt[0]));
         A[1][1] = -HUGE_VAL;
-        REQUIRE(!matrix::decompose_singular_value(&A[0][0], 3, 3, &u[0], &s[0], &vt[0]));
+        REQUIRE(!math::decompose_singular_value(&A[0][0], 3, 3, &u[0], &s[0], &vt[0]));
     }
 
     {
@@ -664,7 +664,7 @@ int main(int argc, char* argv[]) {
                     float* s = new float[static_cast<unsigned int>(height * width)];
                     float* vt = new float[static_cast<unsigned int>(width * width)];
 
-                    REQUIRE(matrix::decompose_singular_value(A, static_cast<size_t>(width), static_cast<size_t>(height), u, s, vt));
+                    REQUIRE(math::decompose_singular_value(A, static_cast<size_t>(width), static_cast<size_t>(height), u, s, vt));
 
                     for (int i = 0; i < height; ++i) {
                         for (int j = 0; j < height; ++j) {

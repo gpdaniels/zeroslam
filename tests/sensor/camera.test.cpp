@@ -52,7 +52,7 @@ int main(int argc, char* argv[]) {
     static_cast<void>(argv);
 
     {
-        camera::pinhole pinhole;
+        sensor::pinhole pinhole;
         double parameters[4]{};
         pinhole.get_parameters(&parameters[0], 4);
         REQUIRE(is_value_approx(parameters[0], 1.0));
@@ -69,7 +69,7 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        camera::pinhole pinhole;
+        sensor::pinhole pinhole;
         const double parameters_new[4] = { 1.0, 2.0, 3.0, 4.0 };
         pinhole.set_parameters(&parameters_new[0], 4);
         double parameters[4];
@@ -82,7 +82,7 @@ int main(int argc, char* argv[]) {
 
     {
         {
-            camera::pinhole pinhole;
+            sensor::pinhole pinhole;
             const double world_point[3] = { 0, 0, 1 };
             const double image_point_expected[2] = { 0.5, 0.5 };
             double image_point[2]{};
@@ -92,7 +92,7 @@ int main(int argc, char* argv[]) {
         }
 
         {
-            camera::pinhole pinhole;
+            sensor::pinhole pinhole;
             const double world_point[3] = { 0, 0, 1 };
             const double image_point_expected[2] = { 0.5, 0.5 };
             const double jacobian_projection_expected[2][3] = { { 1, 0, 0 }, { 0, 1, 0 } };
@@ -108,7 +108,7 @@ int main(int argc, char* argv[]) {
             }
         }
         {
-            camera::pinhole pinhole;
+            sensor::pinhole pinhole;
             const double world_point[3] = { 0, 0, 1 };
             const double image_point_expected[2] = { 0.5, 0.5 };
             const double jacobian_parameter_expected[2][pinhole.parameter_count] = { { 0, 0, 1, 0 }, { 0, 0, 0, 1 } };
@@ -124,7 +124,7 @@ int main(int argc, char* argv[]) {
             }
         }
         {
-            camera::pinhole pinhole;
+            sensor::pinhole pinhole;
             const double world_point[3] = { -1, 1, 2 };
             const double image_point_expected[2] = { 0.0, 1.0 };
             const double jacobian_projection_expected[2][3] = { { 0.5, 0, 0.25 }, { 0, 0.5, -0.25 } };
@@ -148,7 +148,7 @@ int main(int argc, char* argv[]) {
 
     {
         {
-            camera::pinhole pinhole;
+            sensor::pinhole pinhole;
             const double image_point[2] = { 0.5, 0.5 };
             const double world_ray_expected[3] = { 0, 0, 1 };
             double world_ray[3]{};
@@ -158,7 +158,7 @@ int main(int argc, char* argv[]) {
             REQUIRE(is_value_approx(world_ray[2], world_ray_expected[2]));
         }
         {
-            camera::pinhole pinhole;
+            sensor::pinhole pinhole;
             const double image_point[2] = { 0.5, 0.5 };
             const double world_ray_expected[3] = { 0, 0, 1 };
             double jacobian_unprojection_expected[3][2] = { { 1, 0 }, { 0, 1 }, { 0, 0 } };
@@ -177,7 +177,7 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        camera::pinhole pinhole;
+        sensor::pinhole pinhole;
         const double parameters_new[4] = { 525, 525, 640 / 2, 480 / 2 };
         pinhole.set_parameters(&parameters_new[0], 4);
         double parameters[4];
@@ -205,7 +205,7 @@ int main(int argc, char* argv[]) {
 
     {
         const double parameters[4] = { 525, 525, 640 / 2, 480 / 2 };
-        const camera::pinhole pinhole(&parameters[0], 4);
+        const sensor::pinhole pinhole(&parameters[0], 4);
         const double image_point_expected[2] = { 640 / 4, 3 * (480 / 4) };
         const double world_ray_expected[3] = {
             ((image_point_expected[0] - parameters[2]) / parameters[0]) * 0.25,
@@ -220,7 +220,7 @@ int main(int argc, char* argv[]) {
 
     {
         const double parameters[4] = { 525, 525, 320, 240 };
-        camera::pinhole pinhole(&parameters[0], 4);
+        sensor::pinhole pinhole(&parameters[0], 4);
 
         const double step = 1e-6;
 
@@ -278,13 +278,13 @@ int main(int argc, char* argv[]) {
             for (size_t i = 0; i < 4; ++i) {
                 double params_plus[4] = { parameters[0], parameters[1], parameters[2], parameters[3] };
                 params_plus[i] += step;
-                camera::pinhole pinhole_plus(params_plus, 4);
+                sensor::pinhole pinhole_plus(params_plus, 4);
                 double projected_plus[2] = { 0.0, 0.0 };
                 REQUIRE(pinhole_plus.project(point, projected_plus));
 
                 double params_minus[4] = { parameters[0], parameters[1], parameters[2], parameters[3] };
                 params_minus[i] -= step;
-                camera::pinhole pinhole_minus(params_minus, 4);
+                sensor::pinhole pinhole_minus(params_minus, 4);
                 double projected_minus[2] = { 0.0, 0.0 };
                 REQUIRE(pinhole_minus.project(point, projected_minus));
 
@@ -338,7 +338,7 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        camera::pinhole pinhole;
+        sensor::pinhole pinhole;
         double image_point[2] = { 0.0, 0.0 };
         const double point_behind[3] = { 0.1, 0.2, -1.0 };
         const double point_at_camera[3] = { 0.1, 0.2, 0.0 };

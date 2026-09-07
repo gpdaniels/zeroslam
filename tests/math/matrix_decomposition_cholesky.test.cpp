@@ -95,7 +95,7 @@ int main(int argc, char* argv[]) {
             { 0, 0, 0, 0, 0, 0 },
             { 0, 0, 0, 0, 0, 0 }
         };
-        REQUIRE(matrix::decompose_cholesky(&matrix[0][0], 6, 6, &decomposed[0][0]));
+        REQUIRE(math::decompose_cholesky(&matrix[0][0], 6, 6, &decomposed[0][0]));
         for (int i = 0; i < 6; ++i) {
             for (int j = 0; j < 6; ++j) {
                 double reconstructed = 0;
@@ -105,7 +105,7 @@ int main(int argc, char* argv[]) {
                 REQUIRE(is_value_approx(reconstructed, matrix[i][j], 1e-6));
             }
         }
-        REQUIRE(matrix::solve_cholesky(&decomposed[0][0], &rhs[0], 6, 6, &result[0]));
+        REQUIRE(math::solve_cholesky(&decomposed[0][0], &rhs[0], 6, 6, &result[0]));
         REQUIRE(are_values_approx(result, expected, 6, 1e-4));
     }
 
@@ -119,10 +119,10 @@ int main(int argc, char* argv[]) {
             { 0, 0 },
             { 0, 0 }
         };
-        REQUIRE(!matrix::decompose_cholesky(&matrix[0][0], 2, 2, &decomposed[0][0]));
+        REQUIRE(!math::decompose_cholesky(&matrix[0][0], 2, 2, &decomposed[0][0]));
         const double rhs[2] = { 1.0, 1.0 };
         double result[2] = { 0, 0 };
-        REQUIRE(!matrix::solve_cholesky(&decomposed[0][0], &rhs[0], 2, 2, &result[0]));
+        REQUIRE(!math::solve_cholesky(&decomposed[0][0], &rhs[0], 2, 2, &result[0]));
     }
 
     {
@@ -134,7 +134,7 @@ int main(int argc, char* argv[]) {
         };
         const double rhs[2] = { 1.0, 1.0 };
         double result[2] = { 0, 0 };
-        REQUIRE(!matrix::solve_cholesky(&decomposed[0][0], &rhs[0], 2, 2, &result[0]));
+        REQUIRE(!math::solve_cholesky(&decomposed[0][0], &rhs[0], 2, 2, &result[0]));
     }
 
     {
@@ -146,7 +146,7 @@ int main(int argc, char* argv[]) {
             { 0, 0 },
             { 0, 0 }
         };
-        REQUIRE(matrix::decompose_cholesky(&matrix[0][0], 2, 2, &decomposed[0][0]));
+        REQUIRE(math::decompose_cholesky(&matrix[0][0], 2, 2, &decomposed[0][0]));
 
         // The factor must match the known-exact lower-triangular L (upper part left as zero).
         REQUIRE(is_value_approx(decomposed[0][0], 2.0, 1e-12));
@@ -169,7 +169,7 @@ int main(int argc, char* argv[]) {
         const double rhs[2] = { 6.0, 5.0 };
         const double expected[2] = { 1.0, 1.0 };
         double result[2] = { 0, 0 };
-        REQUIRE(matrix::solve_cholesky(&decomposed[0][0], &rhs[0], 2, 2, &result[0]));
+        REQUIRE(math::solve_cholesky(&decomposed[0][0], &rhs[0], 2, 2, &result[0]));
         REQUIRE(are_values_approx(result, expected, 2, 1e-10));
     }
 
@@ -182,11 +182,11 @@ int main(int argc, char* argv[]) {
             { 0, 0 },
             { 0, 0 }
         };
-        REQUIRE(!matrix::decompose_cholesky(&matrix[0][0], 2, 2, &decomposed[0][0]));
+        REQUIRE(!math::decompose_cholesky(&matrix[0][0], 2, 2, &decomposed[0][0]));
 
         // The failed decomposition must not be reported as solvable, and must not yield a NaN result.
         const double rhs[2] = { 1.0, 1.0 };
         double result[2] = { 0, 0 };
-        REQUIRE(!matrix::solve_cholesky(&decomposed[0][0], &rhs[0], 2, 2, &result[0]));
+        REQUIRE(!math::solve_cholesky(&decomposed[0][0], &rhs[0], 2, 2, &result[0]));
     }
 }

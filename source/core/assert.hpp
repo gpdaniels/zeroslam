@@ -19,7 +19,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ZEROSLAM_CORE_ASSERT_HPP
 
 #ifndef NDEBUG
-
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
@@ -29,7 +28,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
+#endif
 
+namespace core {
+#ifndef NDEBUG
 #if defined(_MSC_VER)
 #define __builtin_trap() __debugbreak()
 #endif
@@ -37,5 +39,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #else
 #define ASSERT(ASSERTION, MESSAGE) static_cast<void>(0)
 #endif
+}
 
 #endif // ZEROSLAM_CORE_ASSERT_HPP

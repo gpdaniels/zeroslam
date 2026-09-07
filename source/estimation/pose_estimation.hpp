@@ -25,7 +25,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "math/matrix_decomposition_singular_value.hpp"
 #include "math/matrix_eigen_solver.hpp"
 
-namespace pose_estimation {
+namespace estimation {
 
     // Computes the relative pose between two cameras using 5 corresponding points.
     // The relative pose is computed such that y * E * x = 0, where E = tx * R and tx is the cross product matrix of t.
@@ -130,7 +130,7 @@ namespace pose_estimation {
         type u[9][9];
         type s[9][9];
         type vt[9][9];
-        if (!matrix::decompose_singular_value(&block[0][0], 9, 9, &u[0][0], &s[0][0], &vt[0][0])) {
+        if (!math::decompose_singular_value(&block[0][0], 9, 9, &u[0][0], &s[0][0], &vt[0][0])) {
             return 0;
         }
         const type null_space[9][4] = {
@@ -257,7 +257,7 @@ namespace pose_estimation {
         type matrix_l[10][10];
         type matrix_u[10][10];
         type matrix_p[10][10];
-        if (!matrix::decompose_lower_upper<type>(&constraint_matrix_lhs[0][0], 10, 10, &matrix_l[0][0], &matrix_u[0][0], &matrix_p[0][0])) {
+        if (!math::decompose_lower_upper<type>(&constraint_matrix_lhs[0][0], 10, 10, &matrix_l[0][0], &matrix_u[0][0], &matrix_p[0][0])) {
             // The constraint matrix is singular (e.g. duplicated correspondences), so there are no valid solutions.
             return 0;
         }
@@ -269,7 +269,7 @@ namespace pose_estimation {
                 constraint_matrix_rhs_column[y][0] = constraint_matrix[y][x + 10];
             }
             type eliminated_matrix_column[10][1];
-            if (!matrix::solve_lower_upper<type>(&matrix_l[0][0], &matrix_u[0][0], &matrix_p[0][0], &constraint_matrix_rhs_column[0][0], 10, 10, &eliminated_matrix_column[0][0])) {
+            if (!math::solve_lower_upper<type>(&matrix_l[0][0], &matrix_u[0][0], &matrix_p[0][0], &constraint_matrix_rhs_column[0][0], 10, 10, &eliminated_matrix_column[0][0])) {
                 // The constraint matrix is singular (e.g. duplicated correspondences), so there are no valid solutions.
                 return 0;
             }
@@ -294,7 +294,7 @@ namespace pose_estimation {
 
         type eigen_values[10][2] = {};
         type eigen_vectors[10][10] = {};
-        matrix::eigen_solver(&action_matrix[0][0], 10, &eigen_values[0][0], &eigen_vectors[0][0]);
+        math::eigen_solver(&action_matrix[0][0], 10, &eigen_values[0][0], &eigen_vectors[0][0]);
 
         // Now that we have x, y, and z we need to substitute them back into the null space to get a valid essential matrix solution.
         int count = 0;
@@ -1041,12 +1041,12 @@ namespace pose_estimation {
 
                     for (size_t point_index = 0; point_index < point_count; ++point_index) {
                         // Triangulate.
-                        matrix::matrix<double, 3, 1> triangulated_result = matrix::matrix<double, 3, 1>::zero();
+                        math::matrix<double, 3, 1> triangulated_result = math::matrix<double, 3, 1>::zero();
                         bool is_valid = geometry::triangulate(
-                            matrix::matrix<double, 2, 1>(&lhs_points[point_index * 2]),
-                            matrix::matrix<double, 3, 4>(&lhs_camera_pose[0][0]),
-                            matrix::matrix<double, 2, 1>(&rhs_points[point_index * 2]),
-                            matrix::matrix<double, 3, 4>(&rhs_camera_pose[0][0]),
+                            math::matrix<double, 2, 1>(&lhs_points[point_index * 2]),
+                            math::matrix<double, 3, 4>(&lhs_camera_pose[0][0]),
+                            math::matrix<double, 2, 1>(&rhs_points[point_index * 2]),
+                            math::matrix<double, 3, 4>(&rhs_camera_pose[0][0]),
                             triangulated_result
                         );
 

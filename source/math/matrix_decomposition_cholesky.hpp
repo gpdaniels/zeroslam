@@ -21,7 +21,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "core/assert.hpp"
 #include "math/math.hpp"
 
-namespace matrix {
+namespace math {
     template <typename type>
     constexpr static inline bool decompose_cholesky(
         const type* __restrict matrix_a,

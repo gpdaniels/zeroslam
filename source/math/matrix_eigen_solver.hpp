@@ -20,7 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "math/math.hpp"
 
-namespace matrix {
+namespace math {
     /// @brief  Computes all eigenvalues and eigenvectors of a general matrix.
     /// @tparam type The scalar/numeric type to use, normally float or double.
     /// @tparam extract_eigenvectors If true the function will extract the eigen vectors and return them in the eigenvectors argument.

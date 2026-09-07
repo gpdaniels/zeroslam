@@ -43,7 +43,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 class slam {
 public:
-    map::map reconstruction;
+    mapping::map reconstruction;
 
 private:
     static void ratio_test(std::vector<feature::match>& matches) {
@@ -86,10 +86,10 @@ private:
     }
 
 public:
-    void process_frame(const matrix::matrix<double, 3, 3>& intrinsics, const image::image& image_grey) {
+    void process_frame(const math::matrix<double, 3, 3>& intrinsics, const image::image& image_grey) {
         {
-            camera::pinhole camera_intrinsics(matrix::matrix<double, 1, 4>({ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }).data(), 4);
-            frame::frame frame(camera_intrinsics, image_grey);
+            sensor::pinhole camera_intrinsics(math::matrix<double, 1, 4>({ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }).data(), 4);
+            mapping::frame frame(camera_intrinsics, image_grey);
 
             std::printf("Detected Features: ");
             for (size_t i = 0; i < frame.keypoint_pyramid.size(); ++i) {
@@ -107,8 +107,8 @@ public:
         }
 
         // Get the most recent pair of frames.
-        const frame::frame& frame_previous = reconstruction.frames.at(frame::frame::id_generator - 2);
-        frame::frame& frame_current = reconstruction.frames.at(frame::frame::id_generator - 1);
+        const mapping::frame& frame_previous = reconstruction.frames.at(mapping::frame::id_generator - 2);
+        mapping::frame& frame_current = reconstruction.frames.at(mapping::frame::id_generator - 1);
 
         std::printf("Previous Features: ");
         for (size_t i = 0; i < frame_previous.keypoint_pyramid.size(); ++i) {
@@ -149,8 +149,8 @@ public:
         // Create final arrays of good matches.
         std::vector<int> match_index_current;
         std::vector<int> match_index_previous;
-        std::vector<matrix::matrix<double, 2, 1>> match_point_current;
-        std::vector<matrix::matrix<double, 2, 1>> match_point_previous;
+        std::vector<math::matrix<double, 2, 1>> match_point_current;
+        std::vector<math::matrix<double, 2, 1>> match_point_previous;
         for (const feature::match& m : matches) {
             match_index_current.push_back(static_cast<int>(m.lhs_index));
             match_point_current.push_back({ { static_cast<double>(frame_current.keypoint_pyramid[0][m.lhs_index].x), static_cast<double>(frame_current.keypoint_pyramid[0][m.lhs_index].y) } });
@@ -172,8 +172,8 @@ public:
 
         // Pose estimation of new frame.
         if (frame_current.id < 2) {
-            consensus::model_essential<double> model;
-            std::vector<consensus::correspondence_2d_2d<double>> essential_correspondencies;
+            estimation::model_essential<double> model;
+            std::vector<estimation::correspondence_2d_2d<double>> essential_correspondencies;
             for (const feature::match& m : matches) {
                 const double lhs_point[2] = {
                     static_cast<double>(frame_current.keypoint_pyramid[0][m.lhs_index].x),
@@ -196,12 +196,12 @@ public:
             std::vector<float> essential_residuals(essential_correspondencies.size());
             std::vector<size_t> essential_inliers(essential_correspondencies.size());
             size_t inliers = essential_correspondencies.size();
-            if (!consensus::solve_ransac_essential(essential_correspondencies.data(), essential_correspondencies.size(), essential_residuals.data(), essential_inliers.data(), inliers, model)) {
+            if (!estimation::solve_ransac_essential(essential_correspondencies.data(), essential_correspondencies.size(), essential_residuals.data(), essential_inliers.data(), inliers, model)) {
                 std::fprintf(stderr, "Failed to calculate the initial pose transform.\n");
                 std::exit(1);
             }
-            std::vector<matrix::matrix<double, 2, 1>> match_point_current_inlier;
-            std::vector<matrix::matrix<double, 2, 1>> match_point_previous_inlier;
+            std::vector<math::matrix<double, 2, 1>> match_point_current_inlier;
+            std::vector<math::matrix<double, 2, 1>> match_point_previous_inlier;
             match_point_current_inlier.reserve(inliers);
             match_point_previous_inlier.reserve(inliers);
             for (size_t inlier_index = 0; inlier_index < inliers; ++inlier_index) {
@@ -209,18 +209,18 @@ public:
                 match_point_previous_inlier.push_back({ { essential_correspondencies[essential_inliers[inlier_index]].rhs.x, essential_correspondencies[essential_inliers[inlier_index]].rhs.y } });
             }
 
-            matrix::matrix<double, 3, 3> rotation;
-            matrix::matrix<double, 3, 1> translation;
-            std::vector<matrix::matrix<double, 3, 1>> match_point_triangulated_inlier(inliers);
+            math::matrix<double, 3, 3> rotation;
+            math::matrix<double, 3, 1> translation;
+            std::vector<math::matrix<double, 3, 1>> match_point_triangulated_inlier(inliers);
             size_t recover_pose_support = 0;
-            if (!pose_estimation::essential_matrix<double>::recover_pose(&model.essential[0][0], match_point_current_inlier.data()->data(), match_point_previous_inlier.data()->data(), inliers, rotation.data(), translation.data(), match_point_triangulated_inlier.data()->data(), &recover_pose_support)) {
+            if (!estimation::essential_matrix<double>::recover_pose(&model.essential[0][0], match_point_current_inlier.data()->data(), match_point_previous_inlier.data()->data(), inliers, rotation.data(), translation.data(), match_point_triangulated_inlier.data()->data(), &recover_pose_support)) {
                 std::fprintf(stderr, "Failed to calculate the initial pose transform.\n");
                 std::exit(1);
             }
             std::printf("Support: %zu of %zu inliers support the recovered pose.\n", recover_pose_support, inliers);
 
             // Recover pose returns pose 2 to pose 1 rather than pose 1 to pose 2, so invert it.
-            rotation = matrix::transpose(rotation);
+            rotation = math::transpose(rotation);
             translation = -rotation * translation;
 
             // Set the initial pose of the new frame.
@@ -250,11 +250,11 @@ public:
             );
         }
         else {
-            std::vector<consensus::correspondence_2d_3d<double>> pnp_correspondencies;
+            std::vector<estimation::correspondence_2d_3d<double>> pnp_correspondencies;
             for (size_t i = 0; i < match_index_previous.size(); ++i) {
                 auto found_point = frame_previous_points.find(match_index_previous[i]);
                 if (found_point != frame_previous_points.end()) {
-                    consensus::correspondence_2d_3d<double> corr;
+                    estimation::correspondence_2d_3d<double> corr;
                     const double lhs_point[2] = {
                         static_cast<double>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].x),
                         static_cast<double>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].y)
@@ -277,18 +277,18 @@ public:
 
             bool pnp_success = false;
             if (pnp_correspondencies.size() >= 3) {
-                consensus::model_p3p<double> model;
+                estimation::model_p3p<double> model;
                 std::vector<float> pnp_residuals(pnp_correspondencies.size());
                 std::vector<size_t> pnp_inliers(pnp_correspondencies.size());
                 size_t inliers_size = 0;
 
-                if (consensus::solve_ransac_p3p(pnp_correspondencies.data(), pnp_correspondencies.size(), pnp_residuals.data(), pnp_inliers.data(), inliers_size, model)) {
-                    frame_current.rotation = matrix::matrix<double, 3, 3>({ { model.rotation[0][0], model.rotation[0][1], model.rotation[0][2] },
-                                                                            { model.rotation[1][0], model.rotation[1][1], model.rotation[1][2] },
-                                                                            { model.rotation[2][0], model.rotation[2][1], model.rotation[2][2] } });
-                    frame_current.translation = matrix::matrix<double, 3, 1>({ { model.translation[0] },
-                                                                               { model.translation[1] },
-                                                                               { model.translation[2] } });
+                if (estimation::solve_ransac_p3p(pnp_correspondencies.data(), pnp_correspondencies.size(), pnp_residuals.data(), pnp_inliers.data(), inliers_size, model)) {
+                    frame_current.rotation = math::matrix<double, 3, 3>({ { model.rotation[0][0], model.rotation[0][1], model.rotation[0][2] },
+                                                                          { model.rotation[1][0], model.rotation[1][1], model.rotation[1][2] },
+                                                                          { model.rotation[2][0], model.rotation[2][1], model.rotation[2][2] } });
+                    frame_current.translation = math::matrix<double, 3, 1>({ { model.translation[0] },
+                                                                             { model.translation[1] },
+                                                                             { model.translation[2] } });
                     pnp_success = true;
                     std::printf("Inliers: %zu inliers in PnP pose estimation out of %zu correspondencies.\n", inliers_size, pnp_correspondencies.size());
                 }
@@ -340,8 +340,8 @@ public:
         int observations_of_map = 0;
         for (const auto& [landmark_id, landmark] : this->reconstruction.landmarks) {
             // Check landmark is infront of frame.
-            const matrix::matrix<double, 3, 1> mapped = (frame_current.rotation * landmark.location) + frame_current.translation;
-            matrix::matrix<double, 2, 1> reprojected = {};
+            const math::matrix<double, 3, 1> mapped = (frame_current.rotation * landmark.location) + frame_current.translation;
+            math::matrix<double, 2, 1> reprojected = {};
             if (!frame_current.camera.project(mapped.data(), reprojected.data())) {
                 continue;
             }
@@ -349,9 +349,9 @@ public:
                 continue;
             }
             // Check it has not already been matched.
-            const std::vector<map::map::observation<int, size_t>>& landmark_observations = this->reconstruction.observations.at(landmark_id);
+            const std::vector<mapping::map::observation<int, size_t>>& landmark_observations = this->reconstruction.observations.at(landmark_id);
             bool landmark_found = false;
-            for (const map::map::observation<int, size_t>& landmark_observation : landmark_observations) {
+            for (const mapping::map::observation<int, size_t>& landmark_observation : landmark_observations) {
                 if (landmark_observation.first == frame_current.id) {
                     landmark_found = true;
                     break;
@@ -401,20 +401,20 @@ public:
             // New landmark to be triangulated.
             ++potential_landmarks;
             // Normalise the points.
-            const matrix::matrix<double, 2, 1> point_previous = { { static_cast<double>(frame_previous.keypoint_pyramid[0][static_cast<size_t>(match_index_previous[i])].x), static_cast<double>(frame_previous.keypoint_pyramid[0][static_cast<size_t>(match_index_previous[i])].y) } };
-            matrix::matrix<double, 3, 1> ray_previous;
+            const math::matrix<double, 2, 1> point_previous = { { static_cast<double>(frame_previous.keypoint_pyramid[0][static_cast<size_t>(match_index_previous[i])].x), static_cast<double>(frame_previous.keypoint_pyramid[0][static_cast<size_t>(match_index_previous[i])].y) } };
+            math::matrix<double, 3, 1> ray_previous;
             if (!frame_previous.camera.unproject(point_previous.data(), ray_previous.data())) {
                 ++unprojectable_landmarks;
                 continue;
             }
-            const matrix::matrix<double, 2, 1> point_current = { { static_cast<double>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].x), static_cast<double>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].y) } };
-            matrix::matrix<double, 3, 1> ray_current;
+            const math::matrix<double, 2, 1> point_current = { { static_cast<double>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].x), static_cast<double>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].y) } };
+            math::matrix<double, 3, 1> ray_current;
             if (!frame_current.camera.unproject(point_current.data(), ray_current.data())) {
                 ++unprojectable_landmarks;
                 continue;
             }
             // Check triangulation is valid.
-            matrix::matrix<double, 3, 1> point;
+            math::matrix<double, 3, 1> point;
             if (!geometry::triangulate(
                     ray_current,
                     frame_current.get_pose(),
@@ -426,18 +426,18 @@ public:
                 continue;
             }
             // Check triangulated point reprojects infront of both cameras.
-            const matrix::matrix<double, 3, 1> mapped_previous = (frame_previous.rotation * point) + frame_previous.translation;
+            const math::matrix<double, 3, 1> mapped_previous = (frame_previous.rotation * point) + frame_previous.translation;
             if (mapped_previous[2] < 0) {
                 ++behind_landmarks;
                 continue;
             }
-            const matrix::matrix<double, 3, 1> mapped_current = (frame_current.rotation * point) + frame_current.translation;
+            const math::matrix<double, 3, 1> mapped_current = (frame_current.rotation * point) + frame_current.translation;
             if (mapped_current[2] < 0) {
                 ++behind_landmarks;
                 continue;
             }
             // Check reprojection error of point is low compared to the detected feature in both cameras.
-            matrix::matrix<double, 2, 1> reprojected_previous;
+            math::matrix<double, 2, 1> reprojected_previous;
             if (!frame_previous.camera.project(mapped_previous.data(), reprojected_previous.data())) {
                 ++unprojectable_landmarks;
                 continue;
@@ -446,7 +446,7 @@ public:
                 ++poor_landmarks;
                 continue;
             }
-            matrix::matrix<double, 2, 1> reprojected_current;
+            math::matrix<double, 2, 1> reprojected_current;
             if (!frame_current.camera.project(mapped_current.data(), reprojected_current.data())) {
                 ++unprojectable_landmarks;
                 continue;
@@ -457,7 +457,7 @@ public:
             }
             // Add it.
             const float colour = static_cast<float>(image_grey.get_data()[static_cast<size_t>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].y) * image_grey.get_cols() + static_cast<size_t>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].x)]) / 255.0f;
-            landmark::point landmark(point, matrix::matrix<double, 3, 1>{ { static_cast<double>(colour), static_cast<double>(colour), static_cast<double>(colour) } });
+            mapping::point landmark(point, math::matrix<double, 3, 1>{ { static_cast<double>(colour), static_cast<double>(colour), static_cast<double>(colour) } });
             this->reconstruction.add_landmark(landmark);
             this->reconstruction.add_observation(frame_previous, landmark, static_cast<size_t>(match_index_previous[i]));
             this->reconstruction.add_observation(frame_current, landmark, static_cast<size_t>(match_index_current[i]));

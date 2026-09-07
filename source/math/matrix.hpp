@@ -39,7 +39,7 @@ namespace {
     };
 }
 
-namespace matrix {
+namespace math {
     template <typename template_type, size_t template_rows, size_t template_cols>
     class matrix final {
     public:

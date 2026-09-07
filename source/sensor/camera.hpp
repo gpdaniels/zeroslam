@@ -22,7 +22,7 @@ namespace {
     using size_t = decltype(sizeof(0));
 }
 
-namespace camera {
+namespace sensor {
     class pinhole final {
     public:
         constexpr static const size_t parameter_count = 4;
@@ -57,7 +57,7 @@ namespace camera {
 
 #include "core/assert.hpp"
 
-namespace camera {
+namespace sensor {
     inline pinhole::pinhole()
         : focal_lengths{ 1.0, 1.0 }
         , centre_points{ 0.5, 0.5 } {

@@ -52,18 +52,18 @@ int main(int argc, char* argv[]) {
     static_cast<void>(argv);
 
     // Test basic construction.
-    matrix::sparse_block<2, 3> sparse_block(4, 6);
+    math::sparse_block<2, 3> sparse_block(4, 6);
     REQUIRE(sparse_block.rows() == 4);
     REQUIRE(sparse_block.cols() == 6);
     REQUIRE(sparse_block.validate());
 
     // Insert an out-of-range block and check validate() fails
-    matrix::sparse_block<2, 2> sparse_block_bad;
+    math::sparse_block<2, 2> sparse_block_bad;
     sparse_block_bad.blocks()[{ 2, 0 }] = {};
     REQUIRE(sparse_block_bad.validate() == false);
 
     // Test inserting a block at (0,0).
-    matrix::sparse_block<2, 3>::block_type block_0;
+    math::sparse_block<2, 3>::block_type block_0;
     block_0(0, 0) = 1.0;
     block_0(0, 1) = 2.0;
     block_0(0, 2) = 3.0;
@@ -100,7 +100,7 @@ int main(int argc, char* argv[]) {
     REQUIRE(is_value_approx(sparse_block(3, 2), 0.0));
 
     // Test inserting a block at (0,1) and (1,1).
-    matrix::sparse_block<2, 3>::block_type block_1;
+    math::sparse_block<2, 3>::block_type block_1;
     block_1(0, 0) = 7.0;
     block_1(0, 1) = 8.0;
     block_1(0, 2) = 9.0;
@@ -138,7 +138,7 @@ int main(int argc, char* argv[]) {
     REQUIRE(is_value_approx(sparse_block(3, 2), 0.0));
 
     // Test transpose.
-    const matrix::sparse_block<3, 2> sparse_block_transpose = sparse_block.get_transpose();
+    const math::sparse_block<3, 2> sparse_block_transpose = sparse_block.get_transpose();
     REQUIRE(sparse_block_transpose.rows() == 6);
     REQUIRE(sparse_block_transpose.cols() == 4);
     REQUIRE(sparse_block_transpose.validate());
@@ -170,7 +170,7 @@ int main(int argc, char* argv[]) {
     REQUIRE(is_value_approx(sparse_block_transpose(2, 3), 0.0));
 
     // Test addition.
-    matrix::sparse_block<2, 3> sparse_block_sum = sparse_block.add(sparse_block);
+    math::sparse_block<2, 3> sparse_block_sum = sparse_block.add(sparse_block);
     REQUIRE(sparse_block_sum.rows() == 4);
     REQUIRE(sparse_block_sum.cols() == 6);
     REQUIRE(sparse_block_sum.validate());
@@ -202,7 +202,7 @@ int main(int argc, char* argv[]) {
     REQUIRE(is_value_approx(sparse_block_transpose(2, 3), 0.0));
 
     // Test multiplication.
-    matrix::sparse_block<2, 2> sparse_block_product = sparse_block.multiply(sparse_block_transpose);
+    math::sparse_block<2, 2> sparse_block_product = sparse_block.multiply(sparse_block_transpose);
     REQUIRE(sparse_block_product.rows() == 4);
     REQUIRE(sparse_block_product.cols() == 4);
     REQUIRE(sparse_block_product.validate());
@@ -225,14 +225,14 @@ int main(int argc, char* argv[]) {
     REQUIRE(is_value_approx(sparse_block_product(3, 3), 365.0));
 
     // Multiply by a vector.
-    matrix::matrix<double, 0, 0> vector_rhs = matrix::matrix<double, 0, 0>::zero(6, 1);
+    math::matrix<double, 0, 0> vector_rhs = math::matrix<double, 0, 0>::zero(6, 1);
     vector_rhs(0, 0) = 1.0;
     vector_rhs(1, 0) = 2.0;
     vector_rhs(2, 0) = 3.0;
     vector_rhs(3, 0) = 4.0;
     vector_rhs(4, 0) = 5.0;
     vector_rhs(5, 0) = 6.0;
-    matrix::matrix<double, 0, 0> sparse_block_vector_rhs = sparse_block.multiply(vector_rhs);
+    math::matrix<double, 0, 0> sparse_block_vector_rhs = sparse_block.multiply(vector_rhs);
     REQUIRE(sparse_block_vector_rhs.rows() == 4);
     REQUIRE(sparse_block_vector_rhs.cols() == 1);
     REQUIRE(is_value_approx(sparse_block_vector_rhs(0, 0), 136.0));
@@ -241,12 +241,12 @@ int main(int argc, char* argv[]) {
     REQUIRE(is_value_approx(sparse_block_vector_rhs(3, 0), 167.0));
 
     // Right multiply by a vector.
-    matrix::matrix<double, 0, 0> vector_lhs = matrix::matrix<double, 0, 0>::zero(1, 4);
+    math::matrix<double, 0, 0> vector_lhs = math::matrix<double, 0, 0>::zero(1, 4);
     vector_lhs(0, 0) = 1.0;
     vector_lhs(0, 1) = 2.0;
     vector_lhs(0, 2) = 3.0;
     vector_lhs(0, 3) = 4.0;
-    matrix::matrix<double, 0, 0> sparse_block_vector_lhs = sparse_block.multiply_right(vector_lhs);
+    math::matrix<double, 0, 0> sparse_block_vector_lhs = sparse_block.multiply_right(vector_lhs);
     REQUIRE(sparse_block_vector_lhs.rows() == 1);
     REQUIRE(sparse_block_vector_lhs.cols() == 6);
     REQUIRE(is_value_approx(sparse_block_vector_lhs(0, 0), 9.0));
@@ -260,9 +260,9 @@ int main(int argc, char* argv[]) {
     // grid where the element column count differs from the block column count on both sides.
     {
         // LHS: 2x3 blocks, 3 block-rows by 3 block-cols -> 6x9 elements.
-        matrix::sparse_block<2, 3> big_lhs(6, 9);
+        math::sparse_block<2, 3> big_lhs(6, 9);
         // RHS: 3x2 blocks, 3 block-rows by 4 block-cols -> 9x8 elements (block-cols=4 != element-cols/1).
-        matrix::sparse_block<3, 2> big_rhs(9, 8);
+        math::sparse_block<3, 2> big_rhs(9, 8);
 
         // Fill a scattered (sparse) set of blocks on both sides, deliberately leaving gaps so that some
         // lhs block-columns have no matching rhs block-row (and vice versa), exercising the "miss" path.
@@ -272,7 +272,7 @@ int main(int argc, char* argv[]) {
                 if (block_row == 1 && block_col == 2) {
                     continue;
                 }
-                matrix::sparse_block<2, 3>::block_type block;
+                math::sparse_block<2, 3>::block_type block;
                 for (size_t r = 0; r < 2; ++r) {
                     for (size_t c = 0; c < 3; ++c) {
                         block(r, c) = static_cast<double>(1 + block_row * 20 + block_col * 5 + r * 3 + c);
@@ -288,7 +288,7 @@ int main(int argc, char* argv[]) {
                 if (block_col == 3 || (block_row == 0 && block_col == 1)) {
                     continue;
                 }
-                matrix::sparse_block<3, 2>::block_type block;
+                math::sparse_block<3, 2>::block_type block;
                 for (size_t r = 0; r < 3; ++r) {
                     for (size_t c = 0; c < 2; ++c) {
                         block(r, c) = static_cast<double>(1 + block_row * 15 + block_col * 4 + r * 2 + c) * 0.5;
@@ -300,7 +300,7 @@ int main(int argc, char* argv[]) {
         REQUIRE(big_lhs.validate());
         REQUIRE(big_rhs.validate());
 
-        matrix::sparse_block<2, 2> big_product = big_lhs.multiply(big_rhs);
+        math::sparse_block<2, 2> big_product = big_lhs.multiply(big_rhs);
         REQUIRE(big_product.rows() == 6);
         REQUIRE(big_product.cols() == 8);
         REQUIRE(big_product.validate());

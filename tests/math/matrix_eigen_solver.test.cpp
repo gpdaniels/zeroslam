@@ -99,7 +99,7 @@ int main(int argc, char* argv[]) {
 
         double values2[8] = {};
         double vectors2[4][4] = {};
-        REQUIRE((matrix::eigen_solver<double, true, true>(&matrix[0][0], 4, &values2[0], &vectors2[0][0])));
+        REQUIRE((math::eigen_solver<double, true, true>(&matrix[0][0], 4, &values2[0], &vectors2[0][0])));
 
         // Normalise eigen vectors.
         for (int j = 0; j < 4; ++j) {
@@ -158,7 +158,7 @@ int main(int argc, char* argv[]) {
             { 1e30, 1e30, 1e30, 1e30 },
             { 1e30, 1e30, 1e30, 1e30 }
         };
-        REQUIRE((matrix::eigen_solver<double, true, true>(&matrix[0][0], 4, &values2[0], &vectors2[0][0])));
+        REQUIRE((math::eigen_solver<double, true, true>(&matrix[0][0], 4, &values2[0], &vectors2[0][0])));
 
         // Normalise eigen vectors.
         for (int j = 0; j < 4; ++j) {
@@ -211,7 +211,7 @@ int main(int argc, char* argv[]) {
 
         float values2[8] = {};
         float vectors2[4][4] = {};
-        REQUIRE((matrix::eigen_solver<float, true, true>(&matrix[0][0], 4, &values2[0], &vectors2[0][0])));
+        REQUIRE((math::eigen_solver<float, true, true>(&matrix[0][0], 4, &values2[0], &vectors2[0][0])));
 
         // Normalise eigen vectors.
         for (int j = 0; j < 4; ++j) {
@@ -256,7 +256,7 @@ int main(int argc, char* argv[]) {
         };
 
         double values2[8] = {};
-        REQUIRE((matrix::eigen_solver<double, false, true>(&matrix[0][0], 4, &values2[0], nullptr)));
+        REQUIRE((math::eigen_solver<double, false, true>(&matrix[0][0], 4, &values2[0], nullptr)));
 
         for (int i = 0; i < 4; ++i) {
             REQUIRE(is_value_approx(values[i * 2 + 0], values2[i * 2 + 0], 1e-5));
@@ -282,7 +282,7 @@ int main(int argc, char* argv[]) {
         const double expected_values[4] = { -2.776886, -1.505801, -0.037042, 0.848329 };
 
         double values2[8] = {};
-        REQUIRE((matrix::eigen_solver<double, false, false>(&matrix[0][0], 4, &values2[0], nullptr)));
+        REQUIRE((math::eigen_solver<double, false, false>(&matrix[0][0], 4, &values2[0], nullptr)));
 
         // Check that all expected eigenvalues are present (order doesn't matter).
         bool found[4] = { false, false, false, false };
@@ -317,7 +317,7 @@ int main(int argc, char* argv[]) {
 
         double values2[8] = {};
         double vectors2[4][4] = {};
-        REQUIRE((matrix::eigen_solver<double, true, false>(&matrix[0][0], 4, &values2[0], &vectors2[0][0])));
+        REQUIRE((math::eigen_solver<double, true, false>(&matrix[0][0], 4, &values2[0], &vectors2[0][0])));
 
         // Verify (A * v) = (lambda * v) for each eigenpair.
         for (int j = 0; j < 4; ++j) {
@@ -354,7 +354,7 @@ int main(int argc, char* argv[]) {
 
         double values[6] = {};
         double vectors[3][3] = {};
-        REQUIRE((matrix::eigen_solver<double, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
+        REQUIRE((math::eigen_solver<double, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
 
         // All eigenvalues should be 1.0
         for (int i = 0; i < 3; ++i) {
@@ -378,7 +378,7 @@ int main(int argc, char* argv[]) {
 
         double values[6] = {};
         double vectors[3][3] = {};
-        REQUIRE((matrix::eigen_solver<double, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
+        REQUIRE((math::eigen_solver<double, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
 
         // Expected eigenvalues (sorted): -2, 3, 5
         REQUIRE(is_value_approx(-2.0, values[0], 1e-8));
@@ -404,7 +404,7 @@ int main(int argc, char* argv[]) {
 
         double values[4] = {};
         double vectors[2][2] = {};
-        REQUIRE((matrix::eigen_solver<double, true, true>(&matrix[0][0], 2, &values[0], &vectors[0][0])));
+        REQUIRE((math::eigen_solver<double, true, true>(&matrix[0][0], 2, &values[0], &vectors[0][0])));
 
         // Expected eigenvalues: (7 - sqrt(5))/2 = 2.382, (7 + sqrt(5))/2 = 4.618
         REQUIRE(is_value_approx(2.38196601125, values[0], 1e-5));
@@ -430,7 +430,7 @@ int main(int argc, char* argv[]) {
 
         double values[4] = {};
         double vectors[2][2] = {};
-        REQUIRE((matrix::eigen_solver<double, true, true>(&matrix[0][0], 2, &values[0], &vectors[0][0])));
+        REQUIRE((math::eigen_solver<double, true, true>(&matrix[0][0], 2, &values[0], &vectors[0][0])));
 
         // Expected eigenvalues: (+/-)i (0 (+/-) i)
         // The first eigenvalue might be -i (0 - i) or +i (0 + i)
@@ -466,7 +466,7 @@ int main(int argc, char* argv[]) {
 
         float values[6] = {};
         float vectors[3][3] = {};
-        REQUIRE((matrix::eigen_solver<float, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
+        REQUIRE((math::eigen_solver<float, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
 
         for (int i = 0; i < 3; ++i) {
             REQUIRE(is_value_approx(1.0f, values[i * 2 + 0], 1e-5f));
@@ -489,7 +489,7 @@ int main(int argc, char* argv[]) {
 
         double values[6] = {};
         double vectors[3][3] = {};
-        REQUIRE((matrix::eigen_solver<double, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
+        REQUIRE((math::eigen_solver<double, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
 
         // All eigenvalues should be 0.0
         for (int i = 0; i < 3; ++i) {
@@ -513,7 +513,7 @@ int main(int argc, char* argv[]) {
 
         double values[6] = {};
         double vectors[3][3] = {};
-        REQUIRE((matrix::eigen_solver<double, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
+        REQUIRE((math::eigen_solver<double, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
 
         // Expected eigenvalues (sorted): 2, 2, 5
         REQUIRE(is_value_approx(2.0, values[0], 1e-8));
@@ -536,7 +536,7 @@ int main(int argc, char* argv[]) {
 
         double values[6] = {};
         double vectors[3][3] = {};
-        REQUIRE((matrix::eigen_solver<double, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
+        REQUIRE((math::eigen_solver<double, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
 
         // Expected eigenvalues (sorted):
         REQUIRE(is_value_approx(-(3.0 / 2.0) * (std::sqrt(89) - 1), values[0], 1e-8));
@@ -575,7 +575,7 @@ int main(int argc, char* argv[]) {
 
         double values[12] = {};
         double vectors[6][6] = {};
-        REQUIRE((matrix::eigen_solver<double, true, true>(&matrix[0][0], 6, &values[0], &vectors[0][0])));
+        REQUIRE((math::eigen_solver<double, true, true>(&matrix[0][0], 6, &values[0], &vectors[0][0])));
 
         // Relaxed tolerance for 6x6 matrices.
         const double tol = 1e-2;
@@ -656,7 +656,7 @@ int main(int argc, char* argv[]) {
             { 1e30, 1e30, 1e30 },
             { 1e30, 1e30, 1e30 }
         };
-        REQUIRE((matrix::eigen_solver<double, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
+        REQUIRE((math::eigen_solver<double, true, true>(&matrix[0][0], 3, &values[0], &vectors[0][0])));
 
         // Sorted eigenvalues: -2, 3, 5, all with zero imaginary part.
         REQUIRE(is_value_approx(-2.0, values[0], 1e-8));

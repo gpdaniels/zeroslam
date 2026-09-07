@@ -23,11 +23,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace geometry {
     static inline bool triangulate(
-        const matrix::matrix<double, 3, 1>& lhs_ray,
-        const matrix::matrix<double, 3, 4>& lhs_pose,
-        const matrix::matrix<double, 3, 1>& rhs_ray,
-        const matrix::matrix<double, 3, 4>& rhs_pose,
-        matrix::matrix<double, 3, 1>& result
+        const math::matrix<double, 3, 1>& lhs_ray,
+        const math::matrix<double, 3, 4>& lhs_pose,
+        const math::matrix<double, 3, 1>& rhs_ray,
+        const math::matrix<double, 3, 4>& rhs_pose,
+        math::matrix<double, 3, 1>& result
     ) {
         constexpr static const double tolerance = 1e-8;
         // TODO: A near-zero ray z means a bearing that is ~90 degrees off-axis (or from a non-pinhole/distorted model). Currently unsupported.
@@ -47,7 +47,7 @@ namespace geometry {
         double matrix_u[4][4];
         double matrix_s[4][4];
         double matrix_vt[4][4];
-        if (!matrix::decompose_singular_value(&matrix_a[0][0], 4, 4, &matrix_u[0][0], &matrix_s[0][0], &matrix_vt[0][0])) {
+        if (!math::decompose_singular_value(&matrix_a[0][0], 4, 4, &matrix_u[0][0], &matrix_s[0][0], &matrix_vt[0][0])) {
             return false;
         }
 
@@ -83,16 +83,16 @@ namespace geometry {
     }
 
     static inline bool triangulate(
-        const matrix::matrix<double, 2, 1>& lhs_point_normalised,
-        const matrix::matrix<double, 3, 4>& lhs_pose,
-        const matrix::matrix<double, 2, 1>& rhs_point_normalised,
-        const matrix::matrix<double, 3, 4>& rhs_pose,
-        matrix::matrix<double, 3, 1>& result
+        const math::matrix<double, 2, 1>& lhs_point_normalised,
+        const math::matrix<double, 3, 4>& lhs_pose,
+        const math::matrix<double, 2, 1>& rhs_point_normalised,
+        const math::matrix<double, 3, 4>& rhs_pose,
+        math::matrix<double, 3, 1>& result
     ) {
         return triangulate(
-            matrix::matrix<double, 3, 1>{ { lhs_point_normalised[0], lhs_point_normalised[1], 1 } },
+            math::matrix<double, 3, 1>{ { lhs_point_normalised[0], lhs_point_normalised[1], 1 } },
             lhs_pose,
-            matrix::matrix<double, 3, 1>{ { rhs_point_normalised[0], rhs_point_normalised[1], 1 } },
+            math::matrix<double, 3, 1>{ { rhs_point_normalised[0], rhs_point_normalised[1], 1 } },
             rhs_pose,
             result
         );
