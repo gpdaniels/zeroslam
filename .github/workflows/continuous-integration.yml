@@ -16,7 +16,6 @@ jobs:
         config: ['Debug', 'Release']
     name: Build on ${{ matrix.os }} in ${{ matrix.config }}
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
     steps:
     - name: Checkout repository.
       uses: actions/checkout@v7
