@@ -21,10 +21,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "core/filter.hpp"
 #include "core/sort.hpp"
 #include "feature/descriptor/binary.hpp"
+#include "feature/detector/fast.hpp"
 #include "feature/distributor/square_covering.hpp"
 #include "feature/feature.hpp"
 #include "feature/point.hpp"
 #include "feature/refiner/subpixel.hpp"
+#include "feature/score/fast.hpp"
+#include "feature/suppressor/fast.hpp"
 #include "image/blur.hpp"
 #include "image/image.hpp"
 #include "image/resize.hpp"
@@ -101,7 +104,7 @@ namespace mapping {
                 // Detect features.
                 std::vector<feature::point> kps;
                 kps.resize(50000);
-                const size_t feature_count = feature::detect(image_grey.get_data(), image_cols, image_rows, image_cols, 7, kps.size(), kps.data());
+                const size_t feature_count = feature::detector::fast::detect(image_grey.get_data(), image_cols, image_rows, image_cols, 7, kps.size(), kps.data());
                 kps.resize(feature_count);
 
                 // Prune edge features.
@@ -118,7 +121,7 @@ namespace mapping {
                 // Score features.
                 for (size_t i = 0; i < kps.size(); ++i) {
                     const unsigned char* feature = image_grey.get_data() + static_cast<size_t>(kps[i].y) * image_grey.get_cols() + static_cast<size_t>(kps[i].x);
-                    const float response = feature::score(feature, image_cols);
+                    const float response = feature::score::fast::score(feature, image_cols);
                     kps[i].response = response;
                 }
 
@@ -135,7 +138,7 @@ namespace mapping {
                     return lhs.y == rhs.y ? lhs.x < rhs.x : lhs.y < rhs.y;
                 });
                 std::vector<feature::point> features_suppressed(kps.size());
-                const size_t suppressed_count = feature::suppress(kps.data(), kps.size(), image_grey.get_rows(), features_suppressed.data());
+                const size_t suppressed_count = feature::suppressor::fast::suppress(kps.data(), kps.size(), image_grey.get_rows(), features_suppressed.data());
                 features_suppressed.resize(suppressed_count);
                 kps = std::move(features_suppressed);
 
