@@ -20,10 +20,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "core/filter.hpp"
 #include "core/sort.hpp"
+#include "feature/angle/orb.hpp"
 #include "feature/descriptor/binary.hpp"
+#include "feature/descriptor/orb.hpp"
 #include "feature/detector/fast.hpp"
 #include "feature/distributor/square_covering.hpp"
-#include "feature/feature.hpp"
 #include "feature/point.hpp"
 #include "feature/refiner/subpixel.hpp"
 #include "feature/score/fast.hpp"
@@ -168,16 +169,16 @@ namespace mapping {
                     float offset_y = 0;
                     if (!feature::refiner::subpixel::refine(feature, image_cols, offset_x, offset_y)) {
                         // If unsuccessful, proceed using unrefined feature.
-                        const float angle = feature::dominant_angle(feature, image_cols);
-                        feature::describe(feature, image_cols, angle, des[i]);
+                        const float angle = feature::angle::orb::dominant_angle(feature, image_cols);
+                        feature::descriptor::orb::describe(feature, image_cols, angle, des[i]);
                         continue;
                     }
 
                     // If successful, calculate descriptors from a subpixel patch.
                     unsigned char patch[41][41];
                     feature::refiner::subpixel::patch_41x41_bilinear(feature, image_cols, offset_x, offset_y, &patch[0][0]);
-                    const float angle = feature::dominant_angle(&patch[20][20], 41);
-                    feature::describe(&patch[20][20], 41, angle, des[i]);
+                    const float angle = feature::angle::orb::dominant_angle(&patch[20][20], 41);
+                    feature::descriptor::orb::describe(&patch[20][20], 41, angle, des[i]);
                     kps[i].x += offset_x;
                     kps[i].y += offset_y;
                 }

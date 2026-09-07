@@ -26,6 +26,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "image/image.hpp"
 #include "mapping/frame.hpp"
 #include "mapping/map.hpp"
+#include "match/distance/hamming.hpp"
+#include "match/matcher/bruteforce.hpp"
 #include "match/pair.hpp"
 #include "math/matrix.hpp"
 
@@ -129,7 +131,7 @@ public:
 
         // Compute matches.
         std::vector<match::pair> matches_cp(math::max(frame_current.descriptor_pyramid[0].size(), frame_previous.descriptor_pyramid[0].size()) * 2);
-        const size_t found_cp = feature::find_matches(
+        const size_t found_cp = match::matcher::bruteforce::find_matches(
             frame_current.descriptor_pyramid[0].data(),
             frame_current.descriptor_pyramid[0].size(),
             frame_previous.descriptor_pyramid[0].data(),
@@ -141,7 +143,7 @@ public:
         );
         matches_cp.resize(found_cp);
         std::vector<match::pair> matches_pc(math::max(frame_current.descriptor_pyramid[0].size(), frame_previous.descriptor_pyramid[0].size()) * 2);
-        const size_t found_pc = feature::find_matches(
+        const size_t found_pc = match::matcher::bruteforce::find_matches(
             frame_previous.descriptor_pyramid[0].data(),
             frame_previous.descriptor_pyramid[0].size(),
             frame_current.descriptor_pyramid[0].data(),
@@ -387,7 +389,7 @@ public:
                 // Check similarity.
                 const feature::descriptor::binary<256>& des_landmark = this->reconstruction.frames.at(landmark_observations[0].first).descriptor_pyramid[0][static_cast<size_t>(landmark_observations[0].second)];
                 const feature::descriptor::binary<256>& des_current = frame_current.descriptor_pyramid[0][static_cast<size_t>(match_index_current[i])];
-                if (feature::distance<256>(des_landmark.data, des_current.data) < 64) {
+                if (match::distance::hamming::distance(des_landmark, des_current) < 64) {
                     this->reconstruction.add_observation(frame_current, landmark, static_cast<size_t>(match_index_current[i]));
                     frame_previous_points[match_index_previous[i]] = -1;
                     ++observations_of_map;

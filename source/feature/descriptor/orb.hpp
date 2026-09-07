@@ -15,51 +15,18 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef ZEROSLAM_FEATURE_FEATURE_HPP
-#define ZEROSLAM_FEATURE_FEATURE_HPP
+#ifndef ZEROSLAM_FEATURE_DESCRIPTOR_ORB_HPP
+#define ZEROSLAM_FEATURE_DESCRIPTOR_ORB_HPP
 
-#include "core/assert.hpp"
 #include "feature/descriptor/binary.hpp"
-#include "feature/point.hpp"
-#include "match/pair.hpp"
-#include "math/math.hpp"
 
 namespace {
     using size_t = decltype(sizeof(0));
 }
 
-namespace feature {
-    static inline float dominant_angle(
-        const unsigned char* __restrict const data,
-        const int stride
-    ) {
-        constexpr static const int patch_size = 31;
-        constexpr static const int patch_radius = patch_size / 2;
-        constexpr static const int patch_width[patch_radius + 1] = { 15, 15, 15, 15, 14, 14, 14, 13, 13, 12, 11, 10, 9, 8, 6, 3 };
-        int sum_x = 0;
-        for (int x = -patch_radius; x <= patch_radius; ++x) {
-            sum_x += x * data[x];
-        }
-        int sum_y = 0;
-        for (int y = 1; y <= patch_radius; ++y) {
-            int sum = 0;
-            for (int x = -patch_width[y]; x <= patch_width[y]; ++x) {
-                const int above = data[x - y * stride];
-                const int below = data[x + y * stride];
-                sum += (below - above);
-                sum_x += x * (below + above);
-            }
-            sum_y += y * sum;
-        }
-        return static_cast<float>(math::atan2(static_cast<double>(sum_y), static_cast<double>(sum_x)));
-    }
-
-    static inline void describe(
-        const unsigned char* __restrict const data,
-        const int stride,
-        const float angle_radians,
-        descriptor::binary<256>& descriptor
-    ) {
+namespace feature::descriptor {
+    class orb final {
+    public:
         constexpr static const int pattern_size = 256;
         constexpr static const int pattern[pattern_size][2][2] = {
             { { 8, -3 }, { 9, 5 } },
@@ -319,145 +286,15 @@ namespace feature {
             { { 7, 0 }, { 12, -2 } },
             { { -1, -6 }, { 0, -11 } }
         };
-        float angle_sin = 0;
-        float angle_cos = 0;
-        math::sincos(angle_radians, angle_sin, angle_cos);
-        for (int index = 0; index < pattern_size; index += 8) {
-            const unsigned char pixels_lhs[8] = {
-                data[(math::round(pattern[index + 0][0][0] * angle_sin + pattern[index + 0][0][1] * angle_cos)) * stride + (math::round(pattern[index + 0][0][0] * angle_cos - pattern[index + 0][0][1] * angle_sin))],
-                data[(math::round(pattern[index + 1][0][0] * angle_sin + pattern[index + 1][0][1] * angle_cos)) * stride + (math::round(pattern[index + 1][0][0] * angle_cos - pattern[index + 1][0][1] * angle_sin))],
-                data[(math::round(pattern[index + 2][0][0] * angle_sin + pattern[index + 2][0][1] * angle_cos)) * stride + (math::round(pattern[index + 2][0][0] * angle_cos - pattern[index + 2][0][1] * angle_sin))],
-                data[(math::round(pattern[index + 3][0][0] * angle_sin + pattern[index + 3][0][1] * angle_cos)) * stride + (math::round(pattern[index + 3][0][0] * angle_cos - pattern[index + 3][0][1] * angle_sin))],
-                data[(math::round(pattern[index + 4][0][0] * angle_sin + pattern[index + 4][0][1] * angle_cos)) * stride + (math::round(pattern[index + 4][0][0] * angle_cos - pattern[index + 4][0][1] * angle_sin))],
-                data[(math::round(pattern[index + 5][0][0] * angle_sin + pattern[index + 5][0][1] * angle_cos)) * stride + (math::round(pattern[index + 5][0][0] * angle_cos - pattern[index + 5][0][1] * angle_sin))],
-                data[(math::round(pattern[index + 6][0][0] * angle_sin + pattern[index + 6][0][1] * angle_cos)) * stride + (math::round(pattern[index + 6][0][0] * angle_cos - pattern[index + 6][0][1] * angle_sin))],
-                data[(math::round(pattern[index + 7][0][0] * angle_sin + pattern[index + 7][0][1] * angle_cos)) * stride + (math::round(pattern[index + 7][0][0] * angle_cos - pattern[index + 7][0][1] * angle_sin))],
-            };
-            const unsigned char pixels_rhs[8] = {
-                data[(math::round(pattern[index + 0][1][0] * angle_sin + pattern[index + 0][1][1] * angle_cos)) * stride + (math::round(pattern[index + 0][1][0] * angle_cos - pattern[index + 0][1][1] * angle_sin))],
-                data[(math::round(pattern[index + 1][1][0] * angle_sin + pattern[index + 1][1][1] * angle_cos)) * stride + (math::round(pattern[index + 1][1][0] * angle_cos - pattern[index + 1][1][1] * angle_sin))],
-                data[(math::round(pattern[index + 2][1][0] * angle_sin + pattern[index + 2][1][1] * angle_cos)) * stride + (math::round(pattern[index + 2][1][0] * angle_cos - pattern[index + 2][1][1] * angle_sin))],
-                data[(math::round(pattern[index + 3][1][0] * angle_sin + pattern[index + 3][1][1] * angle_cos)) * stride + (math::round(pattern[index + 3][1][0] * angle_cos - pattern[index + 3][1][1] * angle_sin))],
-                data[(math::round(pattern[index + 4][1][0] * angle_sin + pattern[index + 4][1][1] * angle_cos)) * stride + (math::round(pattern[index + 4][1][0] * angle_cos - pattern[index + 4][1][1] * angle_sin))],
-                data[(math::round(pattern[index + 5][1][0] * angle_sin + pattern[index + 5][1][1] * angle_cos)) * stride + (math::round(pattern[index + 5][1][0] * angle_cos - pattern[index + 5][1][1] * angle_sin))],
-                data[(math::round(pattern[index + 6][1][0] * angle_sin + pattern[index + 6][1][1] * angle_cos)) * stride + (math::round(pattern[index + 6][1][0] * angle_cos - pattern[index + 6][1][1] * angle_sin))],
-                data[(math::round(pattern[index + 7][1][0] * angle_sin + pattern[index + 7][1][1] * angle_cos)) * stride + (math::round(pattern[index + 7][1][0] * angle_cos - pattern[index + 7][1][1] * angle_sin))],
-            };
-            descriptor[static_cast<size_t>(index / 8)] = static_cast<unsigned char>(
-                ((pixels_lhs[0] < pixels_rhs[0]) << 0) |
-                ((pixels_lhs[1] < pixels_rhs[1]) << 1) |
-                ((pixels_lhs[2] < pixels_rhs[2]) << 2) |
-                ((pixels_lhs[3] < pixels_rhs[3]) << 3) |
-                ((pixels_lhs[4] < pixels_rhs[4]) << 4) |
-                ((pixels_lhs[5] < pixels_rhs[5]) << 5) |
-                ((pixels_lhs[6] < pixels_rhs[6]) << 6) |
-                ((pixels_lhs[7] < pixels_rhs[7]) << 7)
-            );
-        }
-    }
 
-    template <unsigned int bits>
-    static inline unsigned int distance(
-        const unsigned char* __restrict const data_lhs,
-        const unsigned char* __restrict const data_rhs
-    );
-
-    template <>
-    inline unsigned int distance<64>(
-        const unsigned char* __restrict const data_lhs,
-        const unsigned char* __restrict const data_rhs
-    ) {
-#if __has_builtin(__builtin_popcountll)
-        unsigned long long int internal_lhs;
-        unsigned long long int internal_rhs;
-        unsigned char* __restrict const data_internal_lhs = reinterpret_cast<unsigned char*>(&internal_lhs);
-        unsigned char* __restrict const data_internal_rhs = reinterpret_cast<unsigned char*>(&internal_rhs);
-        for (decltype(sizeof(unsigned long long int)) i = 0; i < sizeof(unsigned long long int); ++i) {
-            data_internal_lhs[i] = data_lhs[i];
-            data_internal_rhs[i] = data_rhs[i];
-        }
-        return static_cast<unsigned int>(__builtin_popcountll(internal_lhs ^ internal_rhs));
-#else
-        constexpr static const unsigned long long int Ox01 = 0x0101010101010101ull;
-        constexpr static const unsigned long long int Ox0F = 0x0F0F0F0F0F0F0F0Full;
-        constexpr static const unsigned long long int Ox33 = 0x3333333333333333ull;
-        constexpr static const unsigned long long int Ox55 = 0x5555555555555555ull;
-        unsigned long long int internal_lhs;
-        unsigned long long int internal_rhs;
-        unsigned char* __restrict const data_internal_lhs = reinterpret_cast<unsigned char*>(&internal_lhs);
-        unsigned char* __restrict const data_internal_rhs = reinterpret_cast<unsigned char*>(&internal_rhs);
-        for (decltype(sizeof(unsigned long long int)) i = 0; i < sizeof(unsigned long long int); ++i) {
-            data_internal_lhs[i] = data_lhs[i];
-            data_internal_rhs[i] = data_rhs[i];
-        }
-        unsigned long long int difference = internal_lhs ^ internal_rhs;
-        difference = difference - ((difference >> 1u) & Ox55);
-        difference = (difference & Ox33) + ((difference >> 2u) & Ox33);
-        return static_cast<unsigned long long int>(((difference + (difference >> 4u)) & Ox0F) * Ox01) >> 56u;
-#endif
-    }
-
-    template <>
-    inline unsigned int distance<128>(
-        const unsigned char* __restrict const data_lhs,
-        const unsigned char* __restrict const data_rhs
-    ) {
-        return distance<64>(&data_lhs[0], &data_rhs[0]) + distance<64>(&data_lhs[8], &data_rhs[8]);
-    }
-
-    template <>
-    inline unsigned int distance<256>(
-        const unsigned char* __restrict const data_lhs,
-        const unsigned char* __restrict const data_rhs
-    ) {
-        return distance<128>(&data_lhs[0], &data_rhs[0]) + distance<128>(&data_lhs[16], &data_rhs[16]);
-    }
-
-    static inline size_t find_matches(
-        const descriptor::binary<256>* lhs_descriptors,
-        const size_t lhs_descriptors_size,
-        const descriptor::binary<256>* rhs_descriptors,
-        const size_t rhs_descriptors_size,
-        const float threshold,
-        const size_t matches_count,
-        match::pair* matches,
-        const size_t matches_size
-    ) {
-        if ((matches_count == 0) || (matches_size == 0)) {
-            return 0;
-        }
-        size_t count = 0;
-        for (size_t lhs_index = 0; lhs_index < lhs_descriptors_size; ++lhs_index) {
-            if (count + matches_count > matches_size) {
-                break;
-            }
-            for (size_t matches_index = 0; matches_index < matches_count; ++matches_index) {
-                matches[count + matches_index].lhs_index = lhs_index;
-                matches[count + matches_index].score = threshold;
-            }
-            for (size_t rhs_index = 0; rhs_index < rhs_descriptors_size; ++rhs_index) {
-                const float score = static_cast<float>(distance<256>(lhs_descriptors[lhs_index].data, rhs_descriptors[rhs_index].data));
-                for (size_t matches_index = 0; matches_index < matches_count; ++matches_index) {
-                    if (score < matches[count + matches_index].score) {
-                        for (size_t shift_index = matches_count - 1; shift_index > matches_index; --shift_index) {
-                            matches[count + shift_index].score = matches[count + shift_index - 1].score;
-                            matches[count + shift_index].rhs_index = matches[count + shift_index - 1].rhs_index;
-                        }
-                        matches[count + matches_index].score = score;
-                        matches[count + matches_index].rhs_index = rhs_index;
-                        break;
-                    }
-                }
-            }
-            const size_t save_index = count;
-            for (size_t matches_index = 0; matches_index < matches_count; ++matches_index) {
-                if (matches[save_index + matches_index].score < threshold) {
-                    ++count;
-                }
-            }
-        }
-        return count;
-    }
+    public:
+        static void describe(
+            const unsigned char* __restrict const data,
+            const int stride,
+            const float angle_radians,
+            binary<256>& descriptor
+        );
+    };
 }
 
-#endif // ZEROSLAM_FEATURE_FEATURE_HPP
+#endif // ZEROSLAM_FEATURE_DESCRIPTOR_ORB_HPP
