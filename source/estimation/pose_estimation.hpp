@@ -18,7 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef ZEROSLAM_ESTIMATION_POSE_ESTIMATION_HPP
 #define ZEROSLAM_ESTIMATION_POSE_ESTIMATION_HPP
 
-#include "geometry/geometry.hpp"
+#include "geometry/triangulation/linear_least_squares.hpp"
 #include "math/math.hpp"
 #include "math/matrix.hpp"
 #include "math/matrix_decomposition_lower_upper.hpp"
@@ -1042,7 +1042,7 @@ namespace estimation {
                     for (size_t point_index = 0; point_index < point_count; ++point_index) {
                         // Triangulate.
                         math::matrix<double, 3, 1> triangulated_result = math::matrix<double, 3, 1>::zero();
-                        bool is_valid = geometry::triangulate(
+                        bool is_valid = geometry::triangulation::linear_least_squares<double>::triangulate(
                             math::matrix<double, 2, 1>(&lhs_points[point_index * 2]),
                             math::matrix<double, 3, 4>(&lhs_camera_pose[0][0]),
                             math::matrix<double, 2, 1>(&rhs_points[point_index * 2]),

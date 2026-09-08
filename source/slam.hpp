@@ -22,7 +22,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "estimation/consensus.hpp"
 #include "estimation/pose_estimation.hpp"
 #include "feature/descriptor/binary.hpp"
-#include "geometry/geometry.hpp"
+#include "geometry/triangulation/linear_least_squares.hpp"
 #include "image/image.hpp"
 #include "mapping/frame.hpp"
 #include "mapping/map.hpp"
@@ -431,7 +431,7 @@ public:
             }
             // Check triangulation is valid.
             math::matrix<double, 3, 1> point;
-            if (!geometry::triangulate(
+            if (!geometry::triangulation::linear_least_squares<double>::triangulate(
                     ray_current,
                     frame_current.get_pose(),
                     ray_previous,
