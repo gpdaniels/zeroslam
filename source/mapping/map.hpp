@@ -21,7 +21,16 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "core/logger.hpp"
 #include "mapping/frame.hpp"
 #include "mapping/landmark.hpp"
+#include "math/lie.hpp"
+#include "optimisation/edge.hpp"
+#include "optimisation/edges/reprojection.hpp"
 #include "optimisation/factor_graph.hpp"
+#include "optimisation/loss.hpp"
+#include "optimisation/losses/huber.hpp"
+#include "optimisation/vertex.hpp"
+#include "optimisation/vertices/point.hpp"
+#include "optimisation/vertices/pose.hpp"
+#include "sensor/camera/model.hpp"
 #include "sensor/camera/pinhole.hpp"
 
 #if defined(_MSC_VER)
@@ -68,15 +77,14 @@ namespace mapping {
             if (this->frames.empty()) {
                 return;
             }
-            std::unordered_map<int, optimisation::vertex_base*> camera_vertexes;
-            std::unordered_map<int, optimisation::vertex_base*> landmark_vertexes;
-            std::unordered_map<int, optimisation::edge_base*> observation_edges;
+            std::unordered_map<int, optimisation::vertex*> camera_vertexes;
+            std::unordered_map<int, optimisation::vertex*> landmark_vertexes;
             // Get camera parameters.
             double camera_parameters[4];
             this->frames.begin()->second.camera.get_parameters(camera_parameters, 4);
             // Setup ba.
-            optimisation::loss_function_base* lossfunction = new optimisation::loss_huber(math::sqrt(5.991));
-            optimisation::factor_graph ba(false);
+            const optimisation::loss lossfunction(optimisation::losses::huber(math::sqrt(5.991)));
+            optimisation::factor_graph ba;
             // Add frames.
             const int local_window_below = mapping::frame::id_generator - 1 - local_window;
             const int local_window_fixed_below = local_window_below + 1;
@@ -134,11 +142,11 @@ namespace mapping {
                 const auto& frame = this->frames.at(frame_id);
                 const math::se3<double> v_se3(frame.rotation, frame.translation);
                 const bool fixed = ((frame_id == 0) || (frame_id == 1 && this->frames.size() > 2) || ((local_window > 0) && (frame_id < local_window_fixed_below)));
-                optimisation::vertex_base* c = new optimisation::vertex_pose();
-                c->set_parameters(math::matrix<double, 0, 0>(7, 1, math::matrix<double, 7, 1>{ { v_se3.translation()[0], v_se3.translation()[1], v_se3.translation()[2], v_se3.rotation().get_quaternion()[1], v_se3.rotation().get_quaternion()[2], v_se3.rotation().get_quaternion()[3], v_se3.rotation().get_quaternion()[0] } }.data()));
-                c->set_fixed(fixed);
-                ba.add_vertex(c);
-                camera_vertexes[frame_id] = c;
+                optimisation::vertex c{ optimisation::vertices::pose() };
+                const double pose_parameters[7] = { v_se3.translation()[0], v_se3.translation()[1], v_se3.translation()[2], v_se3.rotation().get_quaternion()[1], v_se3.rotation().get_quaternion()[2], v_se3.rotation().get_quaternion()[3], v_se3.rotation().get_quaternion()[0] };
+                c.set_parameters(&pose_parameters[0], 7);
+                c.set_fixed(fixed);
+                camera_vertexes[frame_id] = ba.add_vertex(static_cast<optimisation::vertex&&>(c));
                 non_fixed_poses += (fixed == false);
             }
             // Add landmarks.
@@ -158,24 +166,22 @@ namespace mapping {
                     // Given that we're adding at least one edge, make sure the landmark has been added.
                     if (!landmark_added) {
                         landmark_added = true;
-                        optimisation::vertex_base* l = new optimisation::vertex_point_xyz();
-                        l->set_parameters(math::matrix<double, 0, 0>(3, 1, this->landmarks.at(landmark_id).location.data()));
-                        l->set_fixed(fix_landmarks);
-                        l->set_marginalised(true);
-                        ba.add_vertex(l);
-                        landmark_vertexes[landmark_id] = l;
+                        optimisation::vertex l{ optimisation::vertices::point() };
+                        l.set_parameters(this->landmarks.at(landmark_id).location.data(), 3);
+                        l.set_fixed(fix_landmarks);
+                        l.set_marginalised(true);
+                        landmark_vertexes[landmark_id] = ba.add_vertex(static_cast<optimisation::vertex&&>(l));
                         non_fixed_landmarks += (fix_landmarks == false);
                     }
                     // Now add the edge.
                     const mapping::frame& frame = frames.at(frame_id);
                     sensor::camera::pinhole<double> camera_model(camera_parameters, 4);
-                    optimisation::edge_base* m = new optimisation::edge_reprojection<sensor::camera::pinhole<double>>(camera_model);
-                    m->set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].x), static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].y) } }.data()));
-                    m->add_vertex(camera_vertexes[frame_id]);
-                    m->add_vertex(landmark_vertexes[landmark_id]);
-                    m->set_loss_function(lossfunction);
-                    ba.add_edge(m);
-                    observation_edges[static_cast<int>(observation_edges.size())] = m;
+                    optimisation::edge m{ optimisation::edges::reprojection(sensor::camera::model<double>(camera_model)) };
+                    m.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].x), static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].y) } }.data()));
+                    m.add_vertex(camera_vertexes[frame_id]);
+                    m.add_vertex(landmark_vertexes[landmark_id]);
+                    m.set_loss(lossfunction);
+                    ba.add_edge(static_cast<optimisation::edge&&>(m));
                     ++non_fixed_edges;
                 }
             }
@@ -197,40 +203,10 @@ namespace mapping {
             // Check for some invalid optimiser states.
             if (non_fixed_poses == 0 && non_fixed_landmarks == 0) {
                 core::logger::log(core::logger::level::note, "Optimised: No non fixed poses or landmarks [frames: %d landmarks: %d edges: %d]", non_fixed_poses, non_fixed_landmarks, non_fixed_edges);
-                // Cleanup
-                for (const auto& [frame_id, vertex] : camera_vertexes) {
-                    static_cast<void>(frame_id);
-                    delete vertex;
-                }
-                for (const auto& [landmark_id, vertex] : landmark_vertexes) {
-                    static_cast<void>(landmark_id);
-                    delete vertex;
-                }
-                for (const auto& [observation_id, edge] : observation_edges) {
-                    static_cast<void>(observation_id);
-                    delete edge;
-                }
-                delete lossfunction;
-                // Exit.
                 return;
             }
             if (camera_vertexes.empty() || landmark_vertexes.empty()) {
                 core::logger::log(core::logger::level::note, "Optimised: Nothing to optimise [frames: %zu, landmarks: %zu]", camera_vertexes.size(), landmark_vertexes.size());
-                // Cleanup
-                for (const auto& [frame_id, vertex] : camera_vertexes) {
-                    static_cast<void>(frame_id);
-                    delete vertex;
-                }
-                for (const auto& [landmark_id, vertex] : landmark_vertexes) {
-                    static_cast<void>(landmark_id);
-                    delete vertex;
-                }
-                for (const auto& [observation_id, edge] : observation_edges) {
-                    static_cast<void>(observation_id);
-                    delete edge;
-                }
-                delete lossfunction;
-                // Exit.
                 return;
             }
 
@@ -241,32 +217,18 @@ namespace mapping {
             // Apply optimised vertices to frames and landmarks.
             for (const auto& [frame_id, vertex] : camera_vertexes) {
                 mapping::frame& frame = frames.at(frame_id);
-                math::matrix<double, 0, 0> p = vertex->get_parameters();
-                const math::se3<double> v_se3 = math::se3<double>(math::so3<double>(p[6][0], p[3][0], p[4][0], p[5][0]), { { p[0][0], p[1][0], p[2][0] } });
+                const double* const p = vertex->get_parameters();
+                const math::se3<double> v_se3 = math::se3<double>(math::so3<double>(p[6], p[3], p[4], p[5]), { { p[0], p[1], p[2] } });
                 frame.rotation = v_se3.rotation().get_matrix();
                 frame.translation = v_se3.translation();
             }
             for (const auto& [landmark_id, vertex] : landmark_vertexes) {
                 mapping::point& landmark = this->landmarks.at(landmark_id);
-                math::matrix<double, 0, 0> p = vertex->get_parameters();
-                landmark.location[0] = p[0][0];
-                landmark.location[1] = p[1][0];
-                landmark.location[2] = p[2][0];
+                const double* const p = vertex->get_parameters();
+                landmark.location[0] = p[0];
+                landmark.location[1] = p[1];
+                landmark.location[2] = p[2];
             }
-            // Cleanup
-            for (const auto& [frame_id, vertex] : camera_vertexes) {
-                static_cast<void>(frame_id);
-                delete vertex;
-            }
-            for (const auto& [landmark_id, vertex] : landmark_vertexes) {
-                static_cast<void>(landmark_id);
-                delete vertex;
-            }
-            for (const auto& [observation_id, edge] : observation_edges) {
-                static_cast<void>(observation_id);
-                delete edge;
-            }
-            delete lossfunction;
         }
 
         void cull() {

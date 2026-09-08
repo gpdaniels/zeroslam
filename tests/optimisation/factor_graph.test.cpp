@@ -16,6 +16,14 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "optimisation/factor_graph.hpp"
 
+#include "core/random_pcg.hpp"
+#include "math/lie.hpp"
+#include "optimisation/edge.hpp"
+#include "optimisation/edges/reprojection.hpp"
+#include "optimisation/vertex.hpp"
+#include "optimisation/vertices/point.hpp"
+#include "optimisation/vertices/pose.hpp"
+#include "sensor/camera/model.hpp"
 #include "sensor/camera/pinhole.hpp"
 
 #if defined(_MSC_VER)
@@ -25,8 +33,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <memory>
-#include <utility>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -39,17 +45,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define REQUIRE(ASSERTION) static_cast<void>((ASSERTION) || (std::fprintf(stderr, "ERROR[%d]: Requirement '%s' failed.\n", __LINE__, #ASSERTION), __builtin_trap(), 0))
 
 static inline bool is_value_approx(double lhs, double rhs, double epsilon = 1e-8) {
-    if (std::isnan(lhs) && std::isnan(rhs))
-        return true;
-    if (std::isnan(lhs) != std::isnan(rhs))
-        return false;
-    if (std::isinf(lhs) != std::isinf(rhs))
-        return false;
-    if (std::signbit(lhs + epsilon) != std::signbit(rhs + epsilon))
-        return false;
-    if (std::isinf(lhs) && std::isinf(rhs))
-        return true;
-    return (std::abs(lhs - rhs) <= (epsilon * (std::abs(lhs) + std::abs(rhs))) + epsilon);
+    return std::abs(lhs - rhs) <= (epsilon * (std::abs(lhs) + std::abs(rhs))) + epsilon;
 }
 
 int main(int argc, char* argv[]) {
@@ -61,35 +57,32 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        class random_pcg final {
-        private:
-            unsigned long long int state;
-            unsigned long long int increment;
+        optimisation::factor_graph factor_graph;
+        std::vector<optimisation::vertex*> added;
+        for (int i = 0; i < 64; ++i) {
+            optimisation::vertex node{ optimisation::vertices::point() };
+            const double location[3] = { static_cast<double>(i), 0.0, 0.0 };
+            REQUIRE(node.set_parameters(&location[0], 3));
+            optimisation::vertex* const stored = factor_graph.add_vertex(static_cast<optimisation::vertex&&>(node));
+            REQUIRE(stored != nullptr);
+            added.push_back(stored);
+        }
+        for (int i = 0; i < 64; ++i) {
+            REQUIRE(added[static_cast<size_t>(i)]->get_parameters()[0] == static_cast<double>(i));
+        }
+        REQUIRE(factor_graph.add_vertex(optimisation::vertex()) == nullptr);
+        REQUIRE(factor_graph.add_edge(optimisation::edge()) == nullptr);
+        REQUIRE(factor_graph.remove_vertex(added[0]));
+        REQUIRE(!factor_graph.remove_vertex(added[0]));
+        REQUIRE(added[1]->get_parameters()[0] == 1.0);
+    }
 
-        public:
-            random_pcg()
-                : state(0x853C49E6748FEA9Bull)
-                , increment(0xDA3E39CB94B95BDBull) {
-            }
+    {
+        core::random_pcg rng;
 
-            unsigned int get_random_raw() {
-                // Save current state for output calculation.
-                unsigned long long int state_previous = this->state;
-                // Advance internal state.
-                this->state = state_previous * 0x5851F42D4C957F2Dull + this->increment;
-                // Calculate output function.
-                unsigned int state_shift_xor_shift = static_cast<unsigned int>(((state_previous >> 18u) ^ state_previous) >> 27u);
-                const int rotation = static_cast<int>(state_previous >> 59u);
-                return (state_shift_xor_shift >> rotation) | (state_shift_xor_shift << ((-rotation) & 31));
-            }
-        };
+        const sensor::camera::pinhole<double> camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
 
-        random_pcg rng;
-
-        sensor::camera::pinhole<double> camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
-        // gtl::pinhole_arctangent<double> camera_model(std::vector<double>{1.0,1.0,0.0,0.0,0.5}.data(), 5);
-
-        optimisation::factor_graph factor_graph(true);
+        optimisation::factor_graph factor_graph;
 
         std::vector<math::se3<double>> cameras{
             math::se3<double>::identity(),
@@ -107,73 +100,60 @@ int main(int argc, char* argv[]) {
             { { 1.0, 0.0, 1.0 } }
         };
 
-        std::vector<std::unique_ptr<optimisation::vertex_base>> camera_vertexes;
-        std::vector<std::unique_ptr<optimisation::vertex_base>> landmark_vertexes;
-        std::vector<std::unique_ptr<optimisation::edge_base>> observation_edges;
-
-        double camera_parameters[4];
-        camera_model.get_parameters(camera_parameters, 4);
+        std::vector<optimisation::vertex*> camera_vertexes;
+        std::vector<optimisation::vertex*> landmark_vertexes;
 
         for (size_t i = 0; i < cameras.size(); ++i) {
-            camera_vertexes.push_back(std::make_unique<optimisation::vertex_pose>());
-            camera_vertexes[i]->set_parameters(math::matrix<double, 0, 0>(7, 1, math::matrix<double, 7, 1>{ { cameras[i].translation()[0], cameras[i].translation()[1], cameras[i].translation()[2], cameras[i].rotation().get_quaternion()[1], cameras[i].rotation().get_quaternion()[2], cameras[i].rotation().get_quaternion()[3], cameras[i].rotation().get_quaternion()[0] } }.data()));
-            camera_vertexes[i]->set_fixed(i == 0);
-            factor_graph.add_vertex(camera_vertexes[i].get());
+            optimisation::vertex camera_vertex{ optimisation::vertices::pose() };
+            const double camera_pose[7] = { cameras[i].translation()[0], cameras[i].translation()[1], cameras[i].translation()[2], cameras[i].rotation().get_quaternion()[1], cameras[i].rotation().get_quaternion()[2], cameras[i].rotation().get_quaternion()[3], cameras[i].rotation().get_quaternion()[0] };
+            REQUIRE(camera_vertex.set_parameters(&camera_pose[0], 7));
+            camera_vertex.set_fixed(i == 0);
+            camera_vertexes.push_back(factor_graph.add_vertex(static_cast<optimisation::vertex&&>(camera_vertex)));
+            REQUIRE(camera_vertexes[i] != nullptr);
         }
 
         std::vector<math::matrix<double, 3, 1>> noisy_landmarks(landmarks.size());
         for (size_t i = 0; i < landmarks.size(); ++i) {
-            landmark_vertexes.push_back(std::make_unique<optimisation::vertex_point_xyz>());
+            optimisation::vertex landmark_vertex{ optimisation::vertices::point() };
             for (size_t j = 0; j < 3; ++j) {
                 noisy_landmarks[i][j] = landmarks[i][j] + (static_cast<double>(static_cast<int>(rng.get_random_raw() % 10) - 5) * 0.01);
-                auto parameters = landmark_vertexes[i]->get_parameters();
-                parameters[j][0] = noisy_landmarks[i][j];
-                landmark_vertexes[i]->set_parameters(parameters);
             }
-            landmark_vertexes[i]->set_fixed(false);
-            landmark_vertexes[i]->set_marginalised(true);
-            factor_graph.add_vertex(landmark_vertexes[i].get());
-            std::fprintf(stdout, "NOISY: % f % f % f\n", landmark_vertexes[i]->get_parameters()[0][0], landmark_vertexes[i]->get_parameters()[1][0], landmark_vertexes[i]->get_parameters()[2][0]);
+            REQUIRE(landmark_vertex.set_parameters(noisy_landmarks[i].data(), 3));
+            landmark_vertex.set_fixed(false);
+            landmark_vertex.set_marginalised(true);
+            landmark_vertexes.push_back(factor_graph.add_vertex(static_cast<optimisation::vertex&&>(landmark_vertex)));
         }
 
-        int camera_id = 0;
+        size_t camera_id = 0;
         for (const math::se3<double>& camera : cameras) {
-            int landmark_id = 0;
+            size_t landmark_id = 0;
             for (const math::matrix<double, 3, 1>& landmark : landmarks) {
                 math::matrix<double, 3, 1> world_point = camera * landmark;
                 math::matrix<double, 2, 1> point;
                 REQUIRE(camera_model.project(world_point.data(), point.data()));
-                sensor::camera::pinhole<double> edge_camera(camera_parameters, 4);
-                std::unique_ptr<optimisation::edge_base> m = std::make_unique<optimisation::edge_reprojection<sensor::camera::pinhole<double>>>(edge_camera);
-                m->set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { point[0] + (static_cast<double>(static_cast<int>(rng.get_random_raw() % 10) - 5) * 0.0001), point[1] + (static_cast<double>(static_cast<int>(rng.get_random_raw() % 10) - 5) * 0.0001) } }.data()));
-                m->add_vertex(camera_vertexes[static_cast<size_t>(camera_id)].get());
-                m->add_vertex(landmark_vertexes[static_cast<size_t>(landmark_id)].get());
-                factor_graph.add_edge(m.get());
-                std::fprintf(stdout, "POINT [%d]: % f % f\n", camera_id, m->get_observation()[0][0], m->get_observation()[1][0]);
-                observation_edges.emplace_back(std::move(m));
+                optimisation::edge m{ optimisation::edges::reprojection(sensor::camera::model<double>(camera_model)) };
+                m.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { point[0] + (static_cast<double>(static_cast<int>(rng.get_random_raw() % 10) - 5) * 0.0001), point[1] + (static_cast<double>(static_cast<int>(rng.get_random_raw() % 10) - 5) * 0.0001) } }.data()));
+                m.add_vertex(camera_vertexes[camera_id]);
+                m.add_vertex(landmark_vertexes[landmark_id]);
+                REQUIRE(factor_graph.add_edge(static_cast<optimisation::edge&&>(m)) != nullptr);
                 ++landmark_id;
             }
             ++camera_id;
         }
 
         double initialChi2 = factor_graph.get_current_chi();
-        // Exercise the relative-convergence criterion here.
         REQUIRE(factor_graph.solve(50, true));
-
-        std::fprintf(stdout, "LANDMARK: ORIGINAL --> NOISY --> OPTIMISED\n");
         double error_noisy = 0;
         double error_optimised = 0;
         for (size_t i = 0; i < landmarks.size(); ++i) {
             math::matrix<double, 3, 1> result_landmark = { {
-                landmark_vertexes[i]->get_parameters()[0][0],
-                landmark_vertexes[i]->get_parameters()[1][0],
-                landmark_vertexes[i]->get_parameters()[2][0],
+                landmark_vertexes[i]->get_parameters()[0],
+                landmark_vertexes[i]->get_parameters()[1],
+                landmark_vertexes[i]->get_parameters()[2],
             } };
-            std::fprintf(stdout, "LANDMARK: %f %f %f --> %f %f %f --> %f %f %f\n", landmarks[i][0], landmarks[i][1], landmarks[i][2], noisy_landmarks[i][0], noisy_landmarks[i][1], noisy_landmarks[i][2], result_landmark[0], result_landmark[1], result_landmark[2]);
             error_noisy += std::sqrt((landmarks[i] - noisy_landmarks[i]).get_length_squared());
             error_optimised += std::sqrt((landmarks[i] - result_landmark).get_length_squared());
         }
-        std::fprintf(stdout, "Error: %f --> %f (Chi2: %f --> %f)\n", error_noisy, error_optimised, initialChi2, factor_graph.get_current_chi());
 
         REQUIRE(error_optimised < error_noisy);
         REQUIRE(!is_value_approx(factor_graph.get_current_chi(), initialChi2));
@@ -182,147 +162,127 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        // Construct a graph whose reduced pose system is not positive definite, forcing the Cholesky solver to fail.
-        // The solve should treat failed attempts as bad steps and complete without corrupting the vertex states.
-        sensor::camera::pinhole<double> camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
-        double camera_parameters[4];
-        camera_model.get_parameters(camera_parameters, 4);
+        const sensor::camera::pinhole<double> camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
 
-        optimisation::factor_graph factor_graph(true);
+        optimisation::factor_graph factor_graph;
 
-        std::unique_ptr<optimisation::vertex_base> fixed_camera_vertex = std::make_unique<optimisation::vertex_pose>();
-        fixed_camera_vertex->set_parameters(math::matrix<double, 0, 0>(7, 1, math::matrix<double, 7, 1>{ { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 } }.data()));
-        fixed_camera_vertex->set_fixed(true);
-        factor_graph.add_vertex(fixed_camera_vertex.get());
+        optimisation::vertex fixed_camera{ optimisation::vertices::pose() };
+        const double fixed_camera_pose[7] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 };
+        REQUIRE(fixed_camera.set_parameters(&fixed_camera_pose[0], 7));
+        fixed_camera.set_fixed(true);
+        REQUIRE(factor_graph.add_vertex(static_cast<optimisation::vertex&&>(fixed_camera)) != nullptr);
 
-        std::unique_ptr<optimisation::vertex_base> free_camera_vertex = std::make_unique<optimisation::vertex_pose>();
-        free_camera_vertex->set_parameters(math::matrix<double, 0, 0>(7, 1, math::matrix<double, 7, 1>{ { 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 } }.data()));
-        free_camera_vertex->set_fixed(false);
-        factor_graph.add_vertex(free_camera_vertex.get());
+        optimisation::vertex free_camera{ optimisation::vertices::pose() };
+        const double free_camera_pose[7] = { 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 };
+        REQUIRE(free_camera.set_parameters(&free_camera_pose[0], 7));
+        free_camera.set_fixed(false);
+        optimisation::vertex* const free_camera_vertex = factor_graph.add_vertex(static_cast<optimisation::vertex&&>(free_camera));
 
-        std::unique_ptr<optimisation::vertex_base> landmark_vertex = std::make_unique<optimisation::vertex_point_xyz>();
-        landmark_vertex->set_parameters(math::matrix<double, 0, 0>(3, 1, math::matrix<double, 3, 1>{ { 0.1, 0.2, 1.0 } }.data()));
-        landmark_vertex->set_fixed(true);
-        landmark_vertex->set_marginalised(true);
-        factor_graph.add_vertex(landmark_vertex.get());
+        optimisation::vertex landmark{ optimisation::vertices::point() };
+        const double landmark_location[3] = { 0.1, 0.2, 1.0 };
+        REQUIRE(landmark.set_parameters(&landmark_location[0], 3));
+        landmark.set_fixed(true);
+        landmark.set_marginalised(true);
+        optimisation::vertex* const landmark_vertex = factor_graph.add_vertex(static_cast<optimisation::vertex&&>(landmark));
 
-        sensor::camera::pinhole<double> edge_camera(camera_parameters, 4);
-        std::unique_ptr<optimisation::edge_base> edge = std::make_unique<optimisation::edge_reprojection<sensor::camera::pinhole<double>>>(edge_camera);
-        edge->set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { 0.15, 0.25 } }.data()));
-        edge->add_vertex(free_camera_vertex.get());
-        edge->add_vertex(landmark_vertex.get());
-        // A negative definite information matrix makes the pose Hessian block negative definite until the damping grows large enough.
-        edge->set_information(-1.0 * math::matrix<double, 0, 0>::identity(2, 2));
-        factor_graph.add_edge(edge.get());
+        optimisation::edge edge{ optimisation::edges::reprojection(sensor::camera::model<double>(camera_model)) };
+        edge.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { 0.15, 0.25 } }.data()));
+        edge.add_vertex(free_camera_vertex);
+        edge.add_vertex(landmark_vertex);
+        edge.set_information(-1.0 * math::matrix<double, 0, 0>::identity(2, 2));
+        REQUIRE(factor_graph.add_edge(static_cast<optimisation::edge&&>(edge)) != nullptr);
 
         static_cast<void>(factor_graph.solve(10));
 
-        const math::matrix<double, 0, 0>& optimised_parameters = free_camera_vertex->get_parameters();
-        REQUIRE(optimised_parameters.rows() == 7);
-        REQUIRE(optimised_parameters.cols() == 1);
+        const double* const optimised_parameters = free_camera_vertex->get_parameters();
         for (size_t i = 0; i < 7; ++i) {
-            REQUIRE(std::isfinite(optimised_parameters[i][0]));
+            REQUIRE(std::isfinite(optimised_parameters[i]));
         }
     }
 
     {
-        // A landmark behind the camera must not produce a zero residual/jacobian, and the normal (in front) case must be completely unaffected by the `behind_camera_penalty`.
-        sensor::camera::pinhole<double> camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
-        double camera_parameters[4];
-        camera_model.get_parameters(camera_parameters, 4);
+        core::random_pcg rng;
 
-        std::unique_ptr<optimisation::vertex_base> camera_vertex = std::make_unique<optimisation::vertex_pose>();
-        camera_vertex->set_parameters(math::matrix<double, 0, 0>(7, 1, math::matrix<double, 7, 1>{ { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 } }.data()));
-        camera_vertex->set_fixed(false);
+        const sensor::camera::pinhole<double> camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
 
-        // Normal case: landmark in front of the camera (Z = 1 > 0).
-        {
-            std::unique_ptr<optimisation::vertex_base> landmark_vertex = std::make_unique<optimisation::vertex_point_xyz>();
-            landmark_vertex->set_parameters(math::matrix<double, 0, 0>(3, 1, math::matrix<double, 3, 1>{ { 0.0, 0.0, 1.0 } }.data()));
-            landmark_vertex->set_fixed(false);
-            landmark_vertex->set_marginalised(true);
+        optimisation::factor_graph factor_graph;
 
-            sensor::camera::pinhole<double> edge_camera(camera_parameters, 4);
-            std::unique_ptr<optimisation::edge_base> edge = std::make_unique<optimisation::edge_reprojection<sensor::camera::pinhole<double>>>(edge_camera);
-            edge->set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { 0.1, -0.2 } }.data()));
-            edge->add_vertex(camera_vertex.get());
-            edge->add_vertex(landmark_vertex.get());
+        std::vector<math::se3<double>> cameras{
+            math::se3<double>::identity(),
+            math::se3<double>(math::so3<double>::identity(), math::matrix<double, 3, 1>{ { 0.1, 0.0, 0.0 } }),
+            math::se3<double>(math::so3<double>::identity(), math::matrix<double, 3, 1>{ { 0.0, 0.1, 0.0 } }),
+            math::se3<double>(math::so3<double>::identity(), math::matrix<double, 3, 1>{ { 0.0, 0.0, 0.1 } }),
+            math::se3<double>(math::so3<double>::identity(), math::matrix<double, 3, 1>{ { -0.1, 0.0, 0.0 } }),
+            math::se3<double>(math::so3<double>::identity(), math::matrix<double, 3, 1>{ { 0.0, -0.1, 0.0 } }),
+            math::se3<double>(math::so3<double>::identity(), math::matrix<double, 3, 1>{ { 0.0, 0.0, -0.1 } })
+        };
 
-            edge->compute_residual();
-            edge->compute_jacobians();
+        std::vector<math::matrix<double, 3, 1>> landmarks = {
+            { { 0.0, 0.0, 1.0 } },
+            { { 0.0, 1.0, 1.0 } },
+            { { 1.0, 0.0, 1.0 } }
+        };
 
-            REQUIRE(edge->get_residual()[0][0] == 0.1);
-            REQUIRE(edge->get_residual()[1][0] == -0.2);
+        std::vector<optimisation::vertex*> camera_vertexes;
+        std::vector<optimisation::vertex*> landmark_vertexes;
 
-            const math::matrix<double, 0, 0>& jacobian_pose = edge->get_jacobians()[0];
-            const double expected_pose[2][6] = {
-                { 0.0, -1.0, 0.0, -1.0, 0.0, 0.0 },
-                { 1.0, 0.0, 0.0, 0.0, -1.0, 0.0 }
-            };
-            for (size_t r = 0; r < 2; ++r) {
-                for (size_t c = 0; c < 6; ++c) {
-                    REQUIRE(jacobian_pose[r][c] == expected_pose[r][c]);
-                }
-            }
-
-            const math::matrix<double, 0, 0>& jacobian_landmark = edge->get_jacobians()[1];
-            const double expected_landmark[2][3] = {
-                { -1.0, 0.0, 0.0 },
-                { 0.0, -1.0, 0.0 }
-            };
-            for (size_t r = 0; r < 2; ++r) {
-                for (size_t c = 0; c < 3; ++c) {
-                    REQUIRE(jacobian_landmark[r][c] == expected_landmark[r][c]);
-                }
-            }
+        for (size_t i = 0; i < cameras.size(); ++i) {
+            optimisation::vertex camera_vertex{ optimisation::vertices::pose() };
+            const double camera_pose[7] = { cameras[i].translation()[0], cameras[i].translation()[1], cameras[i].translation()[2], cameras[i].rotation().get_quaternion()[1], cameras[i].rotation().get_quaternion()[2], cameras[i].rotation().get_quaternion()[3], cameras[i].rotation().get_quaternion()[0] };
+            REQUIRE(camera_vertex.set_parameters(&camera_pose[0], 7));
+            camera_vertex.set_fixed(i == 0);
+            camera_vertexes.push_back(factor_graph.add_vertex(static_cast<optimisation::vertex&&>(camera_vertex)));
+            REQUIRE(camera_vertexes[i] != nullptr);
         }
 
-        {
-            std::unique_ptr<optimisation::vertex_base> landmark_vertex = std::make_unique<optimisation::vertex_point_xyz>();
-            landmark_vertex->set_parameters(math::matrix<double, 0, 0>(3, 1, math::matrix<double, 3, 1>{ { 0.1, 0.2, -10.0 } }.data()));
-            landmark_vertex->set_fixed(false);
-            landmark_vertex->set_marginalised(true);
-
-            sensor::camera::pinhole<double> edge_camera(camera_parameters, 4);
-            std::unique_ptr<optimisation::edge_base> edge = std::make_unique<optimisation::edge_reprojection<sensor::camera::pinhole<double>>>(edge_camera);
-            edge->set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { 0.1, -0.2 } }.data()));
-            edge->add_vertex(camera_vertex.get());
-            edge->add_vertex(landmark_vertex.get());
-
-            edge->compute_residual();
-
-            REQUIRE(std::isfinite(edge->get_residual()[0][0]));
-            REQUIRE(std::isfinite(edge->get_residual()[1][0]));
-            REQUIRE(!is_value_approx(edge->get_residual()[0][0], 0.0));
-            REQUIRE(!is_value_approx(edge->get_residual()[1][0], 0.0));
-
-            const double chi2 = edge->chi2();
-            REQUIRE(std::isfinite(chi2));
-            REQUIRE(chi2 > 1.0);
-
-            edge->compute_jacobians();
-            const math::matrix<double, 0, 0>& jacobian_pose = edge->get_jacobians()[0];
-            const math::matrix<double, 0, 0>& jacobian_landmark = edge->get_jacobians()[1];
-
-            bool jacobian_pose_nonzero = false;
-            for (size_t r = 0; r < 2; ++r) {
-                for (size_t c = 0; c < 6; ++c) {
-                    REQUIRE(std::isfinite(jacobian_pose[r][c]));
-                    jacobian_pose_nonzero = jacobian_pose_nonzero || (jacobian_pose[r][c] != 0.0);
-                }
+        std::vector<math::matrix<double, 3, 1>> noisy_landmarks(landmarks.size());
+        for (size_t i = 0; i < landmarks.size(); ++i) {
+            optimisation::vertex landmark_vertex{ optimisation::vertices::point() };
+            for (size_t j = 0; j < 3; ++j) {
+                noisy_landmarks[i][j] = landmarks[i][j] + (static_cast<double>(static_cast<int>(rng.get_random_raw() % 10) - 5) * 0.01);
             }
-            bool jacobian_landmark_nonzero = false;
-            for (size_t r = 0; r < 2; ++r) {
-                for (size_t c = 0; c < 3; ++c) {
-                    REQUIRE(std::isfinite(jacobian_landmark[r][c]));
-                    jacobian_landmark_nonzero = jacobian_landmark_nonzero || (jacobian_landmark[r][c] != 0.0);
-                }
-            }
-            REQUIRE(jacobian_pose_nonzero);
-            REQUIRE(jacobian_landmark_nonzero);
-            REQUIRE(jacobian_landmark[0][2] < 0.0);
-            REQUIRE(jacobian_landmark[1][2] < 0.0);
+            REQUIRE(landmark_vertex.set_parameters(noisy_landmarks[i].data(), 3));
+            landmark_vertex.set_fixed(false);
+            landmark_vertex.set_marginalised(true);
+            landmark_vertexes.push_back(factor_graph.add_vertex(static_cast<optimisation::vertex&&>(landmark_vertex)));
         }
+
+        size_t camera_id = 0;
+        for (const math::se3<double>& camera : cameras) {
+            size_t landmark_id = 0;
+            for (const math::matrix<double, 3, 1>& landmark : landmarks) {
+                math::matrix<double, 3, 1> world_point = camera * landmark;
+                math::matrix<double, 2, 1> point;
+                REQUIRE(camera_model.project(world_point.data(), point.data()));
+                optimisation::edge m{ optimisation::edges::reprojection(sensor::camera::model<double>(camera_model)) };
+                m.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { point[0] + (static_cast<double>(static_cast<int>(rng.get_random_raw() % 10) - 5) * 0.0001), point[1] + (static_cast<double>(static_cast<int>(rng.get_random_raw() % 10) - 5) * 0.0001) } }.data()));
+                m.add_vertex(camera_vertexes[camera_id]);
+                m.add_vertex(landmark_vertexes[landmark_id]);
+                REQUIRE(factor_graph.add_edge(static_cast<optimisation::edge&&>(m)) != nullptr);
+                ++landmark_id;
+            }
+            ++camera_id;
+        }
+
+        double initialChi2 = factor_graph.get_current_chi();
+        REQUIRE(factor_graph.solve(50, true));
+
+        double error_noisy = 0;
+        double error_optimised = 0;
+        for (size_t i = 0; i < landmarks.size(); ++i) {
+            math::matrix<double, 3, 1> result_landmark = { {
+                landmark_vertexes[i]->get_parameters()[0],
+                landmark_vertexes[i]->get_parameters()[1],
+                landmark_vertexes[i]->get_parameters()[2],
+            } };
+            error_noisy += std::sqrt((landmarks[i] - noisy_landmarks[i]).get_length_squared());
+            error_optimised += std::sqrt((landmarks[i] - result_landmark).get_length_squared());
+        }
+
+        REQUIRE(error_optimised < error_noisy);
+        REQUIRE(!is_value_approx(factor_graph.get_current_chi(), initialChi2));
+        REQUIRE(is_value_approx(factor_graph.get_current_chi(), 0.0, 1e-5));
+        REQUIRE(factor_graph.get_current_chi() < initialChi2);
     }
 
     return EXIT_SUCCESS;
