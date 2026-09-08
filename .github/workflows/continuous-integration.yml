@@ -8,6 +8,31 @@ on:
   workflow_dispatch:
 
 jobs:
+  format:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ['ubuntu-latest']
+        config: ['Debug']
+    name: Format check on ${{ matrix.os }} in ${{ matrix.config }}
+    runs-on: ${{ matrix.os }}
+    env:
+      ZEROSLAM_REQUIRE_CLANG_FORMAT: 1
+    steps:
+    - name: Checkout repository.
+      uses: actions/checkout@v7
+    - name: Install clang-format.
+      shell: bash
+      run: |
+        sudo pip3 install --break-system-packages clang-format==21.1.2
+        clang-format --version
+    - name: Run the clang format check.
+      shell: bash
+      run: |
+        cmake -S. -Bbuild/format -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DZEROSLAM_CHECKS=ON
+        ctest --test-dir build/format --build-config ${{ matrix.config }} --output-on-failure -R "^check_clang_format$"
+        rm -rf build/format
+
   build-and-test:
     strategy:
       fail-fast: false
@@ -19,16 +44,6 @@ jobs:
     steps:
     - name: Checkout repository.
       uses: actions/checkout@v7
-    - name: Install tools.
-      shell: bash
-      run: |
-        if [ "$RUNNER_OS" == "Linux" ]; then
-          sudo pip3 install --break-system-packages clang-format==21.1.2
-          clang-format --version
-          echo "ZEROSLAM_REQUIRE_CLANG_FORMAT=1" >> "$GITHUB_ENV"
-        else
-          echo "Nothing to install for $RUNNER_OS."
-        fi
     - name: Build and test in ${{ matrix.config }}.
       shell: bash
       run: |
@@ -77,9 +92,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        os: ['ubuntu-latest']
         sanitizer: ['address-undefined', 'thread']
-    name: Sanitize (${{ matrix.sanitizer }}) on ubuntu-latest
-    runs-on: ubuntu-latest
+        config: ['RelWithDebInfo']
+    name: Sanitize (${{ matrix.sanitizer }}) on ${{ matrix.os }} in ${{ matrix.config }}
+    runs-on: ${{ matrix.os }}
     steps:
     - name: Checkout repository.
       uses: actions/checkout@v7
@@ -91,8 +108,132 @@ jobs:
         else
           SANITIZER_ARGS="-DZEROSLAM_SANITIZE_THREAD=ON"
         fi
-        cmake -S. -Bbuild/${{ matrix.sanitizer }} -DCMAKE_BUILD_TYPE=RelWithDebInfo -DZEROSLAM_WERROR=ON -DZEROSLAM_CHECKS=OFF ${SANITIZER_ARGS}
+        cmake -S. -Bbuild/${{ matrix.sanitizer }} -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DZEROSLAM_WERROR=ON -DZEROSLAM_CHECKS=OFF ${SANITIZER_ARGS}
         cmake --build build/${{ matrix.sanitizer }} --parallel 4
         cmake --build build/${{ matrix.sanitizer }} --target tests --parallel 4
         ctest --test-dir build/${{ matrix.sanitizer }} --output-on-failure --parallel 4
         rm -rf build/${{ matrix.sanitizer }}
+
+  coverage:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ['ubuntu-latest', 'macos-latest', 'windows-latest']
+        config: ['Debug']
+    name: Coverage on ${{ matrix.os }} in ${{ matrix.config }}
+    runs-on: ${{ matrix.os }}
+    env:
+      COVERAGE_FAIL_UNDER_LINE: 80
+      COVERAGE_FAIL_UNDER_FUNCTION: 45
+      COVERAGE_FAIL_UNDER_BRANCH: 55
+    steps:
+    - name: Checkout repository.
+      uses: actions/checkout@v7
+    - name: Set up Python.
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Install gcovr.
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          python -m pip install gcovr
+        else
+          python3 -m pip install gcovr
+        fi
+        gcovr --version
+    - name: Install LLVM on Windows.
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        if [ ! -f "C:\Program Files\LLVM\bin\clang-cl.exe" ]; then
+          if command -v choco >/dev/null 2>&1; then
+            choco install llvm --yes --no-progress
+          else
+            winget install --id LLVM.LLVM --silent --accept-package-agreements --accept-source-agreements
+          fi
+        fi
+        echo "C:\Program Files\LLVM\bin" >> "${GITHUB_PATH}"
+        if ! command -v ninja >/dev/null 2>&1; then
+          if command -v choco >/dev/null 2>&1; then
+            choco install ninja --yes --no-progress
+          else
+            winget install --id Ninja-build.Ninja --silent --accept-package-agreements --accept-source-agreements
+          fi
+        fi
+        clang-cl --version
+        llvm-profdata --version
+    - name: Install LLVM on macOS.
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        brew install llvm@20
+        echo "$(brew --prefix llvm@20)/bin" >> "${GITHUB_PATH}"
+        export PATH="$(brew --prefix llvm@20)/bin:${PATH}"
+        clang --version
+        llvm-profdata --version
+    - name: Build and test with coverage instrumentation.
+      shell: bash
+      run: |
+        CMAKE_COMPILER_ARGS=()
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          CMAKE_COMPILER_ARGS+=(
+            "-G"
+            "Ninja"
+            "-DCMAKE_C_COMPILER=C:/Program Files/LLVM/bin/clang-cl.exe"
+            "-DCMAKE_CXX_COMPILER=C:/Program Files/LLVM/bin/clang-cl.exe"
+          )
+        elif [ "$RUNNER_OS" == "macOS" ]; then
+          CMAKE_COMPILER_ARGS+=(
+            "-DCMAKE_C_COMPILER=$(brew --prefix llvm@20)/bin/clang"
+            "-DCMAKE_CXX_COMPILER=$(brew --prefix llvm@20)/bin/clang++"
+          )
+        fi
+        cmake -S. -Bbuild/coverage -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DZEROSLAM_WERROR=ON -DZEROSLAM_CHECKS=OFF -DZEROSLAM_COVERAGE=ON "${CMAKE_COMPILER_ARGS[@]}"
+        cmake --build build/coverage --parallel 4
+        ctest --test-dir build/coverage --output-on-failure --parallel 4
+    - name: Generate and publish coverage report.
+      shell: bash
+      run: |
+        set +e
+        if [ "$RUNNER_OS" == "Linux" ]; then
+          gcovr --root . --filter 'source/' --gcov-ignore-parse-errors=suspicious_hits.warn_once_per_file --print-summary --markdown -o build/coverage/coverage.md --markdown-summary build/coverage/coverage-summary.md --fail-under-line "${COVERAGE_FAIL_UNDER_LINE}" --fail-under-function "${COVERAGE_FAIL_UNDER_FUNCTION}" --fail-under-branch "${COVERAGE_FAIL_UNDER_BRANCH}" 2> >(grep -v "Found 'mcdc_records' in exported JSON report" >&2) build/coverage
+        else
+          # The tests compile the library objects into each test executable and never load the shared library, so export the
+          # coverage of every test executable too, otherwise the code only the tests instantiate is missing from the report.
+          LLVM_COV_ARGS=()
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            LLVM_COV_ARGS+=(--llvm-cov-binary "build/coverage/runtime/${{ matrix.config }}/zeroslam.dll")
+            TEST_BINARIES=(build/coverage/runtime/${{ matrix.config }}/test_*.exe)
+          else
+            LLVM_COV_ARGS+=(--llvm-cov-binary "build/coverage/library/${{ matrix.config }}/libzeroslam.dylib")
+            TEST_BINARIES=(build/coverage/runtime/${{ matrix.config }}/test_*)
+          fi
+          for TEST_BINARY in "${TEST_BINARIES[@]}"; do
+            LLVM_COV_ARGS+=("--llvm-cov-binary=-object=${TEST_BINARY}")
+          done
+          # gcovr runs llvm-cov export once per profraw file, so merge them into one to export all the binaries only once.
+          # gcovr only reads files named *.profraw, and llvm-profdata merge reads indexed profiles too, so keep that name.
+          llvm-profdata merge --sparse --output=build/coverage/merged.profdata build/coverage/llvm_*.profraw
+          rm -f build/coverage/llvm_*.profraw
+          mv build/coverage/merged.profdata build/coverage/merged.profraw
+          gcovr --root . --filter 'source/' --llvm-profdata-executable llvm-profdata "${LLVM_COV_ARGS[@]}" --print-summary --markdown -o build/coverage/coverage.md --markdown-summary build/coverage/coverage-summary.md --fail-under-line "${COVERAGE_FAIL_UNDER_LINE}" --fail-under-function "${COVERAGE_FAIL_UNDER_FUNCTION}" --fail-under-branch "${COVERAGE_FAIL_UNDER_BRANCH}" 2> >(grep -v "Found 'mcdc_records' in exported JSON report" >&2) build/coverage
+        fi
+        GCOVR_EXIT_CODE=$?
+        {
+          echo "## Coverage on ${{ matrix.os }}"
+          if [ -f build/coverage/coverage-summary.md ]; then
+            cat build/coverage/coverage-summary.md
+          fi
+          echo ""
+          echo "<details>"
+          echo "<summary>Full coverage report</summary>"
+          echo ""
+          if [ -f build/coverage/coverage.md ]; then
+            cat build/coverage/coverage.md
+          fi
+          echo ""
+          echo "</details>"
+        } >> "${GITHUB_STEP_SUMMARY}"
+        rm -rf build/coverage
+        exit ${GCOVR_EXIT_CODE}
