@@ -201,6 +201,32 @@ int main(int argc, char* argv[]) {
         REQUIRE(geometry::essential<double>::decompose(math::matrix<double, 3, 3>::zero(), rotations, translations) == 0);
     }
 
+    // Axis aligned translations with a zero row in the matrix.
+    {
+        for (size_t axis = 0; axis < 3; ++axis) {
+            math::matrix<double, 3, 1> translation = math::matrix<double, 3, 1>::zero();
+            translation[axis] = 1.0;
+            math::matrix<double, 3, 3> essential;
+            geometry::essential<double>::from_poses(math::matrix<double, 3, 3>::identity(), translation, essential);
+            math::matrix<double, 3, 3> rotations[4];
+            math::matrix<double, 3, 1> translations[4];
+            REQUIRE(geometry::essential<double>::decompose(essential, rotations, translations) == 4);
+            size_t matching = 0;
+            for (size_t solution = 0; solution < 4; ++solution) {
+                for (size_t row = 0; row < 3; ++row) {
+                    for (size_t col = 0; col < 3; ++col) {
+                        REQUIRE(std::isfinite(rotations[solution][row][col]));
+                    }
+                    REQUIRE(std::isfinite(translations[solution][row]));
+                }
+                if (matches_pose(rotations[solution], translations[solution], math::matrix<double, 3, 3>::identity(), translation, 1e-9)) {
+                    ++matching;
+                }
+            }
+            REQUIRE(matching == 1);
+        }
+    }
+
     // Epipoles are the translation directions.
     {
         core::random_pcg random(0x5eed000bull);

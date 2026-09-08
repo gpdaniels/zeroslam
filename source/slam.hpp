@@ -19,8 +19,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ZEROSLAM_SLAM_HPP
 
 #include "core/logger.hpp"
-#include "estimation/consensus.hpp"
-#include "estimation/pose_estimation.hpp"
+#include "estimation/correspondence_2d_2d.hpp"
+#include "estimation/correspondence_2d_3d.hpp"
+#include "estimation/pose/essential.hpp"
+#include "estimation/robust/solver/essential.hpp"
+#include "estimation/robust/solver/p3p.hpp"
 #include "feature/descriptor/binary.hpp"
 #include "geometry/triangulation/linear_least_squares.hpp"
 #include "image/image.hpp"
@@ -186,7 +189,7 @@ public:
 
         // Pose estimation of new frame.
         if (frame_current.id < 2) {
-            estimation::model_essential<double> model;
+            estimation::robust::estimate::essential<double>::model model;
             std::vector<estimation::correspondence_2d_2d<double>> essential_correspondencies;
             for (const match::pair& m : matches) {
                 const double lhs_point[2] = {
@@ -205,12 +208,12 @@ public:
                 if (!frame_previous.camera.unproject(&rhs_point[0], &rhs_ray[0])) {
                     continue;
                 }
-                essential_correspondencies.push_back({ { lhs_ray[0] / lhs_ray[2], lhs_ray[1] / lhs_ray[2] }, { rhs_ray[0] / rhs_ray[2], rhs_ray[1] / rhs_ray[2] } });
+                essential_correspondencies.push_back({ { { lhs_ray[0] / lhs_ray[2], lhs_ray[1] / lhs_ray[2] } }, { { rhs_ray[0] / rhs_ray[2], rhs_ray[1] / rhs_ray[2] } } });
             }
             std::vector<float> essential_residuals(essential_correspondencies.size());
             std::vector<size_t> essential_inliers(essential_correspondencies.size());
             size_t inliers = essential_correspondencies.size();
-            if (!estimation::solve_ransac_essential(essential_correspondencies.data(), essential_correspondencies.size(), essential_residuals.data(), essential_inliers.data(), inliers, model)) {
+            if (!estimation::robust::solver::essential<double>::solve(essential_correspondencies.data(), essential_correspondencies.size(), essential_residuals.data(), essential_inliers.data(), inliers, model)) {
                 core::logger::log(core::logger::level::warn, "Failed to calculate the initial pose transform.");
                 std::exit(1);
             }
@@ -219,15 +222,15 @@ public:
             match_point_current_inlier.reserve(inliers);
             match_point_previous_inlier.reserve(inliers);
             for (size_t inlier_index = 0; inlier_index < inliers; ++inlier_index) {
-                match_point_current_inlier.push_back({ { essential_correspondencies[essential_inliers[inlier_index]].lhs.x, essential_correspondencies[essential_inliers[inlier_index]].lhs.y } });
-                match_point_previous_inlier.push_back({ { essential_correspondencies[essential_inliers[inlier_index]].rhs.x, essential_correspondencies[essential_inliers[inlier_index]].rhs.y } });
+                match_point_current_inlier.push_back({ { essential_correspondencies[essential_inliers[inlier_index]].lhs[0], essential_correspondencies[essential_inliers[inlier_index]].lhs[1] } });
+                match_point_previous_inlier.push_back({ { essential_correspondencies[essential_inliers[inlier_index]].rhs[0], essential_correspondencies[essential_inliers[inlier_index]].rhs[1] } });
             }
 
             math::matrix<double, 3, 3> rotation;
             math::matrix<double, 3, 1> translation;
             std::vector<math::matrix<double, 3, 1>> match_point_triangulated_inlier(inliers);
             size_t recover_pose_support = 0;
-            if (!estimation::essential_matrix<double>::recover_pose(&model.essential[0][0], match_point_current_inlier.data()->data(), match_point_previous_inlier.data()->data(), inliers, rotation.data(), translation.data(), match_point_triangulated_inlier.data()->data(), &recover_pose_support)) {
+            if (!estimation::pose::essential<double>::recover(&model.essential[0][0], match_point_current_inlier.data()->data(), match_point_previous_inlier.data()->data(), inliers, rotation.data(), translation.data(), match_point_triangulated_inlier.data()->data(), &recover_pose_support)) {
                 core::logger::log(core::logger::level::warn, "Failed to calculate the initial pose transform.");
                 std::exit(1);
             }
@@ -278,13 +281,13 @@ public:
                     if (!frame_current.camera.unproject(&lhs_point[0], &lhs_ray[0])) {
                         continue;
                     }
-                    corr.lhs.x = lhs_ray[0] / lhs_ray[2];
-                    corr.lhs.y = lhs_ray[1] / lhs_ray[2];
+                    corr.lhs[0] = lhs_ray[0] / lhs_ray[2];
+                    corr.lhs[1] = lhs_ray[1] / lhs_ray[2];
 
                     const auto& landmark = this->reconstruction.landmarks.at(found_point->second);
-                    corr.rhs.x = landmark.location[0];
-                    corr.rhs.y = landmark.location[1];
-                    corr.rhs.z = landmark.location[2];
+                    corr.rhs[0] = landmark.location[0];
+                    corr.rhs[1] = landmark.location[1];
+                    corr.rhs[2] = landmark.location[2];
 
                     pnp_correspondencies.push_back(corr);
                 }
@@ -292,12 +295,12 @@ public:
 
             bool pnp_success = false;
             if (pnp_correspondencies.size() >= 3) {
-                estimation::model_p3p<double> model;
+                estimation::robust::estimate::p3p<double>::model model;
                 std::vector<float> pnp_residuals(pnp_correspondencies.size());
                 std::vector<size_t> pnp_inliers(pnp_correspondencies.size());
                 size_t inliers_size = 0;
 
-                if (estimation::solve_ransac_p3p(pnp_correspondencies.data(), pnp_correspondencies.size(), pnp_residuals.data(), pnp_inliers.data(), inliers_size, model)) {
+                if (estimation::robust::solver::p3p<double>::solve(pnp_correspondencies.data(), pnp_correspondencies.size(), pnp_residuals.data(), pnp_inliers.data(), inliers_size, model)) {
                     frame_current.rotation = math::matrix<double, 3, 3>({ { model.rotation[0][0], model.rotation[0][1], model.rotation[0][2] },
                                                                           { model.rotation[1][0], model.rotation[1][1], model.rotation[1][2] },
                                                                           { model.rotation[2][0], model.rotation[2][1], model.rotation[2][2] } });
