@@ -624,12 +624,12 @@ namespace math {
 
     template <typename type>
     constexpr static inline void sincos(type value, type& sine, type& cosine) {
-#if __has_builtin(__builtin_sincosf)
+#if __has_builtin(__builtin_sincosf) && !defined(_WIN32)
         if constexpr (is_same_type<type, float>::value) {
             return __builtin_sincosf(value, &sine, &cosine);
         }
 #endif
-#if __has_builtin(__builtin_sincos)
+#if __has_builtin(__builtin_sincos) && !defined(_WIN32)
         if constexpr (is_same_type<type, double>::value) {
             return __builtin_sincos(value, &sine, &cosine);
         }
