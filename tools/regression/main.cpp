@@ -15,6 +15,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #include "dataset.hpp"
+#include "directory.hpp"
 #include "file.hpp"
 #include "paths.hpp"
 #include "process.hpp"
@@ -44,10 +45,6 @@ namespace {
         double rmse = 0.0;
         double standard_deviation = 0.0;
     };
-
-    bool file_exists(const std::string& path) {
-        return platform::is_regular_file(path);
-    }
 
     bool file_load(const std::string& path, std::vector<unsigned char>& data) {
         gtl::file handle(path.c_str(), gtl::file::access_type::read_only, gtl::file::creation_type::open_only, gtl::file::cursor_type::start_of_file);
@@ -279,7 +276,7 @@ int main(int argc, char* argv[]) {
     const std::string process_binary = tools_directory + "/zeroslam-process" + executable_extension;
     const std::string evaluate_binary = tools_directory + "/zeroslam-evaluate" + executable_extension;
     for (const std::string& binary : { process_binary, evaluate_binary }) {
-        if (!file_exists(binary)) {
+        if (!gtl::paths::is_regular_file(binary)) {
             std::fprintf(stderr, "Tool not found: '%s' (build all tools, or provide --tools-dir).\n", binary.c_str());
             return EXIT_FAILURE;
         }
@@ -318,7 +315,7 @@ int main(int argc, char* argv[]) {
     // When the scene file does not exist locally, fetch it with the dataset tool.
     {
         const std::string dataset_binary = tools_directory + "/zeroslam-dataset" + executable_extension;
-        if (!file_exists(scene_path) && file_exists(dataset_binary)) {
+        if (!gtl::paths::is_regular_file(scene_path) && gtl::paths::is_regular_file(dataset_binary)) {
             // The datasets root sits above the "[dataset]/[scene].mcap" components.
             const std::string trimmed = scene_path;
             const std::size_t last_separator = trimmed.find_last_of("/\\");
@@ -391,7 +388,7 @@ int main(int argc, char* argv[]) {
     }
 
     const std::string work_directory = work_directory_override.empty() ? ("zeroslam-regression-work/" + dataset_name) : work_directory_override;
-    if (!platform::make_directories(work_directory)) {
+    if (!gtl::directory::make_directories(work_directory)) {
         std::fprintf(stderr, "Failed to create the work directory: %s\n", work_directory.c_str());
         return EXIT_FAILURE;
     }

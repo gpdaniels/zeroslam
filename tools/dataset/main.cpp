@@ -15,7 +15,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #include "dataset.hpp"
-#include "filesystem.hpp"
+#include "directory.hpp"
 #include "json.hpp"
 #include "paths.hpp"
 #include "process.hpp"
@@ -198,7 +198,7 @@ namespace {
                 continue;
             }
             unsigned long long actual_size = 0;
-            if (!platform::get_file_size(part, actual_size) || (actual_size != expected_size)) {
+            if (!gtl::paths::get_file_size(part, actual_size) || (actual_size != expected_size)) {
                 error = "size mismatch, expected " + std::to_string(expected_size) + " bytes, downloaded " + std::to_string(actual_size);
                 continue;
             }
@@ -559,7 +559,7 @@ namespace {
             std::fprintf(stderr, "Invalid scene: %s.\n", error.c_str());
             return EXIT_FAILURE;
         }
-        if (!platform::make_directories(output_directory + "/sensor")) {
+        if (!gtl::directory::make_directories(output_directory + "/sensor")) {
             std::fprintf(stderr, "Failed to create: %s\n", (output_directory + "/sensor").c_str());
             return EXIT_FAILURE;
         }
@@ -568,7 +568,7 @@ namespace {
         // the camera model and its intrinsics.
         std::size_t frame_index = 0;
         for (const dataset::camera_information& camera : scene.cameras) {
-            if (!platform::make_directories(output_directory + "/sensor/" + camera.camera_name)) {
+            if (!gtl::directory::make_directories(output_directory + "/sensor/" + camera.camera_name)) {
                 std::fprintf(stderr, "Failed to create: %s\n", (output_directory + "/sensor/" + camera.camera_name).c_str());
                 return EXIT_FAILURE;
             }
@@ -843,13 +843,13 @@ namespace {
         std::vector<std::string> imu_names;
         {
             std::vector<std::string> entries;
-            platform::list_directory(input_directory + "/sensor", entries);
+            gtl::directory::list_directory(input_directory + "/sensor", entries);
             for (const std::string& entry : entries) {
-                if (!platform::is_regular_file(input_directory + "/sensor/" + entry) || (platform::path_extension(entry) != ".txt")) {
+                if (!gtl::paths::is_regular_file(input_directory + "/sensor/" + entry) || (gtl::paths::path_extension(entry) != ".txt")) {
                     continue;
                 }
-                const std::string name = platform::path_stem(entry);
-                if (platform::is_directory(input_directory + "/sensor/" + name)) {
+                const std::string name = gtl::paths::path_stem(entry);
+                if (gtl::paths::is_directory(input_directory + "/sensor/" + name)) {
                     camera_names.push_back(name);
                 }
                 else if (dataset::is_valid_sensor_name(name, "imu")) {
@@ -1015,9 +1015,9 @@ namespace {
             writer.add_message(tf_channel, static_cast<unsigned int>(i), log_time, log_time, transform.data(), transform.size());
         }
         const std::vector<unsigned char>& output = writer.finish();
-        const std::string parent = platform::path_parent_directory(output_path);
+        const std::string parent = gtl::paths::path_parent_directory(output_path);
         if (!parent.empty()) {
-            platform::make_directories(parent);
+            gtl::directory::make_directories(parent);
         }
         if (!file_save_all(output_path, output.data(), output.size())) {
             std::fprintf(stderr, "Failed to write: %s\n", output_path.c_str());
@@ -1154,7 +1154,7 @@ int main(int argc, char* argv[]) {
         }
         // A path to a scene mcap: validate it directly, without the datasets directory.
         if ((dataset_name.size() >= 5) && (dataset_name.compare(dataset_name.size() - 5, 5, ".mcap") == 0)) {
-            if (!platform::is_regular_file(dataset_name)) {
+            if (!gtl::paths::is_regular_file(dataset_name)) {
                 std::fprintf(stderr, "Invalid mcap: not found: %s\n", dataset_name.c_str());
                 return EXIT_FAILURE;
             }
@@ -1165,18 +1165,18 @@ int main(int argc, char* argv[]) {
             return EXIT_FAILURE;
         }
         const std::string target = datasets_directory + "/" + dataset_name;
-        if (platform::is_regular_file(target + ".mcap")) {
+        if (gtl::paths::is_regular_file(target + ".mcap")) {
             return validate_scene(target + ".mcap") ? EXIT_SUCCESS : EXIT_FAILURE;
         }
         // A dataset directory: validate every scene mcap inside it.
         std::vector<std::string> entries;
-        if (!platform::list_directory(target, entries)) {
+        if (!gtl::directory::list_directory(target, entries)) {
             std::fprintf(stderr, "Invalid dataset: not found: %s(.mcap)\n", target.c_str());
             return EXIT_FAILURE;
         }
         std::vector<std::string> scenes;
         for (const std::string& entry : entries) {
-            if (platform::is_regular_file(target + "/" + entry) && (platform::path_extension(entry) == ".mcap")) {
+            if (gtl::paths::is_regular_file(target + "/" + entry) && (gtl::paths::path_extension(entry) == ".mcap")) {
                 scenes.push_back(target + "/" + entry);
             }
         }
@@ -1272,13 +1272,13 @@ int main(int argc, char* argv[]) {
         total_bytes += file.size;
         const std::string local = datasets_directory + "/" + file.path;
         unsigned long long actual_size = 0;
-        if (!force && platform::get_file_size(local, actual_size) && (actual_size == file.size)) {
+        if (!force && gtl::paths::get_file_size(local, actual_size) && (actual_size == file.size)) {
             std::printf("    kept       %s (%s)\n", file.path.c_str(), format_size(file.size).c_str());
             std::fflush(stdout);
             ++kept;
             continue;
         }
-        platform::make_directories(platform::path_parent_directory(local));
+        gtl::directory::make_directories(gtl::paths::path_parent_directory(local));
         std::printf("    downloading %s (%s)...", file.path.c_str(), format_size(file.size).c_str());
         std::fflush(stdout);
         const std::string url = "https://huggingface.co/datasets/" + repository + "/resolve/main/" + file.path;

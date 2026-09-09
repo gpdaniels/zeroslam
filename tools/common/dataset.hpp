@@ -19,9 +19,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ZEROSLAM_TOOLS_COMMON_DATASET_HPP
 
 #include "cdr.hpp"
+#include "directory.hpp"
 #include "file.hpp"
-#include "filesystem.hpp"
 #include "mcap.hpp"
+#include "paths.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -424,11 +425,11 @@ namespace dataset {
     inline std::size_t count_frame_directory(const std::string& directory) {
         std::size_t count = 0;
         std::vector<std::string> entries;
-        if (!platform::list_directory(directory, entries)) {
+        if (!gtl::directory::list_directory(directory, entries)) {
             return 0;
         }
         for (const std::string& entry : entries) {
-            if (platform::is_regular_file(directory + "/" + entry) && (platform::path_extension(entry) == ".pgm")) {
+            if (gtl::paths::is_regular_file(directory + "/" + entry) && (gtl::paths::path_extension(entry) == ".pgm")) {
                 ++count;
             }
         }
@@ -508,11 +509,10 @@ namespace dataset {
             return false;
         }
         const gtl::file::size_type expected_size = size;
-        std::vector<char> buffer(static_cast<std::size_t>(size) + 1);
+        std::vector<char> buffer(static_cast<std::size_t>(size) + 1, 0);
         if (!file.read(&buffer[0], size) || (size != expected_size)) {
             return false;
         }
-        buffer[static_cast<std::size_t>(expected_size)] = '\0';
         for (char* line = &buffer[0]; line != nullptr;) {
             char* end = std::strchr(line, '\n');
             if (end != nullptr) {
