@@ -16,8 +16,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "mapping/frame.hpp"
 
-#include "sensor/camera/pinhole.hpp"
-
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
@@ -44,7 +42,7 @@ int main(int argc, char* argv[]) {
     }
     {
         const math::matrix<double, 3, 3> intrinsics = { { { 1.0, 0.0, 0.5 }, { 0.0, 1.0, 0.5 }, { 0.0, 0.0, 1.0 } } };
-        sensor::camera::pinhole<double> camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }.data(), 4);
+        sensor::model camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12);
         image::image image(256, 256);
         for (size_t i = 0; i < image.get_rows(); ++i) {
             for (size_t j = 0; j < image.get_cols(); ++j) {
@@ -56,13 +54,13 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
-        mapping::frame frame_0(camera, image);
+        mapping::frame frame_0(0, camera, image);
         REQUIRE(frame_0.id == 0);
     }
 
     {
         const math::matrix<double, 3, 3> intrinsics = { { { 1.0, 0.0, 0.5 }, { 0.0, 1.0, 0.5 }, { 0.0, 0.0, 1.0 } } };
-        sensor::camera::pinhole<double> camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }.data(), 4);
+        sensor::model camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12);
 
         image::image tiny(16, 16);
         for (size_t i = 0; i < tiny.get_rows(); ++i) {
@@ -70,7 +68,7 @@ int main(int argc, char* argv[]) {
                 tiny.get_data()[i * tiny.get_cols() + j] = static_cast<unsigned char>((i * 16 + j) % 256);
             }
         }
-        mapping::frame frame_tiny(camera, tiny);
+        mapping::frame frame_tiny(0, camera, tiny);
         REQUIRE(frame_tiny.image_pyramid.size() >= 1);
         REQUIRE(frame_tiny.keypoint_pyramid.size() >= 1);
         REQUIRE(frame_tiny.descriptor_pyramid.size() >= 1);
@@ -81,10 +79,73 @@ int main(int argc, char* argv[]) {
                 small.get_data()[i * small.get_cols() + j] = static_cast<unsigned char>((i + j) % 256);
             }
         }
-        mapping::frame frame_small(camera, small);
+        mapping::frame frame_small(1, camera, small);
         REQUIRE(frame_small.image_pyramid.size() >= 1);
         REQUIRE(frame_small.keypoint_pyramid.size() >= 1);
         REQUIRE(frame_small.descriptor_pyramid.size() >= 1);
+    }
+
+    {
+        const math::matrix<double, 3, 3> intrinsics = { { { 320.0, 0.0, 320.0 }, { 0.0, 320.0, 240.0 }, { 0.0, 0.0, 1.0 } } };
+        sensor::model camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12);
+
+        image::image textured(480, 640);
+        unsigned int state = 12345u;
+        for (size_t i = 0; i < textured.get_rows(); ++i) {
+            for (size_t j = 0; j < textured.get_cols(); ++j) {
+                state = (state * 1664525u) + 1013904223u;
+                const unsigned int checker = (((i / 8) + (j / 8)) % 2) ? 200u : 40u;
+                textured.get_data()[i * textured.get_cols() + j] = static_cast<unsigned char>((checker + ((state >> 16) % 32u)) % 256u);
+            }
+        }
+
+        const mapping::frame built(0, camera, textured);
+        REQUIRE(built.image_pyramid.size() == 4);
+        REQUIRE(built.image_pyramid[1].get_cols() == 320);
+        REQUIRE(built.image_pyramid[1].get_rows() == 240);
+        REQUIRE(built.image_pyramid[2].get_cols() == 160);
+        REQUIRE(built.image_pyramid[2].get_rows() == 120);
+        REQUIRE(built.image_pyramid[3].get_cols() == 80);
+        REQUIRE(built.image_pyramid[3].get_rows() == 60);
+        REQUIRE(built.image_pyramid.scale_x(0) == 1.0f);
+        REQUIRE(built.image_pyramid.scale_y(0) == 1.0f);
+        REQUIRE(built.image_pyramid.scale_x(1) == 2.0f);
+        REQUIRE(built.image_pyramid.scale_x(2) == 4.0f);
+        REQUIRE(built.image_pyramid.back().get_rows() >= image::pyramid::minimum_dimension);
+
+        size_t expected_total = 0;
+        for (size_t level = 0; level < built.keypoint_pyramid.size(); ++level) {
+            expected_total += built.keypoint_pyramid[level].size();
+        }
+        REQUIRE(built.keypoints.size() == expected_total);
+        REQUIRE(built.descriptors.size() == expected_total);
+        REQUIRE(!built.keypoint_pyramid[0].empty());
+        REQUIRE(built.keypoints.size() > built.keypoint_pyramid[0].size());
+        for (size_t i = 1; i < built.keypoints.size(); ++i) {
+            REQUIRE(built.keypoints[i].octave >= built.keypoints[i - 1].octave);
+        }
+        size_t flat_index = 0;
+        for (size_t level = 0; level < built.keypoint_pyramid.size(); ++level) {
+            for (size_t i = 0; i < built.keypoint_pyramid[level].size(); ++i) {
+                const feature::point& exported = built.keypoints[flat_index];
+                const feature::point& local = built.keypoint_pyramid[level][i];
+                REQUIRE(exported.octave == static_cast<int>(level));
+                REQUIRE(local.octave == static_cast<int>(level));
+                REQUIRE(exported.x == local.x * built.image_pyramid.scale_x(level));
+                REQUIRE(exported.y == local.y * built.image_pyramid.scale_y(level));
+                REQUIRE(exported.response == local.response);
+                REQUIRE(exported.x >= 0.0f);
+                REQUIRE(exported.y >= 0.0f);
+                REQUIRE(exported.x < static_cast<float>(textured.get_cols()));
+                REQUIRE(exported.y < static_cast<float>(textured.get_rows()));
+                ++flat_index;
+            }
+        }
+
+        REQUIRE(built.keypoint_pyramid[0].size() <= static_cast<size_t>(4 * mapping::frame::level0_features));
+        for (size_t level = 1; level < built.keypoint_pyramid.size(); ++level) {
+            REQUIRE(built.keypoint_pyramid[level].size() <= built.keypoint_pyramid[level - 1].size());
+        }
     }
 
     return EXIT_SUCCESS;

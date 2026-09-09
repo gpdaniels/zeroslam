@@ -14,7 +14,7 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include "mapping/landmark.hpp"
+#include "sensor/camera.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -35,23 +35,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
+
     {
-        mapping::point p;
-    }
-    {
-        mapping::point p0({ { 1, 2, 3 } }, { { 4, 5, 6 } });
-        REQUIRE(p0.id == 0);
-        mapping::point p1({ { 4, 5, 6 } }, { { 7, 8, 9 } });
-        REQUIRE(p1.id == 1);
-    }
-    {
-        mapping::line l;
-    }
-    {
-        mapping::line l0({ { 1, 2, 3 } }, { { 1, 2, 3 } });
-        REQUIRE(l0.id == 0);
-        mapping::line l1({ { 4, 5, 6 } }, { { 4, 5, 6 } });
-        REQUIRE(l1.id == 1);
+        static_assert(sensor::model::parameter_count == 12, "The model alias must name the radial-tangential camera.");
+        static_assert(sensor::pinhole::parameter_count == 4, "The pinhole alias must name the pinhole camera.");
+        const double parameters[12] = { 0.8, 0.8, 0.5, 0.375, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        const sensor::model model(parameters, 12);
+        REQUIRE(model.get_parameter_count() == 12);
     }
 
     return EXIT_SUCCESS;

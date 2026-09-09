@@ -33,7 +33,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "match/matcher/bruteforce.hpp"
 #include "match/pair.hpp"
 #include "math/matrix.hpp"
-#include "sensor/camera/pinhole.hpp"
+#include "sensor/camera.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -97,8 +97,9 @@ private:
 public:
     void process_frame(const math::matrix<double, 3, 3>& intrinsics, const image::image& image_grey) {
         {
-            sensor::camera::pinhole<double> camera_intrinsics(math::matrix<double, 1, 4>({ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] }).data(), 4);
-            mapping::frame frame(camera_intrinsics, image_grey);
+            const double camera_parameters[sensor::model::parameter_count] = { intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2] };
+            const sensor::model camera_intrinsics(&camera_parameters[0], sensor::model::parameter_count);
+            mapping::frame frame(this->reconstruction.allocate_frame_id(), camera_intrinsics, image_grey);
 
             if (core::logger::enabled(core::logger::level::info)) {
                 char counts[256] = "";
@@ -120,8 +121,8 @@ public:
         }
 
         // Get the most recent pair of frames.
-        const mapping::frame& frame_previous = reconstruction.frames.at(mapping::frame::id_generator - 2);
-        mapping::frame& frame_current = reconstruction.frames.at(mapping::frame::id_generator - 1);
+        const mapping::frame& frame_previous = reconstruction.frames.at(this->reconstruction.next_frame_id - 2);
+        mapping::frame& frame_current = reconstruction.frames.at(this->reconstruction.next_frame_id - 1);
 
         if (core::logger::enabled(core::logger::level::info)) {
             char counts[256] = "";
@@ -180,9 +181,9 @@ public:
         // Cache observations from the previous frame that are in this one.
         std::unordered_map<int, int> frame_previous_points; // key is kp_index and data is landmark_id.
         for (const auto& [landmark_id, landmark_observations] : this->reconstruction.observations) {
-            for (const auto& [frame_id, kp_index] : landmark_observations) {
-                if (frame_id == frame_previous.id) {
-                    frame_previous_points[static_cast<int>(kp_index)] = landmark_id;
+            for (const auto& landmark_observation : landmark_observations) {
+                if (landmark_observation.frame_id == frame_previous.id) {
+                    frame_previous_points[static_cast<int>(landmark_observation.kp_index)] = landmark_id;
                 }
             }
         }
@@ -368,10 +369,10 @@ public:
                 continue;
             }
             // Check it has not already been matched.
-            const std::vector<mapping::map::observation<int, size_t>>& landmark_observations = this->reconstruction.observations.at(landmark_id);
+            const std::vector<mapping::map::observation>& landmark_observations = this->reconstruction.observations.at(landmark_id);
             bool landmark_found = false;
-            for (const mapping::map::observation<int, size_t>& landmark_observation : landmark_observations) {
-                if (landmark_observation.first == frame_current.id) {
+            for (const mapping::map::observation& landmark_observation : landmark_observations) {
+                if (landmark_observation.frame_id == frame_current.id) {
                     landmark_found = true;
                     break;
                 }
@@ -391,7 +392,7 @@ public:
                     continue;
                 }
                 // Check similarity.
-                const feature::descriptor::binary<256>& des_landmark = this->reconstruction.frames.at(landmark_observations[0].first).descriptor_pyramid[0][static_cast<size_t>(landmark_observations[0].second)];
+                const feature::descriptor::binary<256>& des_landmark = this->reconstruction.frames.at(landmark_observations[0].frame_id).descriptor_pyramid[0][landmark_observations[0].kp_index];
                 const feature::descriptor::binary<256>& des_current = frame_current.descriptor_pyramid[0][static_cast<size_t>(match_index_current[i])];
                 if (match::distance::hamming::distance(des_landmark, des_current) < 64) {
                     this->reconstruction.add_observation(frame_current, landmark, static_cast<size_t>(match_index_current[i]));
@@ -476,7 +477,7 @@ public:
             }
             // Add it.
             const float colour = static_cast<float>(image_grey.get_data()[static_cast<size_t>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].y) * image_grey.get_cols() + static_cast<size_t>(frame_current.keypoint_pyramid[0][static_cast<size_t>(match_index_current[i])].x)]) / 255.0f;
-            mapping::point landmark(point, math::matrix<double, 3, 1>{ { static_cast<double>(colour), static_cast<double>(colour), static_cast<double>(colour) } });
+            mapping::point landmark(this->reconstruction.allocate_landmark_id(), point, math::matrix<double, 3, 1>{ { static_cast<double>(colour), static_cast<double>(colour), static_cast<double>(colour) } });
             this->reconstruction.add_landmark(landmark);
             this->reconstruction.add_observation(frame_previous, landmark, static_cast<size_t>(match_index_previous[i]));
             this->reconstruction.add_observation(frame_current, landmark, static_cast<size_t>(match_index_current[i]));

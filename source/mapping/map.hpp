@@ -20,7 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "core/logger.hpp"
 #include "mapping/frame.hpp"
-#include "mapping/landmark.hpp"
+#include "mapping/point.hpp"
 #include "math/lie.hpp"
 #include "optimisation/edge.hpp"
 #include "optimisation/edges/reprojection.hpp"
@@ -31,14 +31,15 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/vertices/point.hpp"
 #include "optimisation/vertices/pose.hpp"
 #include "sensor/camera/model.hpp"
-#include "sensor/camera/pinhole.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
 
+#include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -48,17 +49,30 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 namespace mapping {
     class map {
     public:
-        template <class type_lhs, class type_rhs>
-        class observation {
-        public:
-            type_lhs first;
-            type_rhs second;
+        struct observation final {
+            int frame_id;
+            size_t kp_index;
+            math::matrix<double, 2, 1> point;
         };
 
     public:
         std::unordered_map<int, mapping::frame> frames;
         std::unordered_map<int, mapping::point> landmarks;
-        std::unordered_map<decltype(mapping::point::id), std::vector<observation<decltype(mapping::frame::id), size_t>>> observations;
+        std::unordered_map<decltype(mapping::point::id), std::vector<observation>> observations;
+
+        int next_frame_id = 0;
+        int next_landmark_id = 0;
+
+        int allocate_frame_id() {
+            return this->next_frame_id++;
+        }
+
+        int allocate_landmark_id() {
+            return this->next_landmark_id++;
+        }
+
+        int gauge_frame_id = 0;
+        int gauge_frame_secondary_id = 1;
 
     public:
         void add_frame(const mapping::frame& frame) {
@@ -70,7 +84,12 @@ namespace mapping {
         }
 
         void add_observation(const mapping::frame& frame, const mapping::point& landmark, size_t kp_index) {
-            this->observations[landmark.id].push_back({ frame.id, kp_index });
+            const feature::point& keypoint = frame.keypoints[kp_index];
+            this->observations[landmark.id].push_back(observation{ frame.id, kp_index, math::matrix<double, 2, 1>{ { static_cast<double>(keypoint.x), static_cast<double>(keypoint.y) } } });
+        }
+
+        void add_observation(int frame_id, const mapping::point& landmark, double x, double y) {
+            this->observations[landmark.id].push_back(observation{ frame_id, static_cast<size_t>(-1), math::matrix<double, 2, 1>{ { x, y } } });
         }
 
         void optimise(int local_window, bool fix_landmarks, int rounds, bool use_relative_convergence = false) {
@@ -80,36 +99,35 @@ namespace mapping {
             std::unordered_map<int, optimisation::vertex*> camera_vertexes;
             std::unordered_map<int, optimisation::vertex*> landmark_vertexes;
             // Get camera parameters.
-            double camera_parameters[4];
-            this->frames.begin()->second.camera.get_parameters(camera_parameters, 4);
+            double camera_parameters[sensor::model::parameter_count];
+            this->frames.begin()->second.camera.get_parameters(camera_parameters, sensor::model::parameter_count);
+            const sensor::model camera_model(camera_parameters, sensor::model::parameter_count);
             // Setup ba.
             const optimisation::loss lossfunction(optimisation::losses::huber(math::sqrt(5.991)));
             optimisation::factor_graph ba;
             // Add frames.
-            const int local_window_below = mapping::frame::id_generator - 1 - local_window;
+            const int local_window_below = this->next_frame_id - 1 - local_window;
             const int local_window_fixed_below = local_window_below + 1;
-            // Determine relevant frames and landmarks.
             std::unordered_set<int> relevant_frame_ids;
             std::unordered_set<int> active_landmark_ids;
+            std::unordered_set<int> active_frame_ids;
+
             if (local_window > 0) {
-                // Find non-fixed (active) frames.
-                std::unordered_set<int> active_frame_ids;
+                int horizon_threshold;
                 for (const auto& [frame_id, frame] : this->frames) {
-                    const bool fixed = ((frame_id == 0) || (frame_id == 1 && this->frames.size() > 2) || (frame_id < local_window_fixed_below));
+                    const bool fixed = ((frame_id == this->gauge_frame_id) || (frame_id == this->gauge_frame_secondary_id && this->frames.size() > 2) || (frame_id < local_window_fixed_below));
                     if (!fixed) {
                         active_frame_ids.insert(frame_id);
                     }
                 }
-
-                // Find landmarks seen by active frames and identify all frames that see them within a fixed horizon.
-                const int current_frame_id = mapping::frame::id_generator - 1;
+                const int current_frame_id = this->next_frame_id - 1;
                 const int fixed_horizon_limit = 2 * local_window;
-                const int horizon_threshold = current_frame_id - fixed_horizon_limit;
+                horizon_threshold = current_frame_id - fixed_horizon_limit;
 
                 for (const auto& [landmark_id, landmark_obs] : this->observations) {
                     bool seen_by_active = false;
                     for (const auto& obs : landmark_obs) {
-                        if (active_frame_ids.count(obs.first)) {
+                        if (active_frame_ids.count(obs.frame_id)) {
                             seen_by_active = true;
                             break;
                         }
@@ -117,8 +135,8 @@ namespace mapping {
                     if (seen_by_active) {
                         active_landmark_ids.insert(static_cast<int>(landmark_id));
                         for (const auto& obs : landmark_obs) {
-                            if (obs.first >= horizon_threshold) {
-                                relevant_frame_ids.insert(obs.first);
+                            if (obs.frame_id >= horizon_threshold) {
+                                relevant_frame_ids.insert(obs.frame_id);
                             }
                         }
                     }
@@ -141,7 +159,7 @@ namespace mapping {
             for (const auto& frame_id : relevant_frame_ids) {
                 const auto& frame = this->frames.at(frame_id);
                 const math::se3<double> v_se3(frame.rotation, frame.translation);
-                const bool fixed = ((frame_id == 0) || (frame_id == 1 && this->frames.size() > 2) || ((local_window > 0) && (frame_id < local_window_fixed_below)));
+                const bool fixed = ((frame_id == this->gauge_frame_id) || (frame_id == this->gauge_frame_secondary_id && this->frames.size() > 2) || ((local_window > 0) && (active_frame_ids.count(frame_id) == 0)));
                 optimisation::vertex c{ optimisation::vertices::pose() };
                 const double pose_parameters[7] = { v_se3.translation()[0], v_se3.translation()[1], v_se3.translation()[2], v_se3.rotation().get_quaternion()[1], v_se3.rotation().get_quaternion()[2], v_se3.rotation().get_quaternion()[3], v_se3.rotation().get_quaternion()[0] };
                 c.set_parameters(&pose_parameters[0], 7);
@@ -156,7 +174,8 @@ namespace mapping {
                 // Only add the landmark if it is in a frame. Initially assume it is not.
                 bool landmark_added = false;
                 // Add edges.
-                for (const auto& [frame_id, kp_index] : this->observations.at(landmark_id)) {
+                for (const auto& obs : this->observations.at(landmark_id)) {
+                    const int frame_id = obs.frame_id;
                     // Only add the edge if it will do something.
                     if (camera_vertexes.count(frame_id) == 0)
                         continue;
@@ -164,20 +183,18 @@ namespace mapping {
                         continue;
                     }
                     // Given that we're adding at least one edge, make sure the landmark has been added.
+                    const mapping::point& landmark_record = this->landmarks.at(landmark_id);
                     if (!landmark_added) {
                         landmark_added = true;
                         optimisation::vertex l{ optimisation::vertices::point() };
-                        l.set_parameters(this->landmarks.at(landmark_id).location.data(), 3);
+                        l.set_parameters(landmark_record.location.data(), 3);
                         l.set_fixed(fix_landmarks);
                         l.set_marginalised(true);
                         landmark_vertexes[landmark_id] = ba.add_vertex(static_cast<optimisation::vertex&&>(l));
                         non_fixed_landmarks += (fix_landmarks == false);
                     }
-                    // Now add the edge.
-                    const mapping::frame& frame = frames.at(frame_id);
-                    sensor::camera::pinhole<double> camera_model(camera_parameters, 4);
                     optimisation::edge m{ optimisation::edges::reprojection(sensor::camera::model<double>(camera_model)) };
-                    m.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].x), static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].y) } }.data()));
+                    m.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { obs.point[0], obs.point[1] } }.data()));
                     m.add_vertex(camera_vertexes[frame_id]);
                     m.add_vertex(landmark_vertexes[landmark_id]);
                     m.set_loss(lossfunction);
@@ -233,19 +250,77 @@ namespace mapping {
 
         void cull() {
             const size_t landmarks_before_cull = this->landmarks.size();
+
+            constexpr static const double outlier_scene_scale_multiple = 200.0;
+            constexpr static const size_t outlier_minimum_frames = 10;
+            bool outlier_bound_valid = false;
+            double centroid_x = 0.0;
+            double centroid_y = 0.0;
+            double centroid_z = 0.0;
+            double outlier_distance_squared_maximum = 0.0;
+            if (this->frames.size() >= outlier_minimum_frames) {
+                std::vector<double> cx;
+                std::vector<double> cy;
+                std::vector<double> cz;
+                cx.reserve(this->frames.size());
+                cy.reserve(this->frames.size());
+                cz.reserve(this->frames.size());
+                for (const auto& [frame_id, frame] : this->frames) {
+                    static_cast<void>(frame_id);
+                    const math::matrix<double, 3, 1> centre = -math::transpose(frame.rotation) * frame.translation;
+                    cx.push_back(centre[0]);
+                    cy.push_back(centre[1]);
+                    cz.push_back(centre[2]);
+                }
+                const auto median = [](std::vector<double>& v) -> double {
+                    std::sort(v.begin(), v.end());
+                    return v[v.size() / 2];
+                };
+                centroid_x = median(cx);
+                centroid_y = median(cy);
+                centroid_z = median(cz);
+                std::vector<double> distances;
+                distances.reserve(this->frames.size());
+                for (size_t i = 0; i < cx.size(); ++i) {
+                    const double dx = cx[i] - centroid_x;
+                    const double dy = cy[i] - centroid_y;
+                    const double dz = cz[i] - centroid_z;
+                    distances.push_back(math::sqrt((dx * dx) + (dy * dy) + (dz * dz)));
+                }
+                const double robust_scale = median(distances);
+                if (robust_scale > 1.0e-9) {
+                    const double bound = outlier_scene_scale_multiple * robust_scale;
+                    outlier_distance_squared_maximum = bound * bound;
+                    outlier_bound_valid = true;
+                }
+            }
+
+            size_t outliers_culled = 0;
             for (std::unordered_map<int, mapping::point>::iterator it = this->landmarks.begin(); it != this->landmarks.end();) {
-                if ((it->first + 500) < mapping::point::id_generator) {
+                if (outlier_bound_valid) {
+                    const double offset_x = it->second.location[0] - centroid_x;
+                    const double offset_y = it->second.location[1] - centroid_y;
+                    const double offset_z = it->second.location[2] - centroid_z;
+                    const double offset_squared = (offset_x * offset_x) + (offset_y * offset_y) + (offset_z * offset_z);
+                    if (!(offset_squared <= outlier_distance_squared_maximum)) {
+                        this->observations.erase(it->first);
+                        it = this->landmarks.erase(it);
+                        ++outliers_culled;
+                        continue;
+                    }
+                }
+                if ((it->first + 500) < this->next_landmark_id) {
                     ++it;
                     continue;
                 }
-                const std::unordered_map<int, std::vector<observation<int, size_t>>>::const_iterator observations_it = this->observations.find(it->first);
+                const std::unordered_map<int, std::vector<observation>>::const_iterator observations_it = this->observations.find(it->first);
                 if (observations_it == this->observations.end()) {
                     it = this->landmarks.erase(it);
                     continue;
                 }
-                const std::vector<observation<int, size_t>>& landmark_observations = observations_it->second;
+                const std::vector<observation>& landmark_observations = observations_it->second;
                 const bool not_seen_in_many_frames = landmark_observations.size() <= 4;
-                const bool not_seen_recently = landmark_observations.empty() || ((landmark_observations.back().first + 7) < mapping::frame::id_generator);
+                const bool not_seen_recently = landmark_observations.empty() || ((landmark_observations.back().frame_id + 7) < this->next_frame_id);
                 if (not_seen_in_many_frames && not_seen_recently) {
                     this->observations.erase(it->first);
                     it = this->landmarks.erase(it);
@@ -253,14 +328,16 @@ namespace mapping {
                 }
                 float reprojection_error = 0.0f;
                 size_t processed_observations = 0;
-                for (const auto& [frame_id, kp_index] : landmark_observations) {
+                for (const auto& obs : landmark_observations) {
+                    const int frame_id = obs.frame_id;
                     const std::unordered_map<int, mapping::frame>::const_iterator frame_it = this->frames.find(frame_id);
                     if (frame_it == this->frames.end()) {
                         continue;
                     }
                     const mapping::frame& frame = frame_it->second;
-                    const math::matrix<double, 2, 1> measured = { { static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].x), static_cast<double>(frame.keypoint_pyramid[0][static_cast<size_t>(kp_index)].y) } };
-                    const math::matrix<double, 3, 1> mapped = (frame.rotation * it->second.location) + frame.translation;
+                    const math::matrix<double, 2, 1> measured = obs.point;
+                    math::matrix<double, 3, 1> mapped;
+                    mapped = (frame.rotation * it->second.location) + frame.translation;
                     math::matrix<double, 2, 1> reprojected;
                     if (!frame.camera.project(mapped.data(), reprojected.data())) {
                         reprojection_error += 5.991f;
@@ -284,7 +361,7 @@ namespace mapping {
                 ++it;
             }
             const size_t landmarks_after_cull = this->landmarks.size();
-            core::logger::log(core::logger::level::info, "Culled: %zu points", landmarks_before_cull - landmarks_after_cull);
+            core::logger::log(core::logger::level::info, "Culled: %zu points (%zu scale-outliers)", landmarks_before_cull - landmarks_after_cull, outliers_culled);
         }
     };
 }

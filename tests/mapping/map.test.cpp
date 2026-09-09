@@ -16,12 +16,16 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "mapping/map.hpp"
 
+#include "math/lie.hpp"
+
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -42,6 +46,13 @@ int main(int argc, char* argv[]) {
 
         mapping::frame f;
         f.id = 1;
+        {
+            std::vector<feature::point> kps;
+            for (int k = 0; k < 6; ++k) {
+                kps.push_back(feature::point{ static_cast<float>(10 * k), static_cast<float>(10 * k + 1), 0.0f, 0.0f, 0 });
+            }
+            f.keypoints = kps;
+        }
         REQUIRE(m.frames.find(f.id) == m.frames.end());
         m.add_frame(f);
         auto itf = m.frames.find(f.id);
@@ -61,29 +72,41 @@ int main(int argc, char* argv[]) {
         auto ito = m.observations.find(p.id);
         REQUIRE(ito != m.observations.end());
         REQUIRE(ito->second.size() == 1);
-        REQUIRE(ito->second[0].first == f.id);
-        REQUIRE(ito->second[0].second == kp_index);
+        REQUIRE(ito->second[0].frame_id == f.id);
+        REQUIRE(ito->second[0].kp_index == kp_index);
+        REQUIRE(ito->second[0].point[0] == 30.0);
+        REQUIRE(ito->second[0].point[1] == 31.0);
 
         mapping::frame f2;
         f2.id = 2;
+        {
+            std::vector<feature::point> kps;
+            for (int k = 0; k < 6; ++k) {
+                kps.push_back(feature::point{ static_cast<float>(10 * k), static_cast<float>(10 * k + 1), 0.0f, 0.0f, 0 });
+            }
+            f2.keypoints = kps;
+        }
         m.add_frame(f2);
 
         const size_t kp_index2 = 5;
         m.add_observation(f2, p, kp_index2);
+        m.add_observation(99, p, 1.0, 2.0);
+        m.add_observation(98, p, 1.0, 2.0);
+        m.observations.at(p.id).resize(2);
 
         auto ito2 = m.observations.find(p.id);
         REQUIRE(ito2 != m.observations.end());
         REQUIRE(ito2->second.size() == 2);
-        REQUIRE(ito2->second[0].first == f.id);
-        REQUIRE(ito2->second[0].second == kp_index);
-        REQUIRE(ito2->second[1].first == f2.id);
-        REQUIRE(ito2->second[1].second == kp_index2);
+        REQUIRE(ito2->second[0].frame_id == f.id);
+        REQUIRE(ito2->second[0].kp_index == kp_index);
+        REQUIRE(ito2->second[1].frame_id == f2.id);
+        REQUIRE(ito2->second[1].kp_index == kp_index2);
+        REQUIRE(ito2->second[1].point[0] == 50.0);
+        REQUIRE(ito2->second[1].point[1] == 51.0);
 
         REQUIRE(m.frames.size() >= 2);
         REQUIRE(m.landmarks.find(p.id) != m.landmarks.end());
     }
-
-    // Edge cases: repeated add_frame / add_landmark with same id should overwrite existing entry.
     {
         mapping::map m;
         mapping::frame f;
@@ -105,16 +128,14 @@ int main(int argc, char* argv[]) {
         REQUIRE(m.landmarks.find(200) != m.landmarks.end());
         REQUIRE(m.landmarks.at(200).id == 200);
     }
-
-    // Verify optimise() runs safely even with trivial data.
     {
         mapping::map m;
         mapping::frame f1;
         f1.id = 0;
-        f1.keypoint_pyramid = { { { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f, 0 } } } };
+        f1.keypoints = { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f, 0 } };
         mapping::frame f2;
         f2.id = 1;
-        f2.keypoint_pyramid = { { { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f, 0 } } } };
+        f2.keypoints = { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f, 0 } };
         mapping::point l1;
         l1.id = 0;
         m.add_frame(f1);
@@ -124,13 +145,11 @@ int main(int argc, char* argv[]) {
         m.add_observation(f2, l1, 0);
         m.optimise(2, false, 3);
     }
-
-    // Verify cull() removes bad landmarks.
     {
         mapping::map m;
         mapping::frame f1;
         f1.id = 0;
-        f1.keypoint_pyramid = { { { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f, 0 } } } };
+        f1.keypoints = { feature::point{ 0.0f, 0.0f, 0.0f, 0.0f, 0 } };
         mapping::point l1;
         l1.id = 0;
         m.add_frame(f1);
@@ -141,8 +160,6 @@ int main(int argc, char* argv[]) {
         const size_t after = m.landmarks.size();
         REQUIRE(before > after);
     }
-
-    // Empty map can be optimised.
     {
         mapping::map m;
         REQUIRE(m.frames.empty());
@@ -150,8 +167,6 @@ int main(int argc, char* argv[]) {
         m.optimise(1, true, 50);
         REQUIRE(m.frames.empty());
     }
-
-    // A landmark with no observations will be culled.
     {
         mapping::map m;
         mapping::point p;
