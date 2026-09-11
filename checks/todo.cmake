@@ -56,7 +56,8 @@ FOREACH(SOURCE_FILE ${SOURCE_FILES})
     # Print a message for each found TODO comment.
     FOREACH(SOURCE_FILE_LINE ${SOURCE_FILE_LINES})
         STRING(STRIP ${SOURCE_FILE_LINE} SOURCE_FILE_LINE)
-        MESSAGE("CMake Error at ${CMAKE_SOURCE_DIR}/${SOURCE_FILE}:0 (MESSAGE): Found TODO: '${SOURCE_FILE_LINE}'.")
+        MESSAGE("CMake Warning at ${CMAKE_SOURCE_DIR}/${SOURCE_FILE}:0 (MESSAGE):")
+        MESSAGE(WARNING "Found TODO: '${SOURCE_FILE_LINE}'.")
         # Count up the error messages printed.
         MATH(EXPR TODOS_COMMENTS_FOUND "${TODOS_COMMENTS_FOUND}+1")
         # There can be more than one TODO per file, so early exit the internal loop if we are at the limit.
@@ -67,7 +68,7 @@ FOREACH(SOURCE_FILE ${SOURCE_FILES})
 
     # Limit the max number of errors printed.
     IF(${TODOS_COMMENTS_FOUND} GREATER ${TODOS_COMMENTS_MAX})
-        MESSAGE("CMake Error at ${CMAKE_CURRENT_LIST_FILE}:${CMAKE_CURRENT_LIST_LINE} (MESSAGE): Found more than ${TODOS_COMMENTS_MAX} TODO comments. Skipping printing.")
+        MESSAGE(WARNING "Found more than ${TODOS_COMMENTS_MAX} TODO comments. Skipping printing.")
         BREAK()
     ENDIF()
 ENDFOREACH()

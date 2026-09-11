@@ -60,8 +60,8 @@ FOREACH(SOURCE_FILE ${SOURCE_FILES})
         LIST(FILTER ANONYMOUS_NAMESPACE_LINES INCLUDE REGEX "^[ \t]*(inline[ \t]+)?namespace[ \t]*{")
         IF(ANONYMOUS_NAMESPACE_LINES)
             # TODO: Reported without failing the check for now.
-            MESSAGE("CMake Error at ${CMAKE_SOURCE_DIR}/${SOURCE_FILE}:0 (MESSAGE):")
-            MESSAGE(STATUS "Header '${SOURCE_FILE}' opens an anonymous namespace.")
+            MESSAGE("CMake Warning at ${CMAKE_SOURCE_DIR}/${SOURCE_FILE}:0 (MESSAGE):")
+            MESSAGE(WARNING "Header '${SOURCE_FILE}' opens an anonymous namespace.")
         ENDIF()
     ENDIF()
 
