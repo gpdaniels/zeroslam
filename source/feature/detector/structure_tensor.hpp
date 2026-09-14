@@ -15,25 +15,31 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef ZEROSLAM_FEATURE_POINT_HPP
-#define ZEROSLAM_FEATURE_POINT_HPP
+#ifndef ZEROSLAM_FEATURE_DETECTOR_STRUCTURE_TENSOR_HPP
+#define ZEROSLAM_FEATURE_DETECTOR_STRUCTURE_TENSOR_HPP
 
-#include "core/coordinates.hpp"
+#include "feature/point.hpp"
+#include "feature/score/structure_tensor.hpp"
 
 namespace {
     using size_t = decltype(sizeof(0));
 }
 
-namespace feature {
-    class point final {
+namespace feature::detector {
+    class structure_tensor final {
     public:
-        core::pixel_centre x;
-        core::pixel_centre y;
-        float response;
-        float angle;
-        int octave;
+        static size_t detect(
+            const unsigned char* __restrict const data,
+            const int width,
+            const int height,
+            const int stride,
+            const score::structure_tensor::measure kind,
+            const float sigma,
+            const float threshold,
+            const size_t feature_point_buffer_size,
+            point* __restrict feature_point_buffer
+        );
     };
-
 }
 
-#endif // ZEROSLAM_FEATURE_POINT_HPP
+#endif // ZEROSLAM_FEATURE_DETECTOR_STRUCTURE_TENSOR_HPP

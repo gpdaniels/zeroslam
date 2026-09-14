@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -92,6 +93,28 @@ int main(int argc, char* argv[]) {
             REQUIRE(feature::refiner::subpixel::refine(&data[data_height / 2 - 4][data_width / 2 - 4], data_width, offset_x, offset_y));
             REQUIRE(is_value_approx(offset_x, +4.0f, 1e-2));
             REQUIRE(is_value_approx(offset_y, +4.0f, 1e-2));
+        }
+    }
+
+    {
+        constexpr static const size_t data_width = 96;
+        constexpr static const size_t data_height = 96;
+        constexpr static const double centre_x = 48.3;
+        constexpr static const double centre_y = 47.8;
+        unsigned char data[data_height][data_width] = {};
+        for (size_t y = 0; y < data_height; ++y) {
+            for (size_t x = 0; x < data_width; ++x) {
+                const double coverage_x = std::min(1.0, std::max(0.0, centre_x - (static_cast<double>(x) - 0.5)));
+                const double coverage_y = std::min(1.0, std::max(0.0, centre_y - (static_cast<double>(y) - 0.5)));
+                data[y][x] = static_cast<unsigned char>(std::floor(255.0 * ((coverage_x * coverage_y) + ((1.0 - coverage_x) * (1.0 - coverage_y))) + 0.5));
+            }
+        }
+        for (size_t start = 46; start <= 50; ++start) {
+            float offset_x = 0;
+            float offset_y = 0;
+            REQUIRE(feature::refiner::subpixel::refine(&data[start][start], data_width, offset_x, offset_y));
+            REQUIRE(std::abs((static_cast<double>(start) + static_cast<double>(offset_x)) - centre_x) < 0.15);
+            REQUIRE(std::abs((static_cast<double>(start) + static_cast<double>(offset_y)) - centre_y) < 0.15);
         }
     }
 

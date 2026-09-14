@@ -25,17 +25,41 @@ namespace feature::refiner {
         float& offset_x,
         float& offset_y
     ) {
-        const int max_iterations = 10;
-        const int window_size = 5;
-        const float max_offset = 4.0f;
-        const float eps = 1e-6f;
+        constexpr static const int max_iterations = 10;
+        constexpr static const int window_size = 5;
+        constexpr static const float max_offset = 4.0f;
+        constexpr static const float eps = 1e-6f;
+
+        constexpr static const int samples_stride = 2 * window_size + 3;
 
         // Initialize offset.
         offset_x = 0.0f;
         offset_y = 0.0f;
 
+        float single_x = 0.0f;
+        float single_y = 0.0f;
+        bool single_accepted = false;
+
         // Iterative refinement.
         for (int iteration = 0; iteration < max_iterations; iteration++) {
+            const int integer_x = static_cast<int>(math::floor(static_cast<double>(offset_x)));
+            const int integer_y = static_cast<int>(math::floor(static_cast<double>(offset_y)));
+            const float fraction_x = offset_x - static_cast<float>(integer_x);
+            const float fraction_y = offset_y - static_cast<float>(integer_y);
+            const float w00 = (1.0f - fraction_x) * (1.0f - fraction_y);
+            const float w01 = fraction_x * (1.0f - fraction_y);
+            const float w10 = (1.0f - fraction_x) * fraction_y;
+            const float w11 = fraction_x * fraction_y;
+
+            float samples[samples_stride * samples_stride];
+            const unsigned char* __restrict const centre = data + integer_y * stride + integer_x;
+            for (int y = 0; y < samples_stride; ++y) {
+                for (int x = 0; x < samples_stride; ++x) {
+                    const unsigned char* __restrict const base = centre + (y - window_size - 1) * stride + (x - window_size - 1);
+                    samples[y * samples_stride + x] = static_cast<float>(base[0]) * w00 + static_cast<float>(base[1]) * w01 + static_cast<float>(base[stride]) * w10 + static_cast<float>(base[stride + 1]) * w11;
+                }
+            }
+
             float A11 = 0.0f;
             float A12 = 0.0f;
             float A22 = 0.0f;
@@ -44,11 +68,11 @@ namespace feature::refiner {
 
             for (int dy = -window_size; dy <= window_size; dy++) {
                 for (int dx = -window_size; dx <= window_size; dx++) {
-                    const unsigned char* ptr = data + dy * stride + dx;
+                    const float* __restrict const ptr = samples + (dy + window_size + 1) * samples_stride + (dx + window_size + 1);
 
                     // Calculate gradients
-                    const float gx = static_cast<float>(ptr[1] - ptr[-1]) * 0.5f;
-                    const float gy = static_cast<float>(ptr[stride] - ptr[-stride]) * 0.5f;
+                    const float gx = (ptr[1] - ptr[-1]) * 0.5f;
+                    const float gy = (ptr[samples_stride] - ptr[-samples_stride]) * 0.5f;
                     const float norm = gx * gx + gy * gy;
                     if (norm < eps) {
                         continue;
@@ -56,7 +80,6 @@ namespace feature::refiner {
 
                     // At the corner, edge normals should intersect
                     // The edge normal at point (dx,dy) is (gx,gy)
-                    // The line equation is: gx * (offset_x - dx) + gy * (offset_y - dy) = 0
                     // We want to find where most lines intersect.
 
                     A11 += gx * gx;
@@ -71,29 +94,36 @@ namespace feature::refiner {
             // Solve the 2x2 system
             const float det = A11 * A22 - A12 * A12;
             if (math::abs(det) < eps) {
-                return false;
+                break;
             }
 
             const float inv_det = 1.0f / det;
-            const float new_offset_x = (A22 * b1 - A12 * b2) * inv_det;
-            const float new_offset_y = (A11 * b2 - A12 * b1) * inv_det;
+            const float delta_x = (A22 * b1 - A12 * b2) * inv_det;
+            const float delta_y = (A11 * b2 - A12 * b1) * inv_det;
+
+            offset_x += delta_x;
+            offset_y += delta_y;
+
+            if (iteration == 0) {
+                single_x = offset_x;
+                single_y = offset_y;
+                single_accepted = (math::abs(offset_x) <= max_offset) && (math::abs(offset_y) <= max_offset);
+            }
+
+            // Note: The refined location must remain strictly interior to the measurement window, as gradient estimates at the window edge already sample pixels outside it.
+            if ((math::abs(offset_x) > max_offset) || (math::abs(offset_y) > max_offset)) {
+                break;
+            }
 
             // Check for convergence
-            const float diff_x = new_offset_x - offset_x;
-            const float diff_y = new_offset_y - offset_y;
-
-            offset_x = new_offset_x;
-            offset_y = new_offset_y;
-
-            if (diff_x * diff_x + diff_y * diff_y < eps) {
-                // Reject refinements that converge too far from the detected feature, these are unreliable extrapolations that can teleport the feature outside the safe image border.
-                // Note: The refined location must remain strictly interior to the measurement window, as gradient estimates at the window edge already sample pixels outside it.
-                return (math::abs(offset_x) <= max_offset) && (math::abs(offset_y) <= max_offset);
+            if (delta_x * delta_x + delta_y * delta_y < eps) {
+                return true;
             }
         }
 
-        // Failed to converge.
-        return false;
+        offset_x = single_x;
+        offset_y = single_y;
+        return single_accepted;
     }
 
     void subpixel::patch_41x41_bilinear(
