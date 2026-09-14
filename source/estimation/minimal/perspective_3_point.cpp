@@ -264,7 +264,11 @@ namespace estimation::minimal {
         const type ratio_a_sq_sin_sq_12 = ratio_a_sq * image_sin_sq_12;
         const type ratio_ab_sin_sq_12_2 = type(2.0) * ratio_ab * image_sin_sq_12;
 
-        const type k3_inv = type(1.0) / (ratio_b_sq_sin_sq_12 + ratio_b * image_cos_sq_02_minus_1);
+        const type k3_denominator = ratio_b_sq_sin_sq_12 + ratio_b * image_cos_sq_02_minus_1;
+        if (math::abs(k3_denominator) < type(1.0e-12)) {
+            return 0;
+        }
+        const type k3_inv = type(1.0) / k3_denominator;
         const type k2 = k3_inv * ((type(-1.0) + ratio_a) * image_cos_sq_02_minus_1 + ratio_ab_sin_sq_12_2 + ratio_b_sq_sin_sq_12 + ratio_b * term_m013);
         const type k1 = k3_inv * (ratio_a_sq_sin_sq_12 + ratio_ab_sin_sq_12_2 + ratio_a * term_m013 + (type(-1.0) + ratio_b) * image_cos_sq_01_minus_1);
         const type k0 = k3_inv * (ratio_a_sq_sin_sq_12 + ratio_a * image_cos_sq_01_minus_1);
@@ -326,9 +330,16 @@ namespace estimation::minimal {
             const bool should_switch_12 = math::abs(factor_p0) <= math::abs(factor_p1);
 
             if (should_switch_12) {
+                if (math::abs(factor_p1) < type(1.0e-12)) {
+                    continue;
+                }
                 const type weight_w0 = -factor_p0 / factor_p1;
                 const type weight_w1 = -factor_p2 / factor_p1;
-                const type coeff_ca = type(1.0) / (weight_w1 * weight_w1 - ratio_b);
+                const type coeff_ca_denominator = weight_w1 * weight_w1 - ratio_b;
+                if (math::abs(coeff_ca_denominator) < type(1.0e-12)) {
+                    continue;
+                }
+                const type coeff_ca = type(1.0) / coeff_ca_denominator;
                 const type coeff_cb = type(2.0) * (ratio_b * image_cos_12 - image_cos_02 * weight_w1 + weight_w0 * weight_w1) * coeff_ca;
                 const type coeff_cc = (weight_w0 * weight_w0 - type(2.0) * image_cos_02 * weight_w0 - ratio_b + type(1.0)) * coeff_ca;
                 type solution_taus[2];
@@ -388,7 +399,11 @@ namespace estimation::minimal {
             else {
                 const type weight_w0 = -factor_p1 / factor_p0;
                 const type weight_w1 = -factor_p2 / factor_p0;
-                const type coeff_ca = type(1.0) / (-ratio_a * weight_w1 * weight_w1 + type(2.0) * ratio_a * image_cos_12 * weight_w1 - ratio_a + type(1.0));
+                const type coeff_ca_denominator = -ratio_a * weight_w1 * weight_w1 + type(2.0) * ratio_a * image_cos_12 * weight_w1 - ratio_a + type(1.0);
+                if (math::abs(coeff_ca_denominator) < type(1.0e-12)) {
+                    continue;
+                }
+                const type coeff_ca = type(1.0) / coeff_ca_denominator;
                 const type coeff_cb = type(2.0) * (ratio_a * image_cos_12 * weight_w0 - image_cos_01 - ratio_a * weight_w0 * weight_w1) * coeff_ca;
                 const type coeff_cc = (type(1.0) - ratio_a * weight_w0 * weight_w0) * coeff_ca;
                 type solution_taus[2];

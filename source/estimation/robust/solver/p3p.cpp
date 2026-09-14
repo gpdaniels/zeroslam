@@ -35,7 +35,7 @@ namespace estimation::robust::solver {
         const size_t iterations_minimum = 5;
         const size_t iterations_maximum = 300;
 
-        const float threshold_angle_radians = 1.0e-3f;
+        const float threshold_angle_radians = 2.5e-3f;
         const float residual_threshold = static_cast<float>(1.0 - math::cos(static_cast<double>(threshold_angle_radians)));
 
         sample::random<3> sampler;

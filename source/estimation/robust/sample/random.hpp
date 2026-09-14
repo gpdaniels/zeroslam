@@ -51,19 +51,33 @@ namespace estimation::robust::sample {
             ASSERT(this->size > 0, "Data size must be greater than zero.");
             ASSERT(this->size >= sample_size, "Data size must be greater or equal to the sample size.");
             ASSERT(this->size <= 0xFFFFFFFFull, "Data size must fit the 32-bit draw.");
-            const unsigned int maximum_index = static_cast<unsigned int>(this->size - 1);
-            for (size_t i = 0; i < sample_size; ++i) {
-                bool unique = false;
-                while (!unique) {
-                    indices[i] = static_cast<size_t>(this->rng.get_random(0u, maximum_index));
-                    unique = true;
-                    for (size_t j = 0; j < i; ++j) {
-                        if (indices[j] == indices[i]) {
-                            unique = false;
-                            break;
-                        }
+            size_t moved_positions[sample_size] = {};
+            size_t moved_values[sample_size] = {};
+            size_t moved_count = 0;
+            const auto entry = [&moved_positions, &moved_values, &moved_count](const size_t position) -> size_t {
+                for (size_t m = 0; m < moved_count; ++m) {
+                    if (moved_positions[m] == position) {
+                        return moved_values[m];
                     }
                 }
+                return position;
+            };
+            for (size_t i = 0; i < sample_size; ++i) {
+                const size_t drawn = static_cast<size_t>(this->rng.get_random(static_cast<unsigned int>(i), static_cast<unsigned int>(this->size - 1)));
+                indices[i] = entry(drawn);
+                if ((drawn == i) || ((i + 1) == sample_size)) {
+                    continue;
+                }
+                const size_t swapped = entry(i);
+                size_t m = 0;
+                while ((m < moved_count) && (moved_positions[m] != drawn)) {
+                    ++m;
+                }
+                if (m == moved_count) {
+                    ++moved_count;
+                }
+                moved_positions[m] = drawn;
+                moved_values[m] = swapped;
             }
         }
     };
