@@ -48,6 +48,9 @@ FOREACH(PROJECT_FILE ${PROJECT_FILES})
         # Any other root file is not allowed.
         MESSAGE("CMake Error at ${CMAKE_SOURCE_DIR}/${PROJECT_FILE}:0 (MESSAGE):")
         MESSAGE(FATAL_ERROR "Found a file in the root directory that is not allowed: '${PROJECT_FILE}'.")
+    ELSEIF("${PROJECT_FILE}" MATCHES "^icons/[a-z]+[a-z_0-9]*[.](png|svg)$")
+        # Asset files, an image named like everything else.
+        CONTINUE()
     ELSEIF("${PROJECT_FILE}" MATCHES "^checks/[a-z]+[a-z_0-9]*[.]cmake$")
         # Check files.
         CONTINUE()

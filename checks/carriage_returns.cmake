@@ -29,6 +29,9 @@ INCLUDE("${CMAKE_SOURCE_DIR}/checks/project_files.cmake")
 # Find all project files.
 GET_PROJECT_FILES(PROJECT_FILES)
 
+# Skip the image assets.
+LIST(FILTER PROJECT_FILES EXCLUDE REGEX "^icons/")
+
 IF(CMAKE_HOST_WIN32)
     # Git converts line endings on checkout on windows, so every file would fail there.
     MESSAGE(STATUS "Skipping carriage returns check on windows host.")

@@ -29,6 +29,9 @@ INCLUDE("${CMAKE_SOURCE_DIR}/checks/project_files.cmake")
 # Find all project files.
 GET_PROJECT_FILES(PROJECT_FILES)
 
+# Skip the image assets.
+LIST(FILTER PROJECT_FILES EXCLUDE REGEX "^icons/")
+
 # Check each file for merge conflict markers.
 FOREACH(PROJECT_FILE ${PROJECT_FILES})
 
