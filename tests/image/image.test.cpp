@@ -221,5 +221,35 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    {
+        image::image source(10, 20);
+        for (size_t i = 0; i < 200; ++i) {
+            source.get_data()[i] = static_cast<unsigned char>(i);
+        }
+        image::image moved(static_cast<image::image&&>(source));
+        REQUIRE(moved.get_rows() == 10);
+        REQUIRE(moved.get_cols() == 20);
+        REQUIRE(moved.get_data()[199] == 199);
+        REQUIRE(source.get_rows() == 0);
+        REQUIRE(source.get_cols() == 0);
+        REQUIRE(source.get_data() == nullptr);
+        image::image copied(source);
+        REQUIRE(copied.get_rows() == 0);
+        REQUIRE(copied.get_cols() == 0);
+        image::image assigned(3, 3);
+        assigned = source;
+        REQUIRE(assigned.get_rows() == 0);
+        REQUIRE(assigned.get_data() == nullptr);
+        source = moved;
+        REQUIRE(source.get_rows() == 10);
+        REQUIRE(source.get_data()[199] == 199);
+        image::image target(2, 2);
+        target = static_cast<image::image&&>(moved);
+        REQUIRE(target.get_rows() == 10);
+        REQUIRE(moved.get_rows() == 2);
+        REQUIRE(moved.get_cols() == 2);
+        REQUIRE(moved.get_data() != nullptr);
+    }
+
     return EXIT_SUCCESS;
 }

@@ -68,6 +68,8 @@ namespace image {
             : rows(other.rows)
             , cols(other.cols)
             , data(other.data) {
+            other.rows = 0;
+            other.cols = 0;
             other.data = nullptr;
         }
 
