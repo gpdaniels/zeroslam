@@ -16,6 +16,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "feature/tracker/optical_flow.hpp"
 
+#include "core/coordinates.hpp"
+#include "core/thread_pool.hpp"
 #include "math/math.hpp"
 
 namespace feature::tracker {
@@ -50,6 +52,32 @@ namespace feature::tracker {
                (y + margin + 1.0f <= height - 1.0f);
     }
 
+    void optical_flow::sample_table(const float centre, const float flow, const float shift, const int half_window, int* __restrict const base, float* __restrict const weight) {
+        const int window_width = 2 * half_window + 1;
+        for (int i = 0; i < window_width; ++i) {
+            const float position = ((centre + static_cast<float>(i - half_window)) + flow) + shift;
+            base[i] = static_cast<int>(math::floor(static_cast<double>(position)));
+            weight[i] = position - static_cast<float>(base[i]);
+        }
+    }
+
+    void optical_flow::sample_window(const unsigned char* __restrict const data, const int width, const int* __restrict const base_x, const float* __restrict const weight_x, const int* __restrict const base_y, const float* __restrict const weight_y, const int half_window, float* __restrict const window) {
+        const int window_width = 2 * half_window + 1;
+        float* __restrict out = window;
+        for (int j = 0; j < window_width; ++j) {
+            const unsigned char* __restrict const row = data + static_cast<size_t>(base_y[j]) * static_cast<size_t>(width);
+            const unsigned char* __restrict const row_below = row + width;
+            const float row_weight = weight_y[j];
+            for (int i = 0; i < window_width; ++i) {
+                const int x = base_x[i];
+                const float top = static_cast<float>(row[x]) * (1.0f - weight_x[i]) + static_cast<float>(row[x + 1]) * weight_x[i];
+                const float bottom = static_cast<float>(row_below[x]) * (1.0f - weight_x[i]) + static_cast<float>(row_below[x + 1]) * weight_x[i];
+                out[i] = top * (1.0f - row_weight) + bottom * row_weight;
+            }
+            out += window_width;
+        }
+    }
+
     bool optical_flow::track_single(
         const image::pyramid& pyramid_previous,
         const image::pyramid& pyramid_next,
@@ -61,19 +89,19 @@ namespace feature::tracker {
         float max_error,
         float& result_x,
         float& result_y,
-        float& result_error
+        float& result_error,
+        float guess_x,
+        float guess_y,
+        bool damped_steps
     ) {
         half_window = math::max(1, math::min(half_window, maximum_half_window));
-
         result_x = seed_x;
         result_y = seed_y;
         result_error = max_error + 1.0f;
-
         const int levels = static_cast<int>(math::min(pyramid_previous.size(), pyramid_next.size()));
         if (levels < 1) {
             return false;
         }
-
         int start_level = -1;
         for (int level = levels - 1; level >= 0; --level) {
             const float scale = 1.0f / static_cast<float>(1 << level);
@@ -85,107 +113,128 @@ namespace feature::tracker {
         if (start_level < 0) {
             return false;
         }
-
         const int window_width = 2 * half_window + 1;
-        const double window_area = static_cast<double>(window_width) * static_cast<double>(window_width);
-
+        const int window_area = window_width * window_width;
+        const double window_area_as_double = static_cast<double>(window_area);
         float gradient_x[maximum_window_area];
         float gradient_y[maximum_window_area];
         float previous_value[maximum_window_area];
-
-        float flow_x = 0.0f;
-        float flow_y = 0.0f;
-
+        float next_value[maximum_window_area];
+        float flow_x = guess_x / static_cast<float>(1 << start_level);
+        float flow_y = guess_y / static_cast<float>(1 << start_level);
         for (int level = start_level; level >= 0; --level) {
             const image::image& previous = pyramid_previous[static_cast<size_t>(level)];
             const image::image& next = pyramid_next[static_cast<size_t>(level)];
             const float scale = 1.0f / static_cast<float>(1 << level);
             const float center_x = seed_x * scale;
             const float center_y = seed_y * scale;
-
             if (!optical_flow::window_in_bounds(previous, center_x, center_y, half_window)) {
                 return false;
             }
-
+            int base_x[3][maximum_window_width];
+            float weight_x[3][maximum_window_width];
+            int base_y[3][maximum_window_width];
+            float weight_y[3][maximum_window_width];
+            optical_flow::sample_table(center_x, 0.0f, 0.0f, half_window, base_x[0], weight_x[0]);
+            optical_flow::sample_table(center_x, 0.0f, 1.0f, half_window, base_x[1], weight_x[1]);
+            optical_flow::sample_table(center_x, 0.0f, -1.0f, half_window, base_x[2], weight_x[2]);
+            optical_flow::sample_table(center_y, 0.0f, 0.0f, half_window, base_y[0], weight_y[0]);
+            optical_flow::sample_table(center_y, 0.0f, 1.0f, half_window, base_y[1], weight_y[1]);
+            optical_flow::sample_table(center_y, 0.0f, -1.0f, half_window, base_y[2], weight_y[2]);
+            const unsigned char* __restrict const previous_data = previous.get_data();
+            const int previous_width = static_cast<int>(previous.get_cols());
+            optical_flow::sample_window(previous_data, previous_width, base_x[0], weight_x[0], base_y[0], weight_y[0], half_window, previous_value);
+            optical_flow::sample_window(previous_data, previous_width, base_x[1], weight_x[1], base_y[0], weight_y[0], half_window, gradient_x);
+            optical_flow::sample_window(previous_data, previous_width, base_x[2], weight_x[2], base_y[0], weight_y[0], half_window, next_value);
+            for (int index = 0; index < window_area; ++index) {
+                gradient_x[index] = 0.5f * (gradient_x[index] - next_value[index]);
+            }
+            optical_flow::sample_window(previous_data, previous_width, base_x[0], weight_x[0], base_y[1], weight_y[1], half_window, gradient_y);
+            optical_flow::sample_window(previous_data, previous_width, base_x[0], weight_x[0], base_y[2], weight_y[2], half_window, next_value);
             double structure_xx = 0.0;
             double structure_xy = 0.0;
             double structure_yy = 0.0;
-            int index = 0;
-            for (int offset_y = -half_window; offset_y <= half_window; ++offset_y) {
-                for (int offset_x = -half_window; offset_x <= half_window; ++offset_x) {
-                    const float sample_x = center_x + static_cast<float>(offset_x);
-                    const float sample_y = center_y + static_cast<float>(offset_y);
-                    const float derivative_x = 0.5f * (optical_flow::sample_bilinear(previous, sample_x + 1.0f, sample_y) - optical_flow::sample_bilinear(previous, sample_x - 1.0f, sample_y));
-                    const float derivative_y = 0.5f * (optical_flow::sample_bilinear(previous, sample_x, sample_y + 1.0f) - optical_flow::sample_bilinear(previous, sample_x, sample_y - 1.0f));
-                    gradient_x[index] = derivative_x;
-                    gradient_y[index] = derivative_y;
-                    previous_value[index] = optical_flow::sample_bilinear(previous, sample_x, sample_y);
-                    structure_xx += static_cast<double>(derivative_x) * static_cast<double>(derivative_x);
-                    structure_xy += static_cast<double>(derivative_x) * static_cast<double>(derivative_y);
-                    structure_yy += static_cast<double>(derivative_y) * static_cast<double>(derivative_y);
-                    ++index;
-                }
+            for (int index = 0; index < window_area; ++index) {
+                const float derivative_x = gradient_x[index];
+                const float derivative_y = 0.5f * (gradient_y[index] - next_value[index]);
+                gradient_y[index] = derivative_y;
+                structure_xx += static_cast<double>(derivative_x) * static_cast<double>(derivative_x);
+                structure_xy += static_cast<double>(derivative_x) * static_cast<double>(derivative_y);
+                structure_yy += static_cast<double>(derivative_y) * static_cast<double>(derivative_y);
             }
-
             const double determinant = structure_xx * structure_yy - structure_xy * structure_xy;
             const double trace = structure_xx + structure_yy;
             const double eigen_gap = math::sqrt(math::max(0.0, trace * trace - 4.0 * determinant));
             const double smaller_eigenvalue = 0.5 * (trace - eigen_gap);
-            if (!(determinant > 0.0) || (smaller_eigenvalue < min_eigenvalue * window_area)) {
+            if (!(determinant > 0.0) || (smaller_eigenvalue < min_eigenvalue * window_area_as_double)) {
                 return false;
             }
-
+            double previous_direction_x = 0.0;
+            double previous_direction_y = 0.0;
             for (int iteration = 0; iteration < max_iterations; ++iteration) {
                 if (!optical_flow::window_in_bounds(next, center_x + flow_x, center_y + flow_y, half_window)) {
                     return false;
                 }
+                optical_flow::sample_table(center_x, flow_x, 0.0f, half_window, base_x[0], weight_x[0]);
+                optical_flow::sample_table(center_y, flow_y, 0.0f, half_window, base_y[0], weight_y[0]);
+                optical_flow::sample_window(next.get_data(), static_cast<int>(next.get_cols()), base_x[0], weight_x[0], base_y[0], weight_y[0], half_window, next_value);
                 double mismatch_x = 0.0;
                 double mismatch_y = 0.0;
-                index = 0;
-                for (int offset_y = -half_window; offset_y <= half_window; ++offset_y) {
-                    for (int offset_x = -half_window; offset_x <= half_window; ++offset_x) {
-                        const float sample_x = center_x + static_cast<float>(offset_x);
-                        const float sample_y = center_y + static_cast<float>(offset_y);
-                        const float difference = previous_value[index] - optical_flow::sample_bilinear(next, sample_x + flow_x, sample_y + flow_y);
-                        mismatch_x += static_cast<double>(difference) * static_cast<double>(gradient_x[index]);
-                        mismatch_y += static_cast<double>(difference) * static_cast<double>(gradient_y[index]);
-                        ++index;
-                    }
+                for (int index = 0; index < window_area; ++index) {
+                    const float difference = previous_value[index] - next_value[index];
+                    mismatch_x += static_cast<double>(difference) * static_cast<double>(gradient_x[index]);
+                    mismatch_y += static_cast<double>(difference) * static_cast<double>(gradient_y[index]);
                 }
                 const double step_x = (structure_yy * mismatch_x - structure_xy * mismatch_y) / determinant;
                 const double step_y = (structure_xx * mismatch_y - structure_xy * mismatch_x) / determinant;
-                flow_x += static_cast<float>(step_x);
-                flow_y += static_cast<float>(step_y);
-                if ((step_x * step_x + step_y * step_y) < (0.03 * 0.03)) {
+                double applied_x = step_x;
+                double applied_y = step_y;
+                if (damped_steps) {
+                    const double step_length = math::sqrt((step_x * step_x) + (step_y * step_y));
+                    if (step_length > 0.03) {
+                        const double direction_x = step_x / step_length;
+                        const double direction_y = step_y / step_length;
+                        if (((direction_x * previous_direction_x) + (direction_y * previous_direction_y)) < -0.5) {
+                            applied_x = 0.5 * step_x;
+                            applied_y = 0.5 * step_y;
+                        }
+                        previous_direction_x = direction_x;
+                        previous_direction_y = direction_y;
+                    }
+                }
+                flow_x += static_cast<float>(applied_x);
+                flow_y += static_cast<float>(applied_y);
+                if (((applied_x * applied_x) + (applied_y * applied_y)) < (0.03 * 0.03)) {
                     break;
                 }
             }
-
             if (level > 0) {
                 flow_x *= 2.0f;
                 flow_y *= 2.0f;
             }
         }
-
         result_x = seed_x + flow_x;
         result_y = seed_y + flow_y;
-
         const image::image& previous_full = pyramid_previous[0];
         const image::image& next_full = pyramid_next[0];
         if (!optical_flow::window_in_bounds(next_full, result_x, result_y, half_window)) {
             return false;
         }
+        int base_x[maximum_window_width];
+        float weight_x[maximum_window_width];
+        int base_y[maximum_window_width];
+        float weight_y[maximum_window_width];
+        optical_flow::sample_table(seed_x, 0.0f, 0.0f, half_window, base_x, weight_x);
+        optical_flow::sample_table(seed_y, 0.0f, 0.0f, half_window, base_y, weight_y);
+        optical_flow::sample_window(previous_full.get_data(), static_cast<int>(previous_full.get_cols()), base_x, weight_x, base_y, weight_y, half_window, previous_value);
+        optical_flow::sample_table(result_x, 0.0f, 0.0f, half_window, base_x, weight_x);
+        optical_flow::sample_table(result_y, 0.0f, 0.0f, half_window, base_y, weight_y);
+        optical_flow::sample_window(next_full.get_data(), static_cast<int>(next_full.get_cols()), base_x, weight_x, base_y, weight_y, half_window, next_value);
         double error_sum = 0.0;
-        int error_count = 0;
-        for (int offset_y = -half_window; offset_y <= half_window; ++offset_y) {
-            for (int offset_x = -half_window; offset_x <= half_window; ++offset_x) {
-                const float previous_sample = optical_flow::sample_bilinear(previous_full, seed_x + static_cast<float>(offset_x), seed_y + static_cast<float>(offset_y));
-                const float next_sample = optical_flow::sample_bilinear(next_full, result_x + static_cast<float>(offset_x), result_y + static_cast<float>(offset_y));
-                error_sum += math::abs(static_cast<double>(previous_sample) - static_cast<double>(next_sample));
-                ++error_count;
-            }
+        for (int index = 0; index < window_area; ++index) {
+            error_sum += math::abs(static_cast<double>(previous_value[index]) - static_cast<double>(next_value[index]));
         }
-        result_error = static_cast<float>(error_sum / static_cast<double>(error_count));
+        result_error = static_cast<float>(error_sum / window_area_as_double);
         return result_error <= max_error;
     }
 
@@ -201,7 +250,10 @@ namespace feature::tracker {
         float min_eigenvalue,
         float max_error,
         bool forward_backward,
-        float fb_threshold
+        float fb_threshold,
+        const float* guess_x,
+        const float* guess_y,
+        bool damped_steps
     ) {
         half_window = math::max(1, math::min(half_window, maximum_half_window));
         if (max_iterations < 1) {
@@ -209,40 +261,35 @@ namespace feature::tracker {
         }
         const double min_eigenvalue_as_double = static_cast<double>(min_eigenvalue);
 
-        for (size_t point = 0; point < count; ++point) {
-            const float seed_x = points_x[point];
-            const float seed_y = points_y[point];
-
+        core::thread_pool::instance().parallel_for(count, 16, [&](const size_t point) {
+            const float seed_x = core::to_pixel_index_position(points_x[point]);
+            const float seed_y = core::to_pixel_index_position(points_y[point]);
             float forward_x = seed_x;
             float forward_y = seed_y;
             float forward_error = max_error + 1.0f;
-            const bool forward_ok = optical_flow::track_single(pyramid_previous, pyramid_next, seed_x, seed_y, half_window, max_iterations, min_eigenvalue_as_double, max_error, forward_x, forward_y, forward_error);
-
-            results_out[point].x = forward_x;
-            results_out[point].y = forward_y;
+            const bool forward_ok = optical_flow::track_single(pyramid_previous, pyramid_next, seed_x, seed_y, half_window, max_iterations, min_eigenvalue_as_double, max_error, forward_x, forward_y, forward_error, (guess_x != nullptr) ? guess_x[point] : 0.0f, (guess_y != nullptr) ? guess_y[point] : 0.0f, damped_steps);
+            results_out[point].x = core::to_pixel_centre(forward_x);
+            results_out[point].y = core::to_pixel_centre(forward_y);
             results_out[point].error = forward_error;
             results_out[point].tracked = false;
-
             if (!forward_ok) {
-                continue;
+                return;
             }
-
             if (forward_backward) {
                 float backward_x = forward_x;
                 float backward_y = forward_y;
                 float backward_error = max_error + 1.0f;
-                const bool backward_ok = optical_flow::track_single(pyramid_next, pyramid_previous, forward_x, forward_y, half_window, max_iterations, min_eigenvalue_as_double, max_error, backward_x, backward_y, backward_error);
+                const bool backward_ok = optical_flow::track_single(pyramid_next, pyramid_previous, forward_x, forward_y, half_window, max_iterations, min_eigenvalue_as_double, max_error, backward_x, backward_y, backward_error, seed_x - forward_x, seed_y - forward_y, damped_steps);
                 if (!backward_ok) {
-                    continue;
+                    return;
                 }
                 const float delta_x = backward_x - seed_x;
                 const float delta_y = backward_y - seed_y;
                 if ((delta_x * delta_x + delta_y * delta_y) > (fb_threshold * fb_threshold)) {
-                    continue;
+                    return;
                 }
             }
-
             results_out[point].tracked = true;
-        }
+        });
     }
 }

@@ -95,9 +95,71 @@ static inline void occlude(image::image& img, int cx, int cy, int radius) {
     }
 }
 
+static void test_association(const feature::tracker::tracker::association_kind association, const double tolerance) {
+    constexpr static const size_t dimension = 200;
+    constexpr static const int shift_x = 2;
+    constexpr static const int shift_y = 1;
+    constexpr static const int base_x[12] = { 50, 80, 110, 140, 50, 80, 110, 140, 50, 80, 110, 140 };
+    constexpr static const int base_y[12] = { 50, 50, 50, 50, 90, 90, 90, 90, 130, 130, 130, 130 };
+    constexpr static const size_t point_count = 12;
+    constexpr static const int frame_count = 6;
+    constexpr static const size_t occluded = 5;
+    constexpr static const int occluded_frame = 3;
+
+    feature::tracker::tracker::options opts;
+    opts.association = association;
+    feature::tracker::tracker manager(opts);
+    int point_ids[point_count];
+    for (int k = 0; k < frame_count; ++k) {
+        image::image image_k = make_frame(dimension, k, shift_x, shift_y);
+        const bool omit = (k == occluded_frame);
+        if (omit) {
+            occlude(image_k, base_x[occluded] + k * shift_x, base_y[occluded] + k * shift_y, 8);
+        }
+        std::vector<feature::point> keypoints;
+        std::vector<feature::descriptor::binary<256>> descriptors;
+        for (size_t p = 0; p < point_count; ++p) {
+            if (omit && (p == occluded)) {
+                continue;
+            }
+            const int x = base_x[p] + k * shift_x;
+            const int y = base_y[p] + k * shift_y;
+            keypoints.push_back(feature::point{ static_cast<float>(x), static_cast<float>(y), 0.0f, 0.0f, 0 });
+            descriptors.push_back(describe_at(image_k, x, y));
+        }
+        manager.update(k, image::pyramid(image_k), keypoints, descriptors);
+        if (k == 0) {
+            REQUIRE(manager.tracks().size() == point_count);
+            for (size_t p = 0; p < point_count; ++p) {
+                point_ids[p] = manager.tracks()[p].id;
+            }
+            continue;
+        }
+        for (size_t p = 0; p < point_count; ++p) {
+            feature::tracker::tracker::track* const followed = manager.find(point_ids[p]);
+            REQUIRE(followed != nullptr);
+            if (omit && (p == occluded)) {
+                REQUIRE(!followed->active || (association == feature::tracker::tracker::association_kind::optical_flow));
+                continue;
+            }
+            REQUIRE(followed->active);
+            REQUIRE(std::abs(static_cast<double>(followed->x) - static_cast<double>(base_x[p] + k * shift_x)) < tolerance);
+            REQUIRE(std::abs(static_cast<double>(followed->y) - static_cast<double>(base_y[p] + k * shift_y)) < tolerance);
+        }
+    }
+    REQUIRE(manager.tracks().size() == point_count);
+    for (size_t p = 0; p < point_count; ++p) {
+        REQUIRE(manager.find(point_ids[p])->length >= frame_count - 1);
+    }
+}
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
+
+    test_association(feature::tracker::tracker::association_kind::optical_flow, 1.5);
+    test_association(feature::tracker::tracker::association_kind::descriptor, 0.01);
+    test_association(feature::tracker::tracker::association_kind::both, 1.5);
 
     constexpr static const size_t dimension = 200;
     constexpr static const int shift_x = 2;
@@ -525,6 +587,147 @@ int main(int argc, char* argv[]) {
         REQUIRE(recovered != nullptr);
         REQUIRE(!recovered->active);
         REQUIRE(manager.tracks().size() == 1);
+    }
+
+    {
+        const image::image image0 = make_frame(dimension, 0, shift_x, shift_y);
+        const feature::descriptor::binary<256> descriptor = describe_at(image0, 60, 60);
+
+        const auto seed = [&descriptor](feature::tracker::tracker& manager, const float x, const float y, const int length) {
+            const feature::point detection{ x, y, 0.0f, 0.0f, 0 };
+            feature::tracker::tracker::track& created = manager.spawn(0, detection, descriptor);
+            created.length = length;
+            return created.id;
+        };
+
+        {
+            feature::tracker::tracker manager{ feature::tracker::tracker::options() };
+            static_cast<void>(seed(manager, 60.0f, 60.0f, 1));
+            static_cast<void>(seed(manager, 61.0f, 60.0f, 1));
+            manager.prune_collisions();
+            REQUIRE(manager.tracks().size() == 1);
+        }
+        {
+            feature::tracker::tracker::options settings;
+            settings.collision_distance = 0.0f;
+            feature::tracker::tracker manager{ settings };
+            static_cast<void>(seed(manager, 60.0f, 60.0f, 1));
+            static_cast<void>(seed(manager, 61.0f, 60.0f, 1));
+            manager.prune_collisions();
+            REQUIRE(manager.tracks().size() == 2);
+        }
+
+        feature::tracker::tracker::options opts;
+        opts.collision_distance = 4.0f;
+
+        {
+            feature::tracker::tracker manager(opts);
+            const int first = seed(manager, 60.0f, 60.0f, 3);
+            const int second = seed(manager, 61.5f, 60.5f, 3);
+            manager.prune_collisions();
+            REQUIRE(manager.tracks().size() == 1);
+            REQUIRE(manager.find(first) != nullptr);
+            REQUIRE(manager.find(second) == nullptr);
+        }
+
+        {
+            feature::tracker::tracker manager(opts);
+            const int shorter = seed(manager, 60.0f, 60.0f, 2);
+            const int longer = seed(manager, 61.5f, 60.5f, 9);
+            manager.prune_collisions();
+            REQUIRE(manager.tracks().size() == 1);
+            REQUIRE(manager.find(longer) != nullptr);
+            REQUIRE(manager.find(shorter) == nullptr);
+        }
+
+        {
+            feature::tracker::tracker manager(opts);
+            const int first = seed(manager, 60.0f, 60.0f, 3);
+            const int second = seed(manager, 68.0f, 60.0f, 3);
+            manager.prune_collisions();
+            REQUIRE(manager.tracks().size() == 2);
+            REQUIRE(manager.find(first) != nullptr);
+            REQUIRE(manager.find(second) != nullptr);
+        }
+
+        {
+            feature::tracker::tracker manager(opts);
+            const int first = seed(manager, 60.0f, 60.0f, 3);
+            const int second = seed(manager, 61.0f, 61.0f, 3);
+            const int third = seed(manager, 90.0f, 60.0f, 3);
+            const int fourth = seed(manager, 60.0f, 95.0f, 3);
+            manager.prune_collisions();
+            REQUIRE(manager.tracks().size() == 3);
+            REQUIRE(manager.find(first) != nullptr);
+            REQUIRE(manager.find(second) == nullptr);
+            REQUIRE(manager.find(third) != nullptr);
+            REQUIRE(manager.find(fourth) != nullptr);
+        }
+
+        {
+            feature::tracker::tracker manager(opts);
+            const int first = seed(manager, 60.0f, 60.0f, 3);
+            const int second = seed(manager, 61.0f, 60.0f, 3);
+            manager.find(second)->active = false;
+            manager.prune_collisions();
+            REQUIRE(manager.tracks().size() == 2);
+            REQUIRE(manager.find(first) != nullptr);
+            REQUIRE(manager.find(second) != nullptr);
+        }
+    }
+
+    {
+        constexpr static const int base_x[4] = { 60, 90, 120, 80 };
+        constexpr static const int base_y[4] = { 60, 70, 100, 120 };
+        constexpr static const size_t point_count = 4;
+        constexpr static const int frame_count = 8;
+
+        const auto run = [&](const feature::tracker::patch_flow::model_kind model, const float refresh) {
+            feature::tracker::tracker::options opts;
+            opts.association = feature::tracker::tracker::association_kind::optical_flow;
+            opts.anchored_patches = true;
+            opts.anchor_model = model;
+            opts.anchor_refresh_error = refresh;
+            feature::tracker::tracker manager(opts);
+            int point_ids[point_count] = { -1, -1, -1, -1 };
+            for (int k = 0; k < frame_count; ++k) {
+                const image::image frame = make_frame(dimension, k, shift_x, shift_y);
+                std::vector<feature::point> keypoints;
+                std::vector<feature::descriptor::binary<256>> descriptors;
+                for (size_t p = 0; (k == 0) && (p < point_count); ++p) {
+                    const int x = base_x[p] + k * shift_x;
+                    const int y = base_y[p] + k * shift_y;
+                    keypoints.push_back(feature::point{ static_cast<float>(x), static_cast<float>(y), 0.0f, 0.0f, 0 });
+                    descriptors.push_back(describe_at(frame, x, y));
+                }
+                manager.update(k, image::pyramid(frame), keypoints, descriptors);
+                if (k == 0) {
+                    REQUIRE(manager.tracks().size() == point_count);
+                    for (size_t p = 0; p < point_count; ++p) {
+                        point_ids[p] = manager.tracks()[p].id;
+                        REQUIRE(manager.tracks()[p].anchored != nullptr);
+                        REQUIRE(manager.tracks()[p].anchored->anchor.levels > 0);
+                    }
+                }
+            }
+            for (size_t p = 0; p < point_count; ++p) {
+                feature::tracker::tracker::track* const followed = manager.find(point_ids[p]);
+                REQUIRE(followed != nullptr);
+                REQUIRE(followed->active);
+                REQUIRE(followed->length == frame_count);
+                const double expected_x = static_cast<double>(base_x[p] + (frame_count - 1) * shift_x);
+                const double expected_y = static_cast<double>(base_y[p] + (frame_count - 1) * shift_y);
+                REQUIRE(std::abs(static_cast<double>(followed->x) - expected_x) < 0.5);
+                REQUIRE(std::abs(static_cast<double>(followed->y) - expected_y) < 0.5);
+            }
+            REQUIRE(manager.tracks().size() == point_count);
+        };
+
+        run(feature::tracker::patch_flow::model_kind::translation, 0.0f);
+        run(feature::tracker::patch_flow::model_kind::affine, 0.0f);
+        run(feature::tracker::patch_flow::model_kind::translation_illumination, 0.0f);
+        run(feature::tracker::patch_flow::model_kind::affine_illumination, 0.0f);
+        run(feature::tracker::patch_flow::model_kind::translation, 1.0f);
     }
 
     return EXIT_SUCCESS;

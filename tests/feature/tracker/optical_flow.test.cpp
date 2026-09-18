@@ -242,5 +242,41 @@ int main(int argc, char* argv[]) {
         REQUIRE(gated[1].tracked == true);
     }
 
+    {
+        const float shift_x = 1.5f;
+        const float shift_y = -0.75f;
+        const image::image previous = make_image(dimension, dimension, texture);
+        const image::image next = make_image(dimension, dimension, [=](double x, double y) {
+            return texture(x - static_cast<double>(shift_x), y - static_cast<double>(shift_y));
+        });
+        const image::pyramid pyramid_previous(previous);
+        const image::pyramid pyramid_next(next);
+
+        constexpr static const size_t count = 5;
+        const float points_x[count] = { 50.0f, 70.0f, 90.0f, 60.0f, 100.0f };
+        const float points_y[count] = { 50.0f, 60.0f, 80.0f, 100.0f, 55.0f };
+
+        feature::tracker::optical_flow::result plain[count];
+        feature::tracker::optical_flow::track(pyramid_previous, pyramid_next, points_x, points_y, count, plain, 7, 30, 1e-3f, 10000.0f, true, 1.0f, nullptr, nullptr, false);
+        feature::tracker::optical_flow::result damped[count];
+        feature::tracker::optical_flow::track(pyramid_previous, pyramid_next, points_x, points_y, count, damped, 7, 30, 1e-3f, 10000.0f, true, 1.0f, nullptr, nullptr, true);
+
+        for (size_t i = 0; i < count; ++i) {
+            REQUIRE(damped[i].tracked);
+            REQUIRE(plain[i].tracked);
+            REQUIRE(std::abs(static_cast<double>(damped[i].x - points_x[i]) - static_cast<double>(shift_x)) < 0.3);
+            REQUIRE(std::abs(static_cast<double>(damped[i].y - points_y[i]) - static_cast<double>(shift_y)) < 0.3);
+            REQUIRE(std::abs(static_cast<double>(damped[i].x - plain[i].x)) < 0.3);
+            REQUIRE(std::abs(static_cast<double>(damped[i].y - plain[i].y)) < 0.3);
+        }
+
+        feature::tracker::optical_flow::result repeated[count];
+        feature::tracker::optical_flow::track(pyramid_previous, pyramid_next, points_x, points_y, count, repeated, 7, 30, 1e-3f, 10000.0f, true, 1.0f, nullptr, nullptr, true);
+        for (size_t i = 0; i < count; ++i) {
+            REQUIRE(repeated[i].x == damped[i].x);
+            REQUIRE(repeated[i].y == damped[i].y);
+        }
+    }
+
     return EXIT_SUCCESS;
 }
