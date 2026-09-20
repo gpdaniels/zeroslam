@@ -190,8 +190,8 @@ namespace optimisation {
         void set_information(const math::matrix<double, 0, 0>& information_value);
         const loss& get_loss() const;
         void set_loss(const loss& robust_loss_value);
-        void robust_info(double& rho_delta, math::matrix<double, 0, 0>& robust_information) const;
-        math::matrix<double, 2, 2> robust_info_2x2(double& rho_delta, bool apply_triggs_correction = true) const;
+        void robust_info(double& rho_delta, math::matrix<double, 0, 0>& robust_information, bool apply_triggs_correction = true) const;
+        double robust_weight() const;
         const math::matrix<double, 0, 0>& get_observation() const;
         void set_observation(const math::matrix<double, 0, 0>& observation_value);
 

@@ -202,6 +202,7 @@ namespace {
                 error = "size mismatch, expected " + std::to_string(expected_size) + " bytes, downloaded " + std::to_string(actual_size);
                 continue;
             }
+            std::remove(local.c_str());
             if (std::rename(part.c_str(), local.c_str()) != 0) {
                 error = "failed to move the downloaded file into place";
                 break;
@@ -212,37 +213,16 @@ namespace {
         return false;
     }
 
-    bool file_load_all(const std::string& path, std::vector<unsigned char>& data) {
-        gtl::file handle(path.c_str(), gtl::file::access_type::read_only, gtl::file::creation_type::open_only, gtl::file::cursor_type::start_of_file);
-        if (!handle.is_open()) {
+    bool load_scene(const std::string& path, mcap& reader, dataset::mcap_scene_information& scene, std::string& error, const bool decode_every_image = true) {
+        if (!reader.open(path, error)) {
+            error = "cannot open '" + path + "': " + error;
             return false;
         }
-        gtl::file::size_type size = 0;
-        if (!handle.get_size(size) || size == 0) {
-            return false;
-        }
-        data.resize(static_cast<std::size_t>(size));
-        gtl::file::size_type length = size;
-        const bool read = handle.read(reinterpret_cast<char*>(&data[0]), length);
-        return read && (length == size);
-    }
-
-    bool file_save_all(const std::string& path, const unsigned char* data, const std::size_t length) {
-        gtl::file handle(path.c_str(), gtl::file::access_type::write_only, gtl::file::creation_type::create_or_open, gtl::file::cursor_type::start_of_truncated);
-        if (!handle.is_open()) {
-            return false;
-        }
-        gtl::file::size_type write_length = length;
-        const bool written = handle.write(reinterpret_cast<const char*>(data), write_length);
-        return written && (write_length == length);
+        return dataset::inspect_mcap_scene(reader, scene, error, decode_every_image);
     }
 
     // Whether a camera info holds exactly the pinhole projection of its own intrinsics, with
     // no rectification (R identity, P == [K|0]): the values may change frame to frame, but
-    // never depart from an unrectified pinhole model. 'd' (the distortion coefficients) is
-    // not constrained here: empty means the frames are already undistorted, a populated
-    // radial-tangential vector (k1, k2, p1, p2) means they are the sensor's raw, distorted
-    // frames and 'd' is exactly what a consumer needs to undistort them.
     bool is_valid_pinhole_calibration(const cdr::camera_info& information, const unsigned int width, const unsigned int height) {
         double k[9] = {};
         k[0] = information.k[0];
@@ -262,8 +242,15 @@ namespace {
         p[10] = 1.0;
         bool calibrated = (information.k[0] > 0.0) && (information.k[4] > 0.0);
         calibrated = calibrated && (information.width == width) && (information.height == height);
-        calibrated = calibrated && (information.distortion_model == "plumb_bob");
-        calibrated = calibrated && (information.d.empty() || (information.d.size() == 4));
+        if (information.distortion_model == "plumb_bob") {
+            calibrated = calibrated && (information.d.empty() || (information.d.size() == 4) || (information.d.size() == 5));
+        }
+        else if (information.distortion_model == "rational_polynomial") {
+            calibrated = calibrated && (information.d.size() == 8);
+        }
+        else {
+            calibrated = false;
+        }
         for (int i = 0; i < 9; ++i) {
             calibrated = calibrated && (information.k[i] == k[i]) && (information.r[i] == r[i]);
         }
@@ -275,12 +262,13 @@ namespace {
         return calibrated;
     }
 
+    bool marks_absent(const double covariance[9]) {
+        return covariance[0] == -1.0;
+    }
+
     // Check that a scene mcap holds exactly what the directory form represents, so a round
     // trip through expand and collapse reproduces the file: every camera holds one
     // calibration per frame logged at the frame times and holding exactly the pinhole
-    // projection of its intrinsics, every sensor (camera or imu) has consistent frame ids and
-    // an exact log time, the ground truth frame tree is root -> ego -> sensor/[name] with one
-    // extrinsic per message for every sensor, and nothing else.
     bool check_scene_round_trip(const dataset::mcap_scene_information& scene, const bool require_transforms, std::string& error) {
         if (scene.cameras.empty()) {
             error = "the scene has no camera";
@@ -300,7 +288,10 @@ namespace {
             }
             return false;
         }
-        // Every recognised sensor name, cameras first then imus, parallel to
+        if (!scene.dynamics_log_times_consistent) {
+            error = "a /tf message log time does not match its own header timestamp";
+            return false;
+        }
         // 'sensor_edge_log_times' below.
         std::vector<std::string> sensor_names;
         for (const dataset::camera_information& camera : scene.cameras) {
@@ -308,8 +299,8 @@ namespace {
                 error = "an image topic gives the camera no name";
                 return false;
             }
-            if (!dataset::is_valid_sensor_name(camera.camera_name, "image")) {
-                error = "the camera name '" + camera.camera_name + "' is not 'image_01' to 'image_99'";
+            if (!dataset::is_valid_sensor_name(camera.camera_name, "image") && !dataset::is_valid_sensor_name(camera.camera_name, "depth")) {
+                error = "the camera name '" + camera.camera_name + "' is not 'image_01' to 'image_99' or 'depth_01' to 'depth_99'";
                 return false;
             }
             if (camera.image_topic != ("/sensor/" + camera.camera_name)) {
@@ -346,11 +337,12 @@ namespace {
         }
         for (const dataset::imu_information& imu : scene.imus) {
             if (imu.imu_name.empty()) {
-                error = "an imu topic gives the imu no name";
+                error = "an imu topic gives the sensor no name";
                 return false;
             }
-            if (!dataset::is_valid_sensor_name(imu.imu_name, "imu")) {
-                error = "the imu name '" + imu.imu_name + "' is not 'imu_01' to 'imu_99'";
+            const dataset::inertial_type type = dataset::inertial_type_of(imu.imu_name);
+            if (type == dataset::inertial_type::unknown) {
+                error = "the inertial sensor name '" + imu.imu_name + "' is not 'imu_01' to 'imu_99', 'accelerometer_01' to 'accelerometer_99', or 'gyroscope_01' to 'gyroscope_99'";
                 return false;
             }
             if (imu.imu_topic != ("/sensor/" + imu.imu_name)) {
@@ -364,6 +356,16 @@ namespace {
             if (!imu.log_times_consistent) {
                 error = "an '" + imu.imu_name + "' message log time does not match its own header timestamp";
                 return false;
+            }
+            for (const cdr::imu& sample : imu.imu_data) {
+                if (marks_absent(sample.angular_velocity_covariance) == dataset::measures_angular_velocity(type)) {
+                    error = "'" + imu.imu_name + "' " + (dataset::measures_angular_velocity(type) ? "lacks the angular velocity its kind measures" : "carries an angular velocity its kind does not measure");
+                    return false;
+                }
+                if (marks_absent(sample.linear_acceleration_covariance) == dataset::measures_linear_acceleration(type)) {
+                    error = "'" + imu.imu_name + "' " + (dataset::measures_linear_acceleration(type) ? "lacks the linear acceleration its kind measures" : "carries a linear acceleration its kind does not measure");
+                    return false;
+                }
             }
             sensor_names.push_back(imu.imu_name);
         }
@@ -432,19 +434,10 @@ namespace {
     bool validate_scene(const std::string& path) {
         std::printf("Validating '%s'...\n", path.c_str());
         std::fflush(stdout);
-        std::vector<unsigned char> file;
-        if (!file_load_all(path, file)) {
-            std::fprintf(stderr, "Invalid scene: file not found: %s\n", path.c_str());
-            return false;
-        }
         mcap reader;
-        std::string error;
-        if (!reader.parse(file.data(), file.size(), error)) {
-            std::fprintf(stderr, "Invalid scene: %s: %s.\n", path.c_str(), error.c_str());
-            return false;
-        }
         dataset::mcap_scene_information scene;
-        if (!dataset::inspect_mcap_scene(reader, scene, error)) {
+        std::string error;
+        if (!load_scene(path, reader, scene, error)) {
             std::fprintf(stderr, "Invalid scene: %s: %s.\n", path.c_str(), error.c_str());
             return false;
         }
@@ -485,6 +478,7 @@ namespace {
             }
             edge_last_timestamps[edge] = stamp;
         }
+        const dataset::camera_information& primary = scene.primary();
         for (const dataset::camera_information& camera : scene.cameras) {
             if (camera.frames < 2) {
                 std::fprintf(stderr, "Invalid scene: camera '%s' has fewer than two frames.\n", camera.camera_name.c_str());
@@ -494,14 +488,29 @@ namespace {
                 std::fprintf(stderr, "Invalid scene: camera '%s' has no usable intrinsics.\n", camera.camera_name.c_str());
                 return false;
             }
-            if (camera.frames != scene.frames) {
-                std::fprintf(stderr, "Invalid scene: camera '%s' has %zu frames, camera '%s' has %zu; every camera must share the same frame count.\n", camera.camera_name.c_str(), camera.frames, scene.camera_name.c_str(), scene.frames);
+            if (camera.frames != primary.frames) {
+                std::fprintf(stderr, "Invalid scene: camera '%s' has %zu frames, camera '%s' has %zu; every camera must share the same frame count.\n", camera.camera_name.c_str(), camera.frames, primary.camera_name.c_str(), primary.frames);
                 return false;
             }
         }
-        if (scene.poses != scene.frames) {
-            std::fprintf(stderr, "Invalid scene: %zu root -> ego transforms for %zu frames.\n", scene.poses, scene.frames);
+        if ((scene.poses != 0) && (scene.poses != primary.frames)) {
+            std::fprintf(stderr, "Invalid scene: %zu root -> ego transforms for %zu frames, a ground truth must cover every frame or be absent.\n", scene.poses, primary.frames);
             return false;
+        }
+        {
+            const std::string primary_child = "sensor/" + primary.camera_name;
+            for (const cdr::transform_stamped& transform : scene.dynamics) {
+                if ((transform.frame_header.frame_id != "ego") || (transform.child_frame_id != primary_child)) {
+                    continue;
+                }
+                const bool identity =
+                    (transform.translation[0] == 0.0) && (transform.translation[1] == 0.0) && (transform.translation[2] == 0.0) &&
+                    (transform.rotation[0] == 0.0) && (transform.rotation[1] == 0.0) && (transform.rotation[2] == 0.0) && (transform.rotation[3] == 1.0);
+                if (!identity) {
+                    std::fprintf(stderr, "Invalid scene: the primary camera '%s' is not the ego frame, its ego -> %s extrinsic is not the identity; re-import the scene so the ground truth is the primary camera's pose.\n", primary.camera_name.c_str(), primary_child.c_str());
+                    return false;
+                }
+            }
         }
         if (!check_scene_round_trip(scene, true, error)) {
             std::fprintf(stderr, "Invalid scene: %s.\n", error.c_str());
@@ -513,15 +522,24 @@ namespace {
             std::printf("    camera:       %s (%s [%.10g %.10g %.10g %.10g]", camera.camera_name.c_str(), model, camera.fx, camera.fy, camera.cx, camera.cy);
             if (distorted) {
                 const std::vector<double>& d = camera.camera_infos_data.front().d;
-                std::printf(", d [%.10g %.10g %.10g %.10g]", d[0], d[1], d[2], d[3]);
+                std::printf(", d [");
+                for (std::size_t index = 0; index < d.size(); ++index) {
+                    std::printf("%s%.10g", (index == 0) ? "" : " ", d[index]);
+                }
+                std::printf("]");
             }
-            std::printf(")%s, %zu mono8 frames of %ux%u\n", distorted ? ", raw distorted frames" : "", camera.frames, camera.width, camera.height);
+            std::printf(")%s, %zu %s frames of %ux%u\n", distorted ? ", raw distorted frames" : "", camera.frames, camera.encoding.c_str(), camera.width, camera.height);
         }
         for (const dataset::imu_information& imu : scene.imus) {
             std::printf("    imu:          %s, %zu samples\n", imu.imu_name.c_str(), imu.samples);
         }
         std::printf("    frame tree:   root -> ego -> sensor/[name] (%zu transforms on /tf)\n", scene.dynamics.size());
-        std::printf("    ground truth: %zu root -> ego transforms, matching the frames\n", scene.poses);
+        if (scene.poses == 0) {
+            std::printf("    ground truth: none, this scene cannot be benchmarked against\n");
+        }
+        else {
+            std::printf("    ground truth: %zu root -> ego transforms, matching the frames\n", scene.poses);
+        }
         return true;
     }
 
@@ -536,22 +554,41 @@ namespace {
         return edges;
     }
 
-    // Expand a scene mcap into the directory form mirroring the topics: pgm frames and a
-    // calibration file per camera, a data file per imu, and the ground truth trajectory.
-    int expand_scene(const std::string& input_path, const std::string& output_directory) {
-        std::vector<unsigned char> file;
-        if (!file_load_all(input_path, file)) {
-            std::fprintf(stderr, "Cannot read: %s\n", input_path.c_str());
-            return EXIT_FAILURE;
-        }
+    int trajectory_scene(const std::string& input_path, const std::string& output_path) {
         mcap reader;
+        dataset::mcap_scene_information scene;
         std::string error;
-        if (!reader.parse(file.data(), file.size(), error)) {
+        if (!load_scene(input_path, reader, scene, error, false)) {
             std::fprintf(stderr, "Invalid scene: %s.\n", error.c_str());
             return EXIT_FAILURE;
         }
+        std::size_t poses = 0;
+        if (!dataset::write_trajectory(scene, output_path, poses)) {
+            std::fprintf(stderr, "Failed to write the ground truth: %s\n", output_path.c_str());
+            return EXIT_FAILURE;
+        }
+        if (poses == 0) {
+            std::fprintf(stderr, "The scene has no root -> ego ground truth transforms.\n");
+            return EXIT_FAILURE;
+        }
+        std::printf("Wrote %zu ground truth poses to '%s'.\n", poses, output_path.c_str());
+        return EXIT_SUCCESS;
+    }
+
+    void sensor_extrinsic(const std::vector<const cdr::transform_stamped*>& edges, const std::size_t index, double extrinsic[7]) {
+        const double identity[7] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 };
+        std::copy(&identity[0], &identity[0] + 7, extrinsic);
+        if (!edges.empty()) {
+            std::copy(&edges[index]->translation[0], &edges[index]->translation[0] + 3, extrinsic);
+            std::copy(&edges[index]->rotation[0], &edges[index]->rotation[0] + 4, extrinsic + 3);
+        }
+    }
+
+    int expand_scene(const std::string& input_path, const std::string& output_directory) {
+        mcap reader;
         dataset::mcap_scene_information scene;
-        if (!dataset::inspect_mcap_scene(reader, scene, error)) {
+        std::string error;
+        if (!load_scene(input_path, reader, scene, error)) {
             std::fprintf(stderr, "Invalid scene: %s.\n", error.c_str());
             return EXIT_FAILURE;
         }
@@ -559,101 +596,43 @@ namespace {
             std::fprintf(stderr, "Invalid scene: %s.\n", error.c_str());
             return EXIT_FAILURE;
         }
+        if (gtl::paths::exists(output_directory)) {
+            std::fprintf(stderr, "The output '%s' already exists; remove it or expand into a new directory.\n", output_directory.c_str());
+            return EXIT_FAILURE;
+        }
         if (!gtl::directory::make_directories(output_directory + "/sensor")) {
             std::fprintf(stderr, "Failed to create: %s\n", (output_directory + "/sensor").c_str());
             return EXIT_FAILURE;
         }
         // One calibration file per camera, one line per frame: the frame timestamp as
-        // seconds.subseconds, the TUM format extrinsic posing the camera on the body, then
-        // the camera model and its intrinsics.
-        std::size_t frame_index = 0;
+        std::size_t frames = 0;
         for (const dataset::camera_information& camera : scene.cameras) {
-            if (!gtl::directory::make_directories(output_directory + "/sensor/" + camera.camera_name)) {
-                std::fprintf(stderr, "Failed to create: %s\n", (output_directory + "/sensor/" + camera.camera_name).c_str());
+            const std::string frames_directory = output_directory + "/sensor/" + camera.camera_name;
+            if (!gtl::directory::make_directories(frames_directory)) {
+                std::fprintf(stderr, "Failed to create: %s\n", frames_directory.c_str());
                 return EXIT_FAILURE;
             }
             const std::vector<const cdr::transform_stamped*> camera_edges = find_sensor_edges(scene, camera.camera_name);
-            gtl::file handle((output_directory + "/sensor/" + camera.camera_name + ".txt").c_str(), gtl::file::access_type::write_only, gtl::file::creation_type::create_only, gtl::file::cursor_type::start_of_truncated);
+            gtl::file handle((frames_directory + ".txt").c_str(), gtl::file::access_type::write_only, gtl::file::creation_type::create_only, gtl::file::cursor_type::start_of_truncated);
             if (!handle.is_open()) {
-                std::fprintf(stderr, "Failed to write the calibration for '%s'.\n", camera.camera_name.c_str());
+                std::fprintf(stderr, "Failed to create: %s.txt\n", frames_directory.c_str());
                 return EXIT_FAILURE;
             }
-            char buffer[512];
             for (std::size_t i = 0; i < camera.frames; ++i) {
-                double extrinsic[7] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 };
-                if (!camera_edges.empty()) {
-                    for (int axis = 0; axis < 3; ++axis) {
-                        extrinsic[axis] = camera_edges[i]->translation[axis];
-                    }
-                    for (int axis = 0; axis < 4; ++axis) {
-                        extrinsic[3 + axis] = camera_edges[i]->rotation[axis];
-                    }
-                }
                 const cdr::camera_info& information = camera.camera_infos_data[i];
-                const cdr::time& stamp = information.frame_header.stamp;
-                int length = std::snprintf(buffer, sizeof(buffer), "%d.%09u %.17g %.17g %.17g %.17g %.17g %.17g %.17g %s %.17g %.17g %.17g %.17g", stamp.sec, stamp.nanosec, extrinsic[0], extrinsic[1], extrinsic[2], extrinsic[3], extrinsic[4], extrinsic[5], extrinsic[6], information.distortion_model.c_str(), information.k[0], information.k[4], information.k[2], information.k[5]);
-                // A non-empty 'd' means these are the sensor's raw, distorted frames: the
-                // coefficients follow the intrinsics so the directory form still holds
-                // everything needed to undistort them.
-                for (std::size_t d = 0; d < information.d.size(); ++d) {
-                    length += std::snprintf(buffer + length, sizeof(buffer) - static_cast<std::size_t>(length), " %.17g", information.d[d]);
+                double extrinsic[7];
+                sensor_extrinsic(camera_edges, i, extrinsic);
+                const double intrinsics[4] = { information.k[0], information.k[4], information.k[2], information.k[5] };
+                std::string line;
+                bool formatted = dataset::format_sample_line(line, information.frame_header.stamp.nanoseconds(), &extrinsic[0], 7);
+                line += " " + information.distortion_model;
+                formatted = formatted && dataset::append_values(line, &intrinsics[0], 4) && dataset::append_values(line, information.d.data(), information.d.size());
+                line += '\n';
+                if (!formatted || !dataset::write_line(handle, line.c_str())) {
+                    std::fprintf(stderr, "Failed to write the calibration for '%s'.\n", camera.camera_name.c_str());
+                    return EXIT_FAILURE;
                 }
-                std::snprintf(buffer + length, sizeof(buffer) - static_cast<std::size_t>(length), "\n");
-                ++length;
-                gtl::file::size_type write_length = static_cast<gtl::file::size_type>(length);
-                handle.write(buffer, write_length);
             }
-        }
-        // One data file per imu, one line per sample: the sample timestamp as
-        // seconds.subseconds, the extrinsic posing the imu on the body, then the angular
-        // velocity and linear acceleration.
-        for (const dataset::imu_information& imu : scene.imus) {
-            const std::vector<const cdr::transform_stamped*> imu_edges = find_sensor_edges(scene, imu.imu_name);
-            gtl::file handle((output_directory + "/sensor/" + imu.imu_name + ".txt").c_str(), gtl::file::access_type::write_only, gtl::file::creation_type::create_only, gtl::file::cursor_type::start_of_truncated);
-            if (!handle.is_open()) {
-                std::fprintf(stderr, "Failed to write the data for '%s'.\n", imu.imu_name.c_str());
-                return EXIT_FAILURE;
-            }
-            char buffer[512];
-            for (std::size_t i = 0; i < imu.samples; ++i) {
-                double extrinsic[7] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 };
-                if (!imu_edges.empty()) {
-                    for (int axis = 0; axis < 3; ++axis) {
-                        extrinsic[axis] = imu_edges[i]->translation[axis];
-                    }
-                    for (int axis = 0; axis < 4; ++axis) {
-                        extrinsic[3 + axis] = imu_edges[i]->rotation[axis];
-                    }
-                }
-                const cdr::imu& sample = imu.imu_data[i];
-                const cdr::time& stamp = sample.frame_header.stamp;
-                const int length = std::snprintf(buffer, sizeof(buffer), "%d.%09u %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g\n", stamp.sec, stamp.nanosec, extrinsic[0], extrinsic[1], extrinsic[2], extrinsic[3], extrinsic[4], extrinsic[5], extrinsic[6], sample.angular_velocity[0], sample.angular_velocity[1], sample.angular_velocity[2], sample.linear_acceleration[0], sample.linear_acceleration[1], sample.linear_acceleration[2]);
-                gtl::file::size_type write_length = static_cast<gtl::file::size_type>(length);
-                handle.write(buffer, write_length);
-            }
-        }
-        // The ground truth: the root -> ego transforms written as lines of timestamp (as
-        // seconds.subseconds) then TUM format pose.
-        std::size_t poses = 0;
-        {
-            gtl::file trajectory_handle((output_directory + "/trajectory.txt").c_str(), gtl::file::access_type::write_only, gtl::file::creation_type::create_only, gtl::file::cursor_type::start_of_truncated);
-            if (!trajectory_handle.is_open()) {
-                std::fprintf(stderr, "Failed to write the ground truth.\n");
-                return EXIT_FAILURE;
-            }
-            char buffer[512];
-            for (const cdr::transform_stamped& transform : scene.dynamics) {
-                if ((transform.frame_header.frame_id != "root") || (transform.child_frame_id != "ego")) {
-                    continue;
-                }
-                const int length = std::snprintf(buffer, sizeof(buffer), "%d.%09u %.17g %.17g %.17g %.17g %.17g %.17g %.17g\n", transform.frame_header.stamp.sec, transform.frame_header.stamp.nanosec, transform.translation[0], transform.translation[1], transform.translation[2], transform.rotation[0], transform.rotation[1], transform.rotation[2], transform.rotation[3]);
-                gtl::file::size_type write_length = static_cast<gtl::file::size_type>(length);
-                trajectory_handle.write(buffer, write_length);
-                ++poses;
-            }
-        }
-        // The frames, one directory per camera.
-        for (const dataset::camera_information& camera : scene.cameras) {
             const mcap::channel_type* image_channel = nullptr;
             for (const mcap::channel_type& channel : reader.get_channels()) {
                 if (channel.topic == camera.image_topic) {
@@ -661,43 +640,66 @@ namespace {
                     break;
                 }
             }
-            if (image_channel == nullptr) {
-                continue;
-            }
             std::size_t camera_frame_index = 0;
-            for (const mcap::message_type& message : reader.get_messages()) {
-                if (message.channel_id != image_channel->id) {
+            const std::vector<mcap::message_index_type>& message_index = reader.get_message_index();
+            for (std::size_t index = 0; index < message_index.size(); ++index) {
+                if ((image_channel == nullptr) || (message_index[index].channel_id != image_channel->id)) {
                     continue;
                 }
+                mcap::message_type message;
                 cdr::image image;
-                if (!cdr::read_image(message.data, message.length, image)) {
+                dataset::pnm_format format = dataset::pnm_format::pgm8;
+                if (!reader.read_message(index, message) || !cdr::read_image(message.data, message.length, image) || !dataset::pnm_format_of_encoding(image.encoding, format)) {
                     std::fprintf(stderr, "Image %zu of '%s' does not decode.\n", camera_frame_index, camera.camera_name.c_str());
                     return EXIT_FAILURE;
                 }
-                const std::string name = dataset::frame_filename(camera.image_log_times[camera_frame_index]);
-                if (!dataset::write_pgm(output_directory + "/sensor/" + camera.camera_name + "/" + name, image.width, image.height, image.data.data())) {
+                const std::string path = frames_directory + "/" + dataset::frame_filename(camera.image_log_times[camera_frame_index]);
+                if (!dataset::write_pnm(path, format, image.width, image.height, image.data.data())) {
                     std::fprintf(stderr, "Failed to write frame %zu of '%s'.\n", camera_frame_index, camera.camera_name.c_str());
                     return EXIT_FAILURE;
                 }
                 ++camera_frame_index;
-                ++frame_index;
+                ++frames;
             }
         }
         std::size_t imu_samples = 0;
         for (const dataset::imu_information& imu : scene.imus) {
+            const dataset::inertial_type type = dataset::inertial_type_of(imu.imu_name);
+            const std::vector<const cdr::transform_stamped*> imu_edges = find_sensor_edges(scene, imu.imu_name);
+            gtl::file handle((output_directory + "/sensor/" + imu.imu_name + ".txt").c_str(), gtl::file::access_type::write_only, gtl::file::creation_type::create_only, gtl::file::cursor_type::start_of_truncated);
+            if (!handle.is_open()) {
+                std::fprintf(stderr, "Failed to create: %s/sensor/%s.txt\n", output_directory.c_str(), imu.imu_name.c_str());
+                return EXIT_FAILURE;
+            }
+            std::vector<double> values;
+            for (std::size_t i = 0; i < imu.samples; ++i) {
+                const cdr::imu& sample = imu.imu_data[i];
+                double extrinsic[7];
+                sensor_extrinsic(imu_edges, i, extrinsic);
+                values.assign(&extrinsic[0], &extrinsic[0] + 7);
+                if (dataset::measures_angular_velocity(type)) {
+                    values.insert(values.end(), &sample.angular_velocity[0], &sample.angular_velocity[0] + 3);
+                }
+                if (dataset::measures_linear_acceleration(type)) {
+                    values.insert(values.end(), &sample.linear_acceleration[0], &sample.linear_acceleration[0] + 3);
+                }
+                if (!dataset::write_sample_line(handle, sample.frame_header.stamp.nanoseconds(), values.data(), values.size())) {
+                    std::fprintf(stderr, "Failed to write the data for '%s'.\n", imu.imu_name.c_str());
+                    return EXIT_FAILURE;
+                }
+            }
             imu_samples += imu.samples;
         }
-        std::printf("Expanded %zu frames, %zu imu samples, and %zu poses into %s.\n", frame_index, imu_samples, poses, output_directory.c_str());
+        std::size_t poses = 0;
+        if ((scene.poses > 0) && !dataset::write_trajectory(scene, output_directory + "/trajectory.txt", poses)) {
+            std::fprintf(stderr, "Failed to write the ground truth.\n");
+            return EXIT_FAILURE;
+        }
+        std::printf("Expanded %zu frames, %zu imu samples, and %zu poses into %s.\n", frames, imu_samples, poses, output_directory.c_str());
         return EXIT_SUCCESS;
     }
 
-    // Collapse a scene directory (pgm frames, calibration, trajectory) into
-    // one lz4 compressed scene mcap.
     // One parsed line of a camera's calibration file: a seconds.subseconds timestamp, the
-    // TUM format extrinsic posing the camera in the rig frame, its
-    // pinhole intrinsics, and, only when the pgm frames are the sensor's raw (still
-    // distorted) frames rather than already undistorted ones, its radial-tangential
-    // distortion coefficients.
     struct calibration_line {
         long long timestamp_nanoseconds = 0;
         double extrinsic[7] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 };
@@ -706,8 +708,6 @@ namespace {
         std::string model_name;
     };
 
-    // One parsed line of an imu's data file: a seconds.subseconds timestamp, the extrinsic
-    // posing the imu in the rig frame, angular velocity, and linear acceleration.
     struct imu_line {
         long long timestamp_nanoseconds = 0;
         double extrinsic[7] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 };
@@ -721,30 +721,18 @@ namespace {
     }
 
     bool read_calibration_file(const std::string& path, std::vector<calibration_line>& lines, std::string& error) {
-        gtl::file file(path.c_str(), gtl::file::access_type::read_only);
-        if (!file.is_open()) {
+        std::string text;
+        if (!dataset::read_text_file(path, text)) {
             error = "cannot read '" + path + "'";
             return false;
         }
-        gtl::file::size_type size = 0;
-        if (!file.get_size(size) || (size == 0)) {
-            error = "cannot read '" + path + "'";
-            return false;
-        }
-        const gtl::file::size_type expected_size = size;
-        std::vector<char> buffer(static_cast<std::size_t>(size) + 1);
-        if (!file.read(&buffer[0], size) || (size != expected_size)) {
-            error = "cannot read '" + path + "'";
-            return false;
-        }
-        buffer[static_cast<std::size_t>(expected_size)] = '\0';
-        for (char* line = &buffer[0]; line != nullptr;) {
+        for (char* line = &text[0]; line != nullptr;) {
             char* end = std::strchr(line, '\n');
             if (end != nullptr) {
                 *end = '\0';
             }
             calibration_line entry;
-            char model[16] = {};
+            char model[64] = {};
             int offset = 0;
             char* timestamp_end = line;
             while ((*timestamp_end != '\0') && (*timestamp_end != ' ') && (*timestamp_end != '\t')) {
@@ -754,21 +742,14 @@ namespace {
             *timestamp_end = '\0';
             const bool timestamp_ok = dataset::parse_timestamp_nanoseconds(line, entry.timestamp_nanoseconds);
             *timestamp_end = saved_character;
-            const int matched = timestamp_ok ? std::sscanf(timestamp_end, "%lf %lf %lf %lf %lf %lf %lf %15s %lf %lf %lf %lf %n", &entry.extrinsic[0], &entry.extrinsic[1], &entry.extrinsic[2], &entry.extrinsic[3], &entry.extrinsic[4], &entry.extrinsic[5], &entry.extrinsic[6], &model[0], &entry.parameters[0], &entry.parameters[1], &entry.parameters[2], &entry.parameters[3], &offset) : 0;
+            const int matched = timestamp_ok ? std::sscanf(timestamp_end, "%lf %lf %lf %lf %lf %lf %lf %63s %lf %lf %lf %lf %n", &entry.extrinsic[0], &entry.extrinsic[1], &entry.extrinsic[2], &entry.extrinsic[3], &entry.extrinsic[4], &entry.extrinsic[5], &entry.extrinsic[6], &model[0], &entry.parameters[0], &entry.parameters[1], &entry.parameters[2], &entry.parameters[3], &offset) : 0;
             if (matched != 12) {
                 line = (end != nullptr) ? (end + 1) : nullptr;
                 continue;
             }
             entry.model_name = &model[0];
-            // Parse any remaining doubles on the line as distortion coefficients.
             const char* cursor = timestamp_end + offset;
             while (*cursor != '\0') {
-                while (*cursor == ' ') {
-                    ++cursor;
-                }
-                if (*cursor == '\0') {
-                    break;
-                }
                 char* float_end = nullptr;
                 const double value = std::strtod(cursor, &float_end);
                 if (float_end == cursor) {
@@ -787,58 +768,50 @@ namespace {
         return true;
     }
 
-    bool read_imu_file(const std::string& path, std::vector<imu_line>& lines, std::string& error) {
-        gtl::file file(path.c_str(), gtl::file::access_type::read_only);
-        if (!file.is_open()) {
+    bool read_imu_file(const std::string& path, const dataset::inertial_type type, std::vector<imu_line>& lines, std::string& error) {
+        std::string text;
+        if (!dataset::read_text_file(path, text)) {
             error = "cannot read '" + path + "'";
             return false;
         }
-        gtl::file::size_type size = 0;
-        if (!file.get_size(size) || (size == 0)) {
-            error = "cannot read '" + path + "'";
-            return false;
-        }
-        const gtl::file::size_type expected_size = size;
-        std::vector<char> buffer(static_cast<std::size_t>(size) + 1);
-        if (!file.read(&buffer[0], size) || (size != expected_size)) {
-            error = "cannot read '" + path + "'";
-            return false;
-        }
-        buffer[static_cast<std::size_t>(expected_size)] = '\0';
-        for (char* line = &buffer[0]; line != nullptr;) {
+        const std::size_t expected = 7u + (dataset::measures_angular_velocity(type) ? 3u : 0u) + (dataset::measures_linear_acceleration(type) ? 3u : 0u);
+        std::vector<double> values;
+        std::size_t line_number = 0;
+        for (char* line = &text[0]; line != nullptr;) {
+            ++line_number;
             char* end = std::strchr(line, '\n');
             if (end != nullptr) {
                 *end = '\0';
             }
             imu_line entry;
-            char* timestamp_end = line;
-            while ((*timestamp_end != '\0') && (*timestamp_end != ' ') && (*timestamp_end != '\t')) {
-                ++timestamp_end;
+            if (dataset::parse_sample_line(line, entry.timestamp_nanoseconds, values)) {
+                if (values.size() != expected) {
+                    error = "line " + std::to_string(line_number) + " of '" + path + "' has " + std::to_string(values.size()) + " values, its kind's form has " + std::to_string(expected);
+                    return false;
+                }
+                std::copy(values.begin(), values.begin() + 7, &entry.extrinsic[0]);
+                if (!is_unit_quaternion(&entry.extrinsic[3])) {
+                    error = "an extrinsic quaternion in '" + path + "' is not unit length";
+                    return false;
+                }
+                std::size_t next = 7;
+                if (dataset::measures_angular_velocity(type)) {
+                    std::copy(values.begin() + static_cast<std::ptrdiff_t>(next), values.begin() + static_cast<std::ptrdiff_t>(next + 3), &entry.angular_velocity[0]);
+                    next += 3;
+                }
+                if (dataset::measures_linear_acceleration(type)) {
+                    std::copy(values.begin() + static_cast<std::ptrdiff_t>(next), values.begin() + static_cast<std::ptrdiff_t>(next + 3), &entry.linear_acceleration[0]);
+                }
+                lines.push_back(entry);
             }
-            const char saved_character = *timestamp_end;
-            *timestamp_end = '\0';
-            const bool timestamp_ok = dataset::parse_timestamp_nanoseconds(line, entry.timestamp_nanoseconds);
-            *timestamp_end = saved_character;
-            if (!timestamp_ok || (std::sscanf(timestamp_end, "%lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf", &entry.extrinsic[0], &entry.extrinsic[1], &entry.extrinsic[2], &entry.extrinsic[3], &entry.extrinsic[4], &entry.extrinsic[5], &entry.extrinsic[6], &entry.angular_velocity[0], &entry.angular_velocity[1], &entry.angular_velocity[2], &entry.linear_acceleration[0], &entry.linear_acceleration[1], &entry.linear_acceleration[2]) != 13)) {
-                line = (end != nullptr) ? (end + 1) : nullptr;
-                continue;
-            }
-            if (!is_unit_quaternion(&entry.extrinsic[3])) {
-                error = "an extrinsic quaternion in '" + path + "' is not unit length";
-                return false;
-            }
-            lines.push_back(entry);
             line = (end != nullptr) ? (end + 1) : nullptr;
         }
         return true;
     }
 
-    // Collapse a scene directory (pgm frames, calibration, imu data, trajectory) into one
-    // lz4 compressed scene mcap.
+    // one lz4 compressed scene mcap.
     int collapse_scene(const std::string& input_directory, const std::string& output_path) {
         // Discover every sensor: a sensor/[name]/ frame directory paired with a
-        // sensor/[name].txt calibration file is a camera; a lone sensor/[name].txt file
-        // (no paired directory, since it has no frames of its own) is an imu.
         std::vector<std::string> camera_names;
         std::vector<std::string> imu_names;
         {
@@ -852,11 +825,11 @@ namespace {
                 if (gtl::paths::is_directory(input_directory + "/sensor/" + name)) {
                     camera_names.push_back(name);
                 }
-                else if (dataset::is_valid_sensor_name(name, "imu")) {
+                else if (dataset::inertial_type_of(name) != dataset::inertial_type::unknown) {
                     imu_names.push_back(name);
                 }
                 else {
-                    std::fprintf(stderr, "Invalid scene directory: 'sensor/%s.txt' has no paired frame directory and is not a valid 'imu_01' to 'imu_99' name.\n", name.c_str());
+                    std::fprintf(stderr, "Invalid scene directory: 'sensor/%s.txt' has no paired frame directory and is not a valid 'imu_01' to 'imu_99', 'accelerometer_01' to 'accelerometer_99', or 'gyroscope_01' to 'gyroscope_99' name.\n", name.c_str());
                     return EXIT_FAILURE;
                 }
             }
@@ -865,13 +838,35 @@ namespace {
                 return EXIT_FAILURE;
             }
             // Sorted so 'image_01' always precedes 'image_02', keeping the primary camera
-            // first in the mcap regardless of filesystem iteration order.
-            std::sort(camera_names.begin(), camera_names.end());
+            std::sort(camera_names.begin(), camera_names.end(), [](const std::string& left, const std::string& right) {
+                const auto camera_priority = [](const std::string& name) -> int {
+                    if (name.rfind("image_", 0) == 0) {
+                        return 0;
+                    }
+                    if (name.rfind("depth_", 0) == 0) {
+                        return 1;
+                    }
+                    return 2;
+                };
+                const int left_priority = camera_priority(left);
+                const int right_priority = camera_priority(right);
+                if (left_priority != right_priority) {
+                    return left_priority < right_priority;
+                }
+                return left < right;
+            });
             std::sort(imu_names.begin(), imu_names.end());
         }
 
+        const std::string parent = gtl::paths::path_parent_directory(output_path);
+        if (!parent.empty()) {
+            gtl::directory::make_directories(parent);
+        }
         mcap::writer writer;
-        writer.begin("ros2", "zeroslam-dataset", "lz4");
+        if (!writer.begin(output_path, "ros2", "zeroslam-dataset", "lz4")) {
+            std::fprintf(stderr, "Failed to create: %s\n", output_path.c_str());
+            return EXIT_FAILURE;
+        }
         const unsigned short image_schema = writer.add_schema("sensor_msgs/msg/Image", "ros2msg", cdr::image_schema());
         const unsigned short info_schema = writer.add_schema("sensor_msgs/msg/CameraInfo", "ros2msg", cdr::camera_info_schema());
         const unsigned short tf_schema = writer.add_schema("tf2_msgs/msg/TFMessage", "ros2msg", cdr::tf_message_schema());
@@ -907,40 +902,33 @@ namespace {
             unsigned int height = 0;
             for (std::size_t i = 0; i < lines.size(); ++i) {
                 const std::string frame_path = frames_directory + "/" + dataset::frame_filename(static_cast<unsigned long long>(lines[i].timestamp_nanoseconds));
-                unsigned int frame_width = 0;
-                unsigned int frame_height = 0;
-                std::vector<unsigned char> pixels;
-                if (!dataset::read_pgm(frame_path, frame_width, frame_height, pixels)) {
-                    std::fprintf(stderr, "Invalid scene directory: '%s' is not a binary 8 bit pgm (referenced by calibration line %zu).\n", frame_path.c_str(), i);
+                cdr::image image;
+                dataset::pnm_format format = dataset::pnm_format::pgm8;
+                if (!dataset::read_pnm(frame_path, format, image.width, image.height, image.data)) {
+                    std::fprintf(stderr, "Invalid scene directory: '%s' is not a readable pnm (referenced by calibration line %zu).\n", frame_path.c_str(), i);
                     return EXIT_FAILURE;
                 }
                 if (i == 0) {
-                    width = frame_width;
-                    height = frame_height;
+                    width = image.width;
+                    height = image.height;
                 }
-                else if ((frame_width != width) || (frame_height != height)) {
+                else if ((image.width != width) || (image.height != height)) {
                     std::fprintf(stderr, "Invalid scene directory: the frame dimensions change at frame %zu of '%s'.\n", i, camera_name.c_str());
                     return EXIT_FAILURE;
                 }
                 const cdr::time stamp = cdr::time::from_nanoseconds(lines[i].timestamp_nanoseconds);
                 const unsigned long long log_time = static_cast<unsigned long long>(lines[i].timestamp_nanoseconds);
-                cdr::image image;
                 image.frame_header.stamp = stamp;
                 image.frame_header.frame_id = "sensor/" + camera_name;
-                image.height = height;
-                image.width = width;
-                image.encoding = "mono8";
                 image.is_bigendian = 0;
-                image.step = width;
-                image.data = pixels;
+                image.encoding = dataset::pnm_encoding(format);
+                image.step = width * static_cast<unsigned int>(dataset::pnm_bytes_per_pixel(format));
                 const std::vector<unsigned char> payload = cdr::write_image(image);
                 writer.add_message(image_channel, static_cast<unsigned int>(i), log_time, log_time, payload.data(), payload.size());
                 // One calibration message per frame, stamped alongside its image, so viewers
                 // find a current camera info wherever they seek: an identity rectification
                 // and a projection straight from the intrinsics, which viewers take their
                 // focal length from. When the calibration line carried distortion
-                // coefficients the pgm frames are the sensor's raw, still-distorted frames,
-                // and 'd' is exactly what is needed to undistort them.
                 cdr::camera_info information;
                 information.frame_header.stamp = stamp;
                 information.frame_header.frame_id = "sensor/" + camera_name;
@@ -964,8 +952,7 @@ namespace {
                 const std::vector<unsigned char> info_payload = cdr::write_camera_info(information);
                 writer.add_message(info_channel, static_cast<unsigned int>(i), log_time, log_time, info_payload.data(), info_payload.size());
                 // The extrinsic of this frame: the pose of the camera on the body.
-                const double rotation_xyzw[4] = { lines[i].extrinsic[3], lines[i].extrinsic[4], lines[i].extrinsic[5], lines[i].extrinsic[6] };
-                const std::vector<unsigned char> transform = cdr::write_tf_message(stamp, "ego", "sensor/" + camera_name, &lines[i].extrinsic[0], &rotation_xyzw[0]);
+                const std::vector<unsigned char> transform = cdr::write_tf_message(stamp, "ego", "sensor/" + camera_name, &lines[i].extrinsic[0], &lines[i].extrinsic[3]);
                 writer.add_message(tf_channel, static_cast<unsigned int>(i), log_time, log_time, transform.data(), transform.size());
             }
             if (camera_name == camera_names.front()) {
@@ -974,10 +961,15 @@ namespace {
         }
         std::size_t total_imu_samples = 0;
         for (const std::string& imu_name : imu_names) {
+            const dataset::inertial_type type = dataset::inertial_type_of(imu_name);
             std::vector<imu_line> lines;
             std::string error;
-            if (!read_imu_file(input_directory + "/sensor/" + imu_name + ".txt", lines, error)) {
+            if (!read_imu_file(input_directory + "/sensor/" + imu_name + ".txt", type, lines, error)) {
                 std::fprintf(stderr, "Invalid scene directory: %s.\n", error.c_str());
+                return EXIT_FAILURE;
+            }
+            if (lines.empty()) {
+                std::fprintf(stderr, "Invalid scene directory: 'sensor/%s.txt' holds no samples; remove the file if the scene has no %s.\n", imu_name.c_str(), imu_name.c_str());
                 return EXIT_FAILURE;
             }
             const unsigned short imu_channel = writer.add_channel(imu_schema, "/sensor/" + imu_name, "cdr");
@@ -987,23 +979,25 @@ namespace {
                 cdr::imu sample;
                 sample.frame_header.stamp = stamp;
                 sample.frame_header.frame_id = "sensor/" + imu_name;
-                sample.angular_velocity[0] = lines[i].angular_velocity[0];
-                sample.angular_velocity[1] = lines[i].angular_velocity[1];
-                sample.angular_velocity[2] = lines[i].angular_velocity[2];
-                sample.linear_acceleration[0] = lines[i].linear_acceleration[0];
-                sample.linear_acceleration[1] = lines[i].linear_acceleration[1];
-                sample.linear_acceleration[2] = lines[i].linear_acceleration[2];
+                std::copy(&lines[i].angular_velocity[0], &lines[i].angular_velocity[0] + 3, &sample.angular_velocity[0]);
+                std::copy(&lines[i].linear_acceleration[0], &lines[i].linear_acceleration[0] + 3, &sample.linear_acceleration[0]);
+                if (!dataset::measures_angular_velocity(type)) {
+                    sample.angular_velocity_covariance[0] = -1.0;
+                }
+                if (!dataset::measures_linear_acceleration(type)) {
+                    sample.linear_acceleration_covariance[0] = -1.0;
+                }
                 const std::vector<unsigned char> payload = cdr::write_imu(sample);
                 writer.add_message(imu_channel, static_cast<unsigned int>(i), log_time, log_time, payload.data(), payload.size());
-                const double rotation_xyzw[4] = { lines[i].extrinsic[3], lines[i].extrinsic[4], lines[i].extrinsic[5], lines[i].extrinsic[6] };
-                const std::vector<unsigned char> transform = cdr::write_tf_message(stamp, "ego", "sensor/" + imu_name, &lines[i].extrinsic[0], &rotation_xyzw[0]);
+                const std::vector<unsigned char> transform = cdr::write_tf_message(stamp, "ego", "sensor/" + imu_name, &lines[i].extrinsic[0], &lines[i].extrinsic[3]);
                 writer.add_message(tf_channel, static_cast<unsigned int>(i), log_time, log_time, transform.data(), transform.size());
             }
             total_imu_samples += lines.size();
         }
         std::vector<dataset::trajectory_pose> poses;
-        if (!dataset::load_trajectory(input_directory + "/trajectory.txt", poses) || poses.empty()) {
-            std::fprintf(stderr, "Invalid scene directory: no ground truth at '%s'.\n", (input_directory + "/trajectory.txt").c_str());
+        const std::string trajectory_path = input_directory + "/trajectory.txt";
+        if (gtl::paths::is_regular_file(trajectory_path) && !dataset::load_trajectory(trajectory_path, poses)) {
+            std::fprintf(stderr, "Invalid scene directory: cannot read the ground truth at '%s'; remove the file if the scene has none.\n", trajectory_path.c_str());
             return EXIT_FAILURE;
         }
         for (std::size_t i = 0; i < poses.size(); ++i) {
@@ -1014,16 +1008,14 @@ namespace {
             const std::vector<unsigned char> transform = cdr::write_tf_message(stamp, "root", "ego", &translation[0], &rotation_xyzw[0]);
             writer.add_message(tf_channel, static_cast<unsigned int>(i), log_time, log_time, transform.data(), transform.size());
         }
-        const std::vector<unsigned char>& output = writer.finish();
-        const std::string parent = gtl::paths::path_parent_directory(output_path);
-        if (!parent.empty()) {
-            gtl::directory::make_directories(parent);
-        }
-        if (!file_save_all(output_path, output.data(), output.size())) {
+        if (!writer.finish()) {
             std::fprintf(stderr, "Failed to write: %s\n", output_path.c_str());
             return EXIT_FAILURE;
         }
-        std::printf("Collapsed %zu frames, %zu imu samples, and %zu poses into %s (%zu bytes).\n", total_frames, total_imu_samples, poses.size(), output_path.c_str(), output.size());
+        std::printf("Collapsed %zu frames, %zu imu samples, and %zu poses into %s (%llu bytes).\n", total_frames, total_imu_samples, poses.size(), output_path.c_str(), writer.get_written());
+        if (poses.empty()) {
+            std::printf("    No ground truth at '%s', so the scene carries none; it cannot be benchmarked against.\n", trajectory_path.c_str());
+        }
         return validate_scene(output_path) ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
@@ -1035,13 +1027,18 @@ namespace {
         std::printf("                                   ('[dataset]/[scene]') into the datasets directory and\n");
         std::printf("                                   validate every fetched scene mcap.\n");
         std::printf("        validate [name]          - Validate a scene by name, every scene of a dataset, or a\n");
-        std::printf("                                   scene mcap path directly: raw mono8 frames, a pinhole\n");
+        std::printf("                                   scene mcap path directly: raw frames, a pinhole\n");
         std::printf("                                   calibration per frame, and the root -> ego -> sensor\n");
         std::printf("                                   ground truth frame tree on /tf.\n");
-        std::printf("        expand [mcap] [dir]      - Expand a scene mcap into the directory form: pgm frames,\n");
-        std::printf("                                   the calibration, and the trajectory.\n");
+        std::printf("        expand [mcap] [dir]      - Expand a scene mcap into a new directory in the directory\n");
+        std::printf("                                   form: pnm frames, the calibration, and the trajectory.\n");
+        std::printf("        trajectory [mcap] [txt]  - Write just the scene's ground truth (the root -> ego\n");
+        std::printf("                                   transforms) as a trajectory file for zeroslam-evaluate.\n");
+        std::printf("                                   Unlike expand this does not require the scene to round\n");
+        std::printf("                                   trip through the directory form.\n");
         std::printf("        collapse [dir] [mcap]    - Collapse a scene directory back into one lz4 compressed\n");
-        std::printf("                                   scene mcap.\n");
+        std::printf("                                   scene mcap. A 'trajectory.txt' is optional: without one\n");
+        std::printf("                                   the scene holds no ground truth, as a live capture does.\n");
         std::printf("    options:\n");
         std::printf("        --datasets [dir] - The datasets directory (default: the 'datasets' directory next\n");
         std::printf("                           to this tool, otherwise './datasets').\n");
@@ -1107,10 +1104,10 @@ int main(int argc, char* argv[]) {
         else if (command.empty()) {
             command = argv[i];
         }
-        else if (((command == "get") || (command == "validate") || (command == "expand") || (command == "collapse")) && dataset_name.empty()) {
+        else if (((command == "get") || (command == "validate") || (command == "expand") || (command == "collapse") || (command == "trajectory")) && dataset_name.empty()) {
             dataset_name = argv[i];
         }
-        else if (((command == "expand") || (command == "collapse")) && second_argument.empty()) {
+        else if (((command == "expand") || (command == "collapse") || (command == "trajectory")) && second_argument.empty()) {
             second_argument = argv[i];
         }
         else {
@@ -1123,9 +1120,16 @@ int main(int argc, char* argv[]) {
         print_usage(argv[0]);
         return EXIT_SUCCESS;
     }
-    if ((command != "list") && (command != "get") && (command != "validate") && (command != "expand") && (command != "collapse")) {
-        std::fprintf(stderr, "Unknown command: '%s' (expected 'list', 'get', 'validate', 'expand', or 'collapse').\n", command.c_str());
+    if ((command != "list") && (command != "get") && (command != "validate") && (command != "expand") && (command != "collapse") && (command != "trajectory")) {
+        std::fprintf(stderr, "Unknown command: '%s' (expected 'list', 'get', 'validate', 'expand', 'collapse', or 'trajectory').\n", command.c_str());
         return EXIT_FAILURE;
+    }
+    if (command == "trajectory") {
+        if (dataset_name.empty() || second_argument.empty()) {
+            std::fprintf(stderr, "The trajectory command needs a scene mcap and an output file argument.\n");
+            return EXIT_FAILURE;
+        }
+        return trajectory_scene(dataset_name, second_argument);
     }
     if ((command == "expand") || (command == "collapse")) {
         if (dataset_name.empty() || second_argument.empty()) {

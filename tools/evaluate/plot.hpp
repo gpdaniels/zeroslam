@@ -18,6 +18,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef ZEROSLAM_TOOLS_EVALUATE_PLOT_HPP
 #define ZEROSLAM_TOOLS_EVALUATE_PLOT_HPP
 
+#include "dataset.hpp"
+
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
@@ -25,6 +27,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -32,22 +35,16 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(pop)
 #endif
 
-static void save_plot_to_ppm(
+inline bool save_plot_to_ppm(
     const char* output_filename,
     const int image_width,
     const int image_height,
     const unsigned char* const image_buffer
 ) {
-    std::FILE* const file_pointer = std::fopen(output_filename, "wb");
-    if (file_pointer != nullptr) {
-        std::fprintf(file_pointer, "P6\n%d %d\n255\n", image_width, image_height);
-        const size_t pixel_count = static_cast<size_t>(image_width) * static_cast<size_t>(image_height) * 3;
-        std::fwrite(image_buffer, 1, pixel_count, file_pointer);
-        std::fclose(file_pointer);
-    }
+    return dataset::write_pnm(output_filename, dataset::pnm_format::ppm, static_cast<unsigned int>(image_width), static_cast<unsigned int>(image_height), image_buffer);
 }
 
-static void calculate_plot_bounds(
+inline void calculate_plot_bounds(
     const std::vector<double>& ground_truth_axis_1_values,
     const std::vector<double>& ground_truth_axis_2_values,
     const std::vector<std::vector<double>>& estimated_trajectories_axis_1_values,
@@ -84,7 +81,7 @@ static void calculate_plot_bounds(
     maximum_axis_2 += padding_axis_2;
 }
 
-static void draw_text(
+inline void draw_text(
     unsigned char* const image_buffer,
     const int image_width,
     const int image_height,
@@ -252,7 +249,7 @@ static void draw_text(
     }
 }
 
-static void draw_plot_legend(
+inline void draw_plot_legend(
     unsigned char* const image_buffer,
     const int image_width,
     const int image_height,
@@ -289,7 +286,7 @@ static void draw_plot_legend(
     }
 }
 
-static void draw_line(
+inline void draw_line(
     const double x_start,
     const double y_start,
     const double x_end,
@@ -344,7 +341,7 @@ static void draw_line(
     }
 }
 
-static void draw_plot_grid(
+inline void draw_plot_grid(
     unsigned char* const image_buffer,
     const int image_width,
     const int image_height,
@@ -377,7 +374,7 @@ static void draw_plot_grid(
     }
 }
 
-static void draw_plot_trajectories(
+inline void draw_plot_trajectories(
     unsigned char* const image_buffer,
     const int image_width,
     const int image_height,
@@ -405,7 +402,7 @@ static void draw_plot_trajectories(
     }
 }
 
-static void draw_plot(
+inline bool draw_plot(
     const std::vector<double>& ground_truth_axis_1_values,
     const std::vector<double>& ground_truth_axis_2_values,
     const std::vector<std::string>& estimated_trajectory_names,
@@ -440,11 +437,8 @@ static void draw_plot(
     const double scale_axis_1 = (image_width - 2.0 * plot_margin) / range_axis_1;
     const double scale_axis_2 = (image_height - 2.0 * plot_margin) / range_axis_2;
 
-    const size_t byte_count = static_cast<size_t>(image_width) * static_cast<size_t>(image_height) * 3;
-    unsigned char* const image_buffer = new unsigned char[byte_count];
-    for (size_t i = 0; i < byte_count; ++i) {
-        image_buffer[i] = 255;
-    }
+    std::vector<unsigned char> image(static_cast<size_t>(image_width) * static_cast<size_t>(image_height) * 3, 255);
+    unsigned char* const image_buffer = image.data();
 
     draw_plot_grid(
         image_buffer,
@@ -487,9 +481,7 @@ static void draw_plot(
         plot_colors
     );
 
-    save_plot_to_ppm(output_filename, image_width, image_height, image_buffer);
-
-    delete[] image_buffer;
+    return save_plot_to_ppm(output_filename, image_width, image_height, image_buffer);
 }
 
 #endif // ZEROSLAM_TOOLS_EVALUATE_PLOT_HPP

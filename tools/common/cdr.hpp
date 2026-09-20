@@ -134,6 +134,20 @@ namespace cdr {
                header_schema_suffix;
     }
 
+    inline std::string magnetic_field_schema() {
+        return std::string(
+                   "std_msgs/Header header\n"
+                   "geometry_msgs/Vector3 magnetic_field\n"
+                   "float64[9] magnetic_field_covariance\n"
+                   "================================================================================\n"
+                   "MSG: geometry_msgs/Vector3\n"
+                   "float64 x\n"
+                   "float64 y\n"
+                   "float64 z\n"
+               ) +
+               header_schema_suffix;
+    }
+
     class reader final {
     private:
         const unsigned char* data = nullptr;
@@ -346,13 +360,6 @@ namespace cdr {
         std::vector<unsigned char> data;
     };
 
-    // sensor_msgs/msg/CompressedImage
-    struct compressed_image {
-        header frame_header;
-        std::string format;
-        std::vector<unsigned char> data;
-    };
-
     // sensor_msgs/msg/CameraInfo
     struct camera_info {
         header frame_header;
@@ -398,6 +405,12 @@ namespace cdr {
         }
     };
 
+    struct magnetic_field {
+        header frame_header;
+        double field[3] = {};
+        double field_covariance[9] = {};
+    };
+
     inline bool read_header(reader& stream, header& value) {
         value.stamp.sec = stream.read_i32();
         value.stamp.nanosec = stream.read_u32();
@@ -419,20 +432,6 @@ namespace cdr {
         }
         value.is_bigendian = stream.read_u8();
         value.step = stream.read_u32();
-        return stream.read_bytes(value.data) && stream.is_valid();
-    }
-
-    inline bool read_compressed_image(const unsigned char* payload, const unsigned long long length, compressed_image& value) {
-        reader stream;
-        if (!stream.open(payload, length)) {
-            return false;
-        }
-        if (!read_header(stream, value.frame_header)) {
-            return false;
-        }
-        if (!stream.read_string(value.format)) {
-            return false;
-        }
         return stream.read_bytes(value.data) && stream.is_valid();
     }
 
@@ -527,6 +526,23 @@ namespace cdr {
         return stream.is_valid();
     }
 
+    inline bool read_magnetic_field(const unsigned char* payload, const unsigned long long length, magnetic_field& value) {
+        reader stream;
+        if (!stream.open(payload, length)) {
+            return false;
+        }
+        if (!read_header(stream, value.frame_header)) {
+            return false;
+        }
+        for (int i = 0; i < 3; ++i) {
+            value.field[i] = stream.read_f64();
+        }
+        for (int i = 0; i < 9; ++i) {
+            value.field_covariance[i] = stream.read_f64();
+        }
+        return stream.is_valid();
+    }
+
     inline void write_header(writer& stream, const header& value) {
         stream.write_i32(value.stamp.sec);
         stream.write_u32(value.stamp.nanosec);
@@ -541,14 +557,6 @@ namespace cdr {
         stream.write_string(value.encoding);
         stream.write_u8(value.is_bigendian);
         stream.write_u32(value.step);
-        stream.write_bytes(value.data.data(), value.data.size());
-        return stream.finish();
-    }
-
-    inline std::vector<unsigned char> write_compressed_image(const compressed_image& value) {
-        writer stream;
-        write_header(stream, value.frame_header);
-        stream.write_string(value.format);
         stream.write_bytes(value.data.data(), value.data.size());
         return stream.finish();
     }
@@ -602,6 +610,18 @@ namespace cdr {
         }
         for (int i = 0; i < 9; ++i) {
             stream.write_f64(value.linear_acceleration_covariance[i]);
+        }
+        return stream.finish();
+    }
+
+    inline std::vector<unsigned char> write_magnetic_field(const magnetic_field& value) {
+        writer stream;
+        write_header(stream, value.frame_header);
+        for (int i = 0; i < 3; ++i) {
+            stream.write_f64(value.field[i]);
+        }
+        for (int i = 0; i < 9; ++i) {
+            stream.write_f64(value.field_covariance[i]);
         }
         return stream.finish();
     }

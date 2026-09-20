@@ -46,68 +46,20 @@ namespace {
         double standard_deviation = 0.0;
     };
 
-    bool file_load(const std::string& path, std::vector<unsigned char>& data) {
-        gtl::file handle(path.c_str(), gtl::file::access_type::read_only, gtl::file::creation_type::open_only, gtl::file::cursor_type::start_of_file);
-        if (!handle.is_open()) {
-            return false;
-        }
-        gtl::file::size_type size = 0;
-        if (!handle.get_size(size) || size == 0) {
-            return false;
-        }
-        data.resize(static_cast<std::size_t>(size));
-        gtl::file::size_type length = size;
-        const bool read = handle.read(reinterpret_cast<char*>(&data[0]), length);
-        return read && (length == size);
-    }
-
-    // Extract the error statistics printed by the evaluation tool as "  key: value" lines.
     bool parse_error_statistics(const std::string& output, error_statistics& statistics) {
-        bool parsed_maximum = false;
-        bool parsed_minimum = false;
-        bool parsed_mean = false;
-        bool parsed_median = false;
-        bool parsed_rmse = false;
-        bool parsed_standard_deviation = false;
-        std::size_t line_start = 0;
-        while (line_start < output.size()) {
+        for (std::size_t line_start = 0; line_start < output.size();) {
             std::size_t line_end = output.find('\n', line_start);
             if (line_end == std::string::npos) {
                 line_end = output.size();
             }
             const std::string line = output.substr(line_start, line_end - line_start);
             line_start = line_end + 1;
-            char key[32] = {};
-            double value = 0.0;
-            if (std::sscanf(line.c_str(), " %31[a-z]: %lf", &key[0], &value) != 2) {
-                continue;
-            }
-            if (std::strcmp(&key[0], "max") == 0) {
-                statistics.maximum = value;
-                parsed_maximum = true;
-            }
-            else if (std::strcmp(&key[0], "min") == 0) {
-                statistics.minimum = value;
-                parsed_minimum = true;
-            }
-            else if (std::strcmp(&key[0], "mean") == 0) {
-                statistics.mean = value;
-                parsed_mean = true;
-            }
-            else if (std::strcmp(&key[0], "median") == 0) {
-                statistics.median = value;
-                parsed_median = true;
-            }
-            else if (std::strcmp(&key[0], "rmse") == 0) {
-                statistics.rmse = value;
-                parsed_rmse = true;
-            }
-            else if (std::strcmp(&key[0], "std") == 0) {
-                statistics.standard_deviation = value;
-                parsed_standard_deviation = true;
+            std::size_t poses = 0;
+            if (std::sscanf(line.c_str(), "statistics: rmse=%lf mean=%lf max=%lf median=%lf min=%lf std=%lf poses=%zu", &statistics.rmse, &statistics.mean, &statistics.maximum, &statistics.median, &statistics.minimum, &statistics.standard_deviation, &poses) == 7) {
+                return true;
             }
         }
-        return parsed_maximum && parsed_minimum && parsed_mean && parsed_median && parsed_rmse && parsed_standard_deviation;
+        return false;
     }
 
     // The commit recorded in the log: the git HEAD of the tools directory, falling back to
@@ -156,9 +108,10 @@ namespace {
     void print_usage(const char* argv0) {
         std::printf("Usage %s [scene] [options...]\n", argv0);
         std::printf("    scene - The path of a scene mcap file (datasets/[dataset]/[scene].mcap) holding raw\n");
-        std::printf("            mono8 image messages, the camera intrinsics, and the ground truth as the\n");
-        std::printf("            root -> ego -> sensor frame tree on /tf.\n");
-        std::printf("            A scene file that does not exist locally is first fetched with the dataset tool.\n");
+        std::printf("            mono8 or rgb8 image messages, the camera intrinsics, and the ground truth as\n");
+        std::printf("            the root -> ego -> sensor frame tree on /tf; or a bare '[dataset]/[scene]' name,\n");
+        std::printf("            looked up in the datasets directory next to the tools. A scene that does not\n");
+        std::printf("            exist locally is first fetched with the dataset tool.\n");
         std::printf("    options:\n");
         std::printf("        --ground-truth [file]  - Override the ground truth with a TUM trajectory file.\n");
         std::printf("        --tools-dir [dir]      - Directory containing the zeroslam tools (default: next to this tool).\n");
@@ -167,7 +120,9 @@ namespace {
         std::printf("        --name [name]          - Dataset name recorded in the log (default: from the scene path).\n");
         std::printf("        --commit [hash]        - Commit hash recorded in the log (default: the git HEAD of the tools directory).\n");
         std::printf("        --frames [count]       - Process only the first [count] frames of the scene.\n");
-        std::printf("        --first                - Constrain the first poses to overlap during evaluation.\n");
+        std::printf("        --config [key=value]   - Slam configuration setting forwarded to the process tool (repeatable).\n");
+        std::printf("        --first                - Anchor the evaluation alignment on the first pose pair (the default).\n");
+        std::printf("        --centroid             - Anchor the evaluation alignment on the two centroids instead.\n");
         std::printf("The tool validates the scene, runs the SLAM system on it, evaluates the recorded trajectory\n");
         std::printf("against the ground truth, and appends one line of results to the log file. The recorded metrics\n");
         std::printf("never fail the run: the exit code only reflects operational failures.\n");
@@ -183,7 +138,8 @@ int main(int argc, char* argv[]) {
     std::string dataset_name_override;
     std::string commit_override;
     std::string frames_override;
-    bool overlap_first_pose = false;
+    std::vector<std::string> config_settings;
+    bool overlap_first_pose = true;
 
     for (int i = 1; i < argc; ++i) {
         const auto matches = [&](const char* name) {
@@ -229,8 +185,17 @@ int main(int argc, char* argv[]) {
             if (!take_value(frames_override))
                 return EXIT_FAILURE;
         }
+        else if (matches("--config")) {
+            std::string setting;
+            if (!take_value(setting))
+                return EXIT_FAILURE;
+            config_settings.push_back(setting);
+        }
         else if (matches("--first") || matches("-f")) {
             overlap_first_pose = true;
+        }
+        else if (matches("--centroid") || matches("-c")) {
+            overlap_first_pose = false;
         }
         else if (argv[i][0] == '-') {
             std::fprintf(stderr, "Unknown option: %s\n", argv[i]);
@@ -280,6 +245,10 @@ int main(int argc, char* argv[]) {
             std::fprintf(stderr, "Tool not found: '%s' (build all tools, or provide --tools-dir).\n", binary.c_str());
             return EXIT_FAILURE;
         }
+    }
+
+    if (!gtl::paths::is_regular_file(scene_path) && (gtl::paths::path_extension(scene_path) != ".mcap")) {
+        scene_path = tools_directory + "/datasets/" + scene_path + ".mcap";
     }
 
     // The recorded name is "[dataset]/[scene]", the last two path components without the
@@ -336,46 +305,46 @@ int main(int argc, char* argv[]) {
 
     std::printf("Validating scene...\n");
     std::fflush(stdout);
-    std::vector<unsigned char> scene_file;
-    if (!file_load(scene_path, scene_file)) {
-        std::fprintf(stderr, "Scene file not found: %s\n", scene_path.c_str());
-        return EXIT_FAILURE;
-    }
     mcap reader;
     std::string scene_error;
-    if (!reader.parse(scene_file.data(), scene_file.size(), scene_error)) {
+    if (!reader.open(scene_path, scene_error)) {
         std::fprintf(stderr, "Invalid scene: %s: %s.\n", scene_path.c_str(), scene_error.c_str());
         return EXIT_FAILURE;
     }
     dataset::mcap_scene_information scene;
-    if (!dataset::inspect_mcap_scene(reader, scene, scene_error)) {
+    if (!dataset::inspect_mcap_scene(reader, scene, scene_error, false)) {
         std::fprintf(stderr, "Invalid scene: %s: %s.\n", scene_path.c_str(), scene_error.c_str());
         return EXIT_FAILURE;
     }
-    if (scene.frames < 2) {
+    const dataset::camera_information& camera = scene.primary();
+    if (camera.frames < 2) {
         std::fprintf(stderr, "Invalid scene: at least two frames are needed.\n");
         return EXIT_FAILURE;
     }
-    if (!scene.camera_info || (scene.fx <= 0.0) || (scene.fy <= 0.0)) {
+    if (!camera.camera_info || (camera.fx <= 0.0) || (camera.fy <= 0.0)) {
         std::fprintf(stderr, "Invalid scene: no usable camera intrinsics.\n");
+        return EXIT_FAILURE;
+    }
+    if ((camera.encoding != "mono8") && (camera.encoding != "rgb8")) {
+        std::fprintf(stderr, "Invalid scene: the primary camera holds '%s' frames; the process tool consumes mono8 or rgb8.\n", camera.encoding.c_str());
         return EXIT_FAILURE;
     }
     if (ground_truth_override.empty() && (scene.poses < 3)) {
         std::fprintf(stderr, "Invalid scene: at least 3 ground truth poses are needed (or provide --ground-truth).\n");
         return EXIT_FAILURE;
     }
-    std::size_t frames = scene.frames;
+    std::size_t frames = camera.frames;
     if ((frame_limit > 0) && (frame_limit < frames)) {
         frames = frame_limit;
     }
 
     std::printf("    scene:        %s\n", scene_name.c_str());
-    std::printf("    camera:       %s (pinhole [%.10g %.10g %.10g %.10g], %zu frames of %ux%u)\n", scene.camera_name.c_str(), scene.fx, scene.fy, scene.cx, scene.cy, scene.frames, scene.width, scene.height);
-    if (frames < scene.frames) {
-        std::printf("    limit:        processing the first %zu of %zu frames\n", frames, scene.frames);
+    std::printf("    camera:       %s (pinhole [%.10g %.10g %.10g %.10g], %zu frames of %ux%u)\n", camera.camera_name.c_str(), camera.fx, camera.fy, camera.cx, camera.cy, camera.frames, camera.width, camera.height);
+    if (frames < camera.frames) {
+        std::printf("    limit:        processing the first %zu of %zu frames\n", frames, camera.frames);
     }
-    else if (frame_limit > scene.frames) {
-        std::printf("    limit:        --frames %zu requested, the scene has only %zu frames\n", frame_limit, scene.frames);
+    else if (frame_limit > camera.frames) {
+        std::printf("    limit:        --frames %zu requested, the scene has only %zu frames\n", frame_limit, camera.frames);
     }
     std::printf("    ground truth: %zu poses%s\n", scene.poses, ground_truth_override.empty() ? "" : " (overridden)");
 
@@ -398,21 +367,10 @@ int main(int argc, char* argv[]) {
     std::string ground_truth_path = ground_truth_override;
     if (ground_truth_path.empty()) {
         ground_truth_path = work_directory + "/groundtruth.txt";
-        gtl::file handle(ground_truth_path.c_str(), gtl::file::access_type::write_only, gtl::file::creation_type::create_only, gtl::file::cursor_type::start_of_truncated);
-        if (!handle.is_open()) {
+        std::size_t poses = 0;
+        if (!dataset::write_trajectory(scene, ground_truth_path, poses)) {
             std::fprintf(stderr, "Failed to write the ground truth: %s\n", ground_truth_path.c_str());
             return EXIT_FAILURE;
-        }
-        for (const cdr::transform_stamped& transform : scene.dynamics) {
-            if ((transform.frame_header.frame_id != "root") || (transform.child_frame_id != "ego")) {
-                continue;
-            }
-            char line[256] = {};
-            const int length = std::snprintf(&line[0], sizeof(line), "%d.%09u %.17g %.17g %.17g %.17g %.17g %.17g %.17g\n", transform.frame_header.stamp.sec, transform.frame_header.stamp.nanosec, transform.translation[0], transform.translation[1], transform.translation[2], transform.rotation[0], transform.rotation[1], transform.rotation[2], transform.rotation[3]);
-            if (length > 0) {
-                gtl::file::size_type write_length = static_cast<gtl::file::size_type>(length);
-                handle.write(&line[0], write_length);
-            }
         }
     }
     else if (dataset::count_trajectory_poses(ground_truth_path) < 3) {
@@ -429,8 +387,11 @@ int main(int argc, char* argv[]) {
     const std::string change_directory = "cd " + platform::quote_for_shell(work_directory) + " && ";
 #endif
     std::string process_command = change_directory + platform::quote_for_shell(make_absolute(process_binary)) + " " + platform::quote_for_shell(make_absolute(scene_path));
-    if (frames < scene.frames) {
+    if (frames < camera.frames) {
         process_command += " --frames " + std::to_string(frames);
+    }
+    for (const std::string& setting : config_settings) {
+        process_command += " --config " + platform::quote_for_shell(setting);
     }
     process_command += " 2>&1";
 
@@ -451,9 +412,7 @@ int main(int argc, char* argv[]) {
 
     std::printf("\nEvaluating the trajectory...\n");
     std::string evaluate_command = platform::quote_for_shell(make_absolute(evaluate_binary)) + " " + platform::quote_for_shell(make_absolute(ground_truth_path)) + " " + platform::quote_for_shell(make_absolute(trajectory_path));
-    if (overlap_first_pose) {
-        evaluate_command += " --first";
-    }
+    evaluate_command += overlap_first_pose ? " --first" : " --centroid";
     evaluate_command += " 2>&1";
     std::string evaluate_output;
     int evaluate_exit_code = -1;

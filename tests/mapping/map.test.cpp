@@ -169,6 +169,33 @@ int main(int argc, char* argv[]) {
     }
     {
         mapping::map m;
+        mapping::point kept;
+        kept.id = 1;
+        mapping::point dropped;
+        dropped.id = 2;
+        m.add_landmark(kept);
+        m.add_landmark(dropped);
+        m.add_observation(3, kept, 1.0, 1.0);
+        m.add_observation(9, kept, 9.0, 9.0);
+        m.add_observation(5, dropped, 5.0, 5.0);
+        m.add_observation(9, dropped, 90.0, 90.0);
+        m.add_observation(12, dropped, 12.0, 12.0);
+        REQUIRE(!m.merge_landmark(1, 1));
+        REQUIRE(!m.merge_landmark(1, 7));
+        REQUIRE(m.merge_landmark(1, 2));
+        REQUIRE(m.landmarks.count(2) == 0);
+        REQUIRE(m.observations.count(2) == 0);
+        const std::vector<mapping::map::observation>& merged = m.observations.at(1);
+        REQUIRE(merged.size() == 4);
+        REQUIRE(merged[0].frame_id == 3);
+        REQUIRE(merged[1].frame_id == 5);
+        REQUIRE(merged[2].frame_id == 9);
+        REQUIRE(merged[2].point[0] == 9.0);
+        REQUIRE(merged[3].frame_id == 12);
+        REQUIRE(!m.merge_landmark(1, 2));
+    }
+    {
+        mapping::map m;
         mapping::point p;
         p.id = 42;
         m.add_landmark(p);

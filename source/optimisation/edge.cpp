@@ -174,33 +174,22 @@ namespace optimisation {
         this->robust_loss = robust_loss_value;
     }
 
-    void edge::robust_info(double& rho_delta, math::matrix<double, 0, 0>& robust_information) const {
+    void edge::robust_info(double& rho_delta, math::matrix<double, 0, 0>& robust_information, bool apply_triggs_correction) const {
         const double error_squared = this->chi2();
         math::matrix<double, 3, 1> rho;
         this->robust_loss.compute(error_squared, rho);
         rho_delta = rho[1];
         robust_information = rho[1] * this->information;
-        if ((rho[1] + 2.0 * rho[2] * error_squared) > 0.0) {
+        if (apply_triggs_correction && ((rho[1] + 2.0 * rho[2] * error_squared) > 0.0)) {
             math::matrix<double, 0, 0> weight_error = this->information * this->residual;
             robust_information = robust_information + 2.0 * rho[2] * weight_error * math::transpose(weight_error);
         }
     }
 
-    math::matrix<double, 2, 2> edge::robust_info_2x2(double& rho_delta, bool apply_triggs_correction) const {
-        ASSERT(this->information.rows() == 2 && this->information.cols() == 2, "robust_info_2x2 requires a 2x2 information matrix.");
-        const math::matrix<double, 2, 2> information_fixed(this->information.data());
-        const double error_squared = this->chi2();
+    double edge::robust_weight() const {
         math::matrix<double, 3, 1> rho;
-        this->robust_loss.compute(error_squared, rho);
-        rho_delta = rho[1];
-        math::matrix<double, 2, 2> robust_information = rho[1] * information_fixed;
-        if (apply_triggs_correction && ((rho[1] + 2.0 * rho[2] * error_squared) > 0.0)) {
-            const math::matrix<double, 2, 1> residual_fixed(this->residual.data());
-            const math::matrix<double, 2, 1> weight_error = information_fixed * residual_fixed;
-            const math::matrix<double, 1, 2> weight_error_transpose(weight_error.data());
-            robust_information = robust_information + 2.0 * rho[2] * weight_error * weight_error_transpose;
-        }
-        return robust_information;
+        this->robust_loss.compute(this->chi2(), rho);
+        return rho[1];
     }
 
     const math::matrix<double, 0, 0>& edge::get_observation() const {

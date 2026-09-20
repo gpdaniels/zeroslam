@@ -48,7 +48,6 @@ namespace sensor::camera {
 
         bool get_parameters(type* const parameters, const size_t parameters_length) const;
 
-        // Camera frame point to image coordinates normalised by the image width, jacobians row major 2 by 3 and 2 by parameter count.
         bool project(
             const type* const point_xyz,
             type* const point_xy,
@@ -56,7 +55,6 @@ namespace sensor::camera {
             type* const jacobian_parameters = nullptr
         ) const;
 
-        // Image coordinates normalised by the image width to the ray with unit depth, jacobian row major 3 by 2.
         bool unproject(
             const type* const point_xy,
             type* const ray_xyz,

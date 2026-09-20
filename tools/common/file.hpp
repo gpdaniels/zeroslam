@@ -106,14 +106,22 @@ namespace gtl {
         /// @brief Copy constructor is deleted.
         file(const file& other) = delete;
 
-        /// @brief Move constructor is defaulted.
-        file(file&& other) = default;
+        file(file&& other)
+            : handle(other.handle) {
+            other.handle = -1;
+        }
 
         /// @brief Copy assignment operator is deleted.
         file& operator=(const file& other) = delete;
 
-        /// @brief Move assignment operator is defaulted.
-        file& operator=(file&& other) = default;
+        file& operator=(file&& other) {
+            if (this != &other) {
+                this->close();
+                this->handle = other.handle;
+                other.handle = -1;
+            }
+            return *this;
+        }
 
         /// @brief Parameterised constructor passes arguments onto the open member function.
         /// @param path The path to the file to open.

@@ -14,6 +14,7 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "directory.hpp"
 #include "paths.hpp"
 #include "process.hpp"
 
@@ -21,11 +22,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -78,41 +77,26 @@ namespace {
     }
 
     void print_usage(const char* argv0, const std::string& launcher_directory) {
-        std::printf("Usage: %s [--quiet] [tool] [arguments...]\n", argv0);
+        std::printf("Usage: %s [--quiet|-q] [tool] [arguments...]\n", argv0);
         std::printf("    tool      - The name of a zeroslam tool, run as the standalone 'zeroslam-[tool]' binary.\n");
         std::printf("    arguments - Forwarded unchanged to the tool.\n");
-        std::printf("    --quiet   - Suppress the banner, only consumed before the tool name.\n");
+        std::printf("    --quiet   - Suppress the banner (also -q), only consumed before the tool name.\n");
         std::printf("Tools are searched for next to this launcher first, then on the PATH.\n");
         std::vector<std::string> tools;
-        if (!launcher_directory.empty()) {
-            constexpr static const char prefix[] = "zeroslam-";
-            constexpr static const std::size_t prefix_length = sizeof(prefix) - 1;
-            std::error_code error;
-            std::filesystem::directory_iterator iterator(launcher_directory, error);
-            if (!error) {
-                for (const std::filesystem::directory_iterator end; iterator != end; iterator.increment(error)) {
-                    if (error) {
-                        break;
-                    }
-                    std::error_code entry_error;
-                    if (!iterator->is_regular_file(entry_error) || entry_error) {
-                        continue;
-                    }
-                    std::string name = iterator->path().filename().string();
-                    if (name.compare(0, prefix_length, prefix) != 0) {
-                        continue;
-                    }
-                    constexpr static const char extension[] = ".exe";
-                    constexpr static const std::size_t extension_length = sizeof(extension) - 1;
-                    if ((name.size() > extension_length) && (name.compare(name.size() - extension_length, extension_length, extension) == 0)) {
-                        name.resize(name.size() - extension_length);
-                    }
-                    tools.push_back(name.substr(prefix_length));
-                }
+        constexpr static const char prefix[] = "zeroslam-";
+        constexpr static const std::size_t prefix_length = sizeof(prefix) - 1;
+        std::vector<std::string> entries;
+        gtl::directory::list_directory(launcher_directory, entries);
+        for (const std::string& entry : entries) {
+            if ((entry.compare(0, prefix_length, prefix) != 0) || !gtl::paths::is_regular_file(launcher_directory + "/" + entry)) {
+                continue;
             }
+            std::string name = entry;
+            if (gtl::paths::path_extension(name) == ".exe") {
+                name = gtl::paths::path_stem(name);
+            }
+            tools.push_back(name.substr(prefix_length));
         }
-        std::sort(tools.begin(), tools.end());
-        tools.erase(std::unique(tools.begin(), tools.end()), tools.end());
         if (!tools.empty()) {
             std::printf("Available tools:\n");
             for (const std::string& tool : tools) {

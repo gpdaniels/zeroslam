@@ -14,33 +14,42 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include "file.hpp"
-
-#if defined(linux) || defined(__linux) || defined(__linux__)
-#include <fcntl.h>
-#include <sys/types.h>
-#include <unistd.h>
+#if defined(__linux__) && !defined(_FILE_OFFSET_BITS)
+#define _FILE_OFFSET_BITS 64
 #endif
 
-#if defined(_WIN32)
+#include "file.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
+#if defined(_WIN32)
 #include <io.h>
+#else
+#include <unistd.h>
+#endif
+
+#include <climits>
+#include <cstdio>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
 
+namespace {
+    long long seek(const int handle, const long long offset, const int whence) {
+#if defined(_WIN32)
+        return ::_lseeki64(handle, offset, whence);
+#else
+        return static_cast<long long>(::lseek(handle, static_cast<off_t>(offset), whence));
 #endif
-
-#if defined(__APPLE__)
-#include <fcntl.h>
-#include <sys/types.h>
-#include <unistd.h>
-#endif
+    }
+}
 
 namespace gtl {
 
@@ -58,49 +67,30 @@ namespace gtl {
             return false;
         }
 
-#if (defined(linux) || defined(__linux) || defined(__linux__))
-        constexpr static const int flag_access_read_only = 0;      // O_RDONLY;
-        constexpr static const int flag_access_write_only = 1;     // O_WRONLY;
-        constexpr static const int flag_access_read_and_write = 2; // O_RDWR;
-
-        constexpr static const int flag_creation_open_only = 0;          // 0;
-        constexpr static const int flag_creation_create_only = 64 | 128; // O_CREAT | O_EXCL;
-        constexpr static const int flag_creation_create_or_open = 64;    // O_CREAT;
-
-        constexpr static const int flag_cursor_start = 0;                 // 0;
-        constexpr static const int flag_cursor_start_truncate = 512;      // O_TRUNC;
-        constexpr static const int flag_cursor_end = 1024;                // O_APPEND;
-        constexpr static const int flag_cursor_end_truncate = 512 | 1024; // O_TRUNC | O_APPEND;
-#endif
-
 #if defined(_WIN32)
-        constexpr static const int flag_access_read_only = 0;      // O_RDONLY;
-        constexpr static const int flag_access_write_only = 1;     // O_WRONLY;
-        constexpr static const int flag_access_read_and_write = 2; // O_RDWR;
-
-        constexpr static const int flag_creation_open_only = 0;            // 0;
-        constexpr static const int flag_creation_create_only = 256 | 1024; // O_CREAT | O_EXCL;
-        constexpr static const int flag_creation_create_or_open = 256;     // O_CREAT;
-
-        constexpr static const int flag_cursor_start = 0;              // 0;
-        constexpr static const int flag_cursor_start_truncate = 512;   // O_TRUNC;
-        constexpr static const int flag_cursor_end = 8;                // O_APPEND;
-        constexpr static const int flag_cursor_end_truncate = 512 | 8; // O_TRUNC | O_APPEND;
-#endif
-
-#if defined(__APPLE__)
-        constexpr static const int flag_access_read_only = 0;      // O_RDONLY;
-        constexpr static const int flag_access_write_only = 1;     // O_WRONLY;
-        constexpr static const int flag_access_read_and_write = 2; // O_RDWR;
-
-        constexpr static const int flag_creation_open_only = 0;            // 0;
-        constexpr static const int flag_creation_create_only = 512 | 2048; // O_CREAT | O_EXCL;
-        constexpr static const int flag_creation_create_or_open = 512;     // O_CREAT;
-
-        constexpr static const int flag_cursor_start = 0;               // 0;
-        constexpr static const int flag_cursor_start_truncate = 1024;   // O_TRUNC;
-        constexpr static const int flag_cursor_end = 8;                 // O_APPEND;
-        constexpr static const int flag_cursor_end_truncate = 1024 | 8; // O_TRUNC | O_APPEND;
+        constexpr static const int flag_access_read_only = _O_RDONLY | _O_BINARY;
+        constexpr static const int flag_access_write_only = _O_WRONLY | _O_BINARY;
+        constexpr static const int flag_access_read_and_write = _O_RDWR | _O_BINARY;
+        constexpr static const int flag_creation_open_only = 0;
+        constexpr static const int flag_creation_create_only = _O_CREAT | _O_EXCL;
+        constexpr static const int flag_creation_create_or_open = _O_CREAT;
+        constexpr static const int flag_cursor_start = 0;
+        constexpr static const int flag_cursor_start_truncate = _O_TRUNC;
+        constexpr static const int flag_cursor_end = _O_APPEND;
+        constexpr static const int flag_cursor_end_truncate = _O_TRUNC | _O_APPEND;
+        constexpr static const int permissions = _S_IREAD | _S_IWRITE;
+#else
+        constexpr static const int flag_access_read_only = O_RDONLY;
+        constexpr static const int flag_access_write_only = O_WRONLY;
+        constexpr static const int flag_access_read_and_write = O_RDWR;
+        constexpr static const int flag_creation_open_only = 0;
+        constexpr static const int flag_creation_create_only = O_CREAT | O_EXCL;
+        constexpr static const int flag_creation_create_or_open = O_CREAT;
+        constexpr static const int flag_cursor_start = 0;
+        constexpr static const int flag_cursor_start_truncate = O_TRUNC;
+        constexpr static const int flag_cursor_end = O_APPEND;
+        constexpr static const int flag_cursor_end_truncate = O_TRUNC | O_APPEND;
+        constexpr static const int permissions = 0666;
 #endif
 
         int mode_flags = 0;
@@ -141,18 +131,25 @@ namespace gtl {
                 break;
         }
 
-        this->handle = ::open(path, mode_flags, 0666);
+#if defined(_WIN32)
+        this->handle = ::_open(path, mode_flags, permissions);
+#else
+        this->handle = ::open(path, mode_flags, permissions);
+#endif
 
         // Validate that the opened handle refers to a real file, and not a directory, pipe, or other special file.
         // Note: Write modes cannot open directories or pipes, so only read mode needs validation.
         // Note: On windows the open call above already fails for directories, so this check passes trivially.
         if (this->is_open() && (access_mode == access_type::read_only)) {
             char probe = 0;
-            const offset_type probe_length = ::read(this->handle, &probe, 1);
-            const offset_type restored_position = (probe_length > 0) ? static_cast<offset_type>(::lseek(this->handle, 0, 0)) : 0;
+#if defined(_WIN32)
+            const long long probe_length = ::_read(this->handle, &probe, 1);
+#else
+            const long long probe_length = static_cast<long long>(::read(this->handle, &probe, 1));
+#endif
+            const long long restored_position = (probe_length > 0) ? seek(this->handle, 0, SEEK_SET) : 0;
             if ((probe_length < 0) || (restored_position != 0)) {
-                ::close(this->handle);
-                this->handle = -1;
+                this->close();
             }
         }
 
@@ -183,15 +180,15 @@ namespace gtl {
         if (!this->is_open()) {
             return false;
         }
-        const offset_type position_current = static_cast<offset_type>(::lseek(this->handle, 0, 1));
+        const long long position_current = seek(this->handle, 0, SEEK_CUR);
         if (position_current < 0) {
             return false;
         }
-        const offset_type position_end = static_cast<offset_type>(::lseek(this->handle, 0, 2));
+        const long long position_end = seek(this->handle, 0, SEEK_END);
         if (position_end < 0) {
             return false;
         }
-        const offset_type position_restored = static_cast<offset_type>(::lseek(this->handle, static_cast<long>(position_current), 0));
+        const long long position_restored = seek(this->handle, position_current, SEEK_SET);
         if (position_restored < 0) {
             return false;
         }
@@ -207,15 +204,15 @@ namespace gtl {
             return false;
         }
 
-        const offset_type position_current = static_cast<offset_type>(::lseek(this->handle, 0, 1));
+        const long long position_current = seek(this->handle, 0, SEEK_CUR);
         if (position_current < 0) {
             return false;
         }
-        const offset_type position_end = static_cast<offset_type>(::lseek(this->handle, 0, 2));
+        const long long position_end = seek(this->handle, 0, SEEK_END);
         if (position_end < 0) {
             return false;
         }
-        const offset_type position_restored = static_cast<offset_type>(::lseek(this->handle, static_cast<long>(position_current), 0));
+        const long long position_restored = seek(this->handle, position_current, SEEK_SET);
         if (position_restored < 0) {
             return false;
         }
@@ -231,7 +228,7 @@ namespace gtl {
             return false;
         }
 
-        offset_type position_current = static_cast<offset_type>(::lseek(this->handle, 0, 1));
+        const long long position_current = seek(this->handle, 0, SEEK_CUR);
         if (position_current < 0) {
             return false;
         }
@@ -245,20 +242,20 @@ namespace gtl {
             return false;
         }
 
-        int direction_flags = 0;
+        int direction_flags = SEEK_SET;
         switch (relative_to) {
             case position_type::start:
-                direction_flags = 0;
+                direction_flags = SEEK_SET;
                 break;
             case position_type::current:
-                direction_flags = 1;
+                direction_flags = SEEK_CUR;
                 break;
             case position_type::end:
-                direction_flags = 2;
+                direction_flags = SEEK_END;
                 break;
         }
 
-        const offset_type position_current = static_cast<offset_type>(::lseek(this->handle, static_cast<long>(position), direction_flags));
+        const long long position_current = seek(this->handle, static_cast<long long>(position), direction_flags);
         if (position_current < 0) {
             return false;
         }
@@ -276,10 +273,11 @@ namespace gtl {
             return true;
         }
 
+        const size_type request = (length > static_cast<size_type>(INT_MAX)) ? static_cast<size_type>(INT_MAX) : length;
 #if defined(_WIN32)
-        const offset_type read_length = ::read(this->handle, buffer, static_cast<unsigned int>(length));
+        const long long read_length = ::_read(this->handle, buffer, static_cast<unsigned int>(request));
 #else
-        const offset_type read_length = ::read(this->handle, buffer, length);
+        const long long read_length = static_cast<long long>(::read(this->handle, buffer, request));
 #endif
         if (read_length < 0) {
             return false;
@@ -299,10 +297,11 @@ namespace gtl {
             return true;
         }
 
+        const size_type request = (length > static_cast<size_type>(INT_MAX)) ? static_cast<size_type>(INT_MAX) : length;
 #if defined(_WIN32)
-        const offset_type write_length = ::write(this->handle, buffer, static_cast<unsigned int>(length));
+        const long long write_length = ::_write(this->handle, buffer, static_cast<unsigned int>(request));
 #else
-        const offset_type write_length = ::write(this->handle, buffer, length);
+        const long long write_length = static_cast<long long>(::write(this->handle, buffer, request));
 #endif
         if (write_length < 0) {
             return false;

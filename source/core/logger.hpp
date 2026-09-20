@@ -61,10 +61,7 @@ namespace core {
         logger& operator=(logger&&) = delete;
 
         // The one instance.
-        static logger& instance() {
-            static logger singleton;
-            return singleton;
-        }
+        static logger& instance();
 
 #if defined(__clang__)
 #pragma clang diagnostic push

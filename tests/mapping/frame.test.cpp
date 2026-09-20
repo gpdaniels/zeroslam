@@ -22,6 +22,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -56,6 +57,38 @@ int main(int argc, char* argv[]) {
         }
         mapping::frame frame_0(0, camera, image);
         REQUIRE(frame_0.id == 0);
+
+        mapping::frame::settings frontend;
+        frontend.detector = mapping::frame::settings::detector_kind::structure_tensor;
+        frontend.refiner = mapping::frame::settings::refiner_kind::structure_tensor;
+        for (feature::score::structure_tensor::measure kind : { feature::score::structure_tensor::measure::klt, feature::score::structure_tensor::measure::harris, feature::score::structure_tensor::measure::rohr }) {
+            frontend.detector_measure = kind;
+            frontend.refiner_measure = kind;
+            mapping::frame frame_tensor(0, camera, image, frontend);
+            REQUIRE(!frame_tensor.keypoints.empty());
+            REQUIRE(frame_tensor.keypoints.size() == frame_tensor.descriptors.size());
+        }
+        frontend.refiner = mapping::frame::settings::refiner_kind::none;
+        mapping::frame frame_unrefined(0, camera, image, frontend);
+        REQUIRE(!frame_unrefined.keypoints.empty());
+        frontend.fixed_budget = true;
+        mapping::frame frame_budgeted(0, camera, image, frontend);
+        REQUIRE(!frame_budgeted.keypoints.empty());
+        REQUIRE(frame_budgeted.keypoints.size() <= frame_unrefined.keypoints.size());
+
+        image::image textured(480, 640);
+        unsigned int state = 2026u;
+        for (size_t i = 0; i < textured.get_rows() * textured.get_cols(); ++i) {
+            state = (state * 1664525u) + 1013904223u;
+            textured.get_data()[i] = static_cast<unsigned char>(state >> 24);
+        }
+        mapping::frame::settings budget;
+        budget.fixed_budget = true;
+        mapping::frame frame_textured(0, camera, textured, budget);
+        REQUIRE(frame_textured.keypoint_pyramid.size() == frame_textured.descriptor_pyramid.size());
+        for (size_t level = 0; level < frame_textured.keypoint_pyramid.size(); ++level) {
+            REQUIRE(frame_textured.keypoint_pyramid[level].size() == frame_textured.descriptor_pyramid[level].size());
+        }
     }
 
     {
@@ -83,6 +116,37 @@ int main(int argc, char* argv[]) {
         REQUIRE(frame_small.image_pyramid.size() >= 1);
         REQUIRE(frame_small.keypoint_pyramid.size() >= 1);
         REQUIRE(frame_small.descriptor_pyramid.size() >= 1);
+    }
+
+    {
+        const math::matrix<double, 3, 3> intrinsics = { { { 320.0, 0.0, 320.0 }, { 0.0, 320.0, 240.0 }, { 0.0, 0.0, 1.0 } } };
+        sensor::model camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12);
+        image::image textured(480, 640);
+        unsigned int state = 12345u;
+        for (size_t i = 0; i < textured.get_rows(); ++i) {
+            for (size_t j = 0; j < textured.get_cols(); ++j) {
+                state = (state * 1664525u) + 1013904223u;
+                const unsigned int checker = (((i / 8) + (j / 8)) % 2) ? 200u : 40u;
+                textured.get_data()[i * textured.get_cols() + j] = static_cast<unsigned char>((checker + ((state >> 16) % 32u)) % 256u);
+            }
+        }
+        mapping::frame::settings frontend;
+        frontend.refiner = mapping::frame::settings::refiner_kind::none;
+        const mapping::frame unrefined(0, camera, textured, frontend);
+        REQUIRE(!unrefined.keypoints.empty());
+        for (size_t level = 0; level < unrefined.keypoint_pyramid.size(); ++level) {
+            for (const feature::point& local : unrefined.keypoint_pyramid[level]) {
+                REQUIRE(local.x == static_cast<float>(static_cast<int>(local.x)));
+                REQUIRE(local.y == static_cast<float>(static_cast<int>(local.y)));
+            }
+        }
+        bool coarse_seen = false;
+        for (const feature::point& exported : unrefined.keypoints) {
+            coarse_seen = coarse_seen || (exported.octave > 0);
+            REQUIRE(exported.x - static_cast<float>(static_cast<int>(exported.x)) == 0.5f);
+            REQUIRE(exported.y - static_cast<float>(static_cast<int>(exported.y)) == 0.5f);
+        }
+        REQUIRE(coarse_seen);
     }
 
     {
@@ -131,8 +195,12 @@ int main(int argc, char* argv[]) {
                 const feature::point& local = built.keypoint_pyramid[level][i];
                 REQUIRE(exported.octave == static_cast<int>(level));
                 REQUIRE(local.octave == static_cast<int>(level));
-                REQUIRE(exported.x == local.x * built.image_pyramid.scale_x(level));
-                REQUIRE(exported.y == local.y * built.image_pyramid.scale_y(level));
+                REQUIRE(exported.x == (local.x * built.image_pyramid.scale_x(level)) + 0.5f);
+                REQUIRE(exported.y == (local.y * built.image_pyramid.scale_y(level)) + 0.5f);
+                REQUIRE(local.x >= 0.0f);
+                REQUIRE(local.y >= 0.0f);
+                REQUIRE(local.x < static_cast<float>(built.image_pyramid[level].get_cols()));
+                REQUIRE(local.y < static_cast<float>(built.image_pyramid[level].get_rows()));
                 REQUIRE(exported.response == local.response);
                 REQUIRE(exported.x >= 0.0f);
                 REQUIRE(exported.y >= 0.0f);

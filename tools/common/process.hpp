@@ -180,7 +180,8 @@ namespace platform {
         output.clear();
         exit_code = -1;
 #if defined(_WIN32)
-        std::FILE* pipe = ::_popen(command.c_str(), "r");
+        const std::string wrapped = "\"" + command + "\"";
+        std::FILE* pipe = ::_popen(wrapped.c_str(), "r");
 #else
         std::FILE* pipe = ::popen(command.c_str(), "r");
 #endif
