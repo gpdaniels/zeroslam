@@ -1,0 +1,300 @@
+#[[
+Copyright (C) 2026 Geoffrey Daniels. https://gpdaniels.com/
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, version 3 of the License only.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+]]
+
+###############################################################################
+# DEPENDENCIES
+###############################################################################
+# depthai-core only supports find_package() and bootstraps vcpkg in its own configure, so the vcpkg install is done here.
+INCLUDE(FetchContent)
+
+FIND_PACKAGE(Git REQUIRED)
+
+# depthai's vcpkg dependencies are built from source, skip the tool rather than fail the configure when the host cannot build them.
+SET(CAPTURE_OAKD_HOST_TOOLS_MISSING "")
+IF(NOT WIN32)
+    FIND_PROGRAM(CAPTURE_OAKD_PKG_CONFIG_EXECUTABLE pkg-config)
+    FIND_PROGRAM(CAPTURE_OAKD_ZIP_EXECUTABLE zip)
+    FIND_PROGRAM(CAPTURE_OAKD_AUTORECONF_EXECUTABLE autoreconf)
+    FIND_PROGRAM(CAPTURE_OAKD_LIBTOOLIZE_EXECUTABLE NAMES libtoolize glibtoolize)
+    IF(NOT CAPTURE_OAKD_PKG_CONFIG_EXECUTABLE OR NOT CAPTURE_OAKD_ZIP_EXECUTABLE OR NOT CAPTURE_OAKD_AUTORECONF_EXECUTABLE OR NOT CAPTURE_OAKD_LIBTOOLIZE_EXECUTABLE)
+        SET(CAPTURE_OAKD_HOST_TOOLS_MISSING "depthai's dependencies need pkg-config, zip, autoconf, automake and libtool")
+    ENDIF()
+ENDIF()
+IF(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    FIND_FILE(CAPTURE_OAKD_LIBUDEV_HEADER libudev.h)
+    IF(NOT CAPTURE_OAKD_LIBUDEV_HEADER)
+        SET(CAPTURE_OAKD_HOST_TOOLS_MISSING "depthai's libusb needs the udev headers (libudev-dev)")
+    ENDIF()
+ENDIF()
+IF(NOT DEFINED DEPTHAI_VCPKG_INSTALL_ROOT)
+    SET(DEPTHAI_VCPKG_INSTALL_ROOT "${CMAKE_CURRENT_BINARY_DIR}/vcpkg_installed" CACHE PATH "Directory vcpkg installs depthai's dependencies into.")
+ENDIF()
+FILE(GLOB CAPTURE_OAKD_VCPKG_DONE_MARKERS "${DEPTHAI_VCPKG_INSTALL_ROOT}/.depthai-*.done")
+IF(CAPTURE_OAKD_HOST_TOOLS_MISSING AND NOT CAPTURE_OAKD_VCPKG_DONE_MARKERS)
+    MESSAGE(STATUS "Skipping 'capture-oakd': ${CAPTURE_OAKD_HOST_TOOLS_MISSING}.")
+    RETURN()
+ENDIF()
+
+SET(DEPTHAI_GIT_TAG "v3.10.0" CACHE STRING "depthai-core release to fetch and build.")
+
+SET(DEPTHAI_OPENCV_SUPPORT OFF CACHE BOOL "The capture tool has no OpenCV dependency." FORCE)
+SET(DEPTHAI_XTENSOR_SUPPORT OFF CACHE BOOL "The capture tool has no xtensor dependency." FORCE)
+SET(DEPTHAI_ENABLE_CURL OFF CACHE BOOL "The capture tool has no curl dependency." FORCE)
+SET(DEPTHAI_ENABLE_PROTOBUF OFF CACHE BOOL "The capture tool has no protobuf dependency." FORCE)
+SET(DEPTHAI_ENABLE_REMOTE_CONNECTION OFF CACHE BOOL "The capture tool has no remote connection." FORCE)
+SET(DEPTHAI_ENABLE_MP4V2 OFF CACHE BOOL "The capture tool records its own mcap, not mp4." FORCE)
+SET(DEPTHAI_ENABLE_APRIL_TAG OFF CACHE BOOL "The capture tool has no apriltag dependency." FORCE)
+SET(DEPTHAI_ENABLE_BACKWARD OFF CACHE BOOL "The capture tool has no backward dependency." FORCE)
+SET(DEPTHAI_DYNAMIC_CALIBRATION_SUPPORT OFF CACHE BOOL "The capture tool has no dynamic calibration." FORCE)
+SET(DEPTHAI_BUILD_BETA OFF CACHE BOOL "The capture tool does not use the beta api." FORCE)
+SET(DEPTHAI_BUILD_EXAMPLES OFF CACHE BOOL "Do not build the depthai examples." FORCE)
+SET(DEPTHAI_BUILD_TESTS OFF CACHE BOOL "Do not build the depthai tests." FORCE)
+SET(DEPTHAI_BUILD_DOCS OFF CACHE BOOL "Do not build the depthai documentation." FORCE)
+SET(DEPTHAI_BUILD_ZOO_HELPER OFF CACHE BOOL "Do not build the depthai model zoo helper." FORCE)
+SET(DEPTHAI_CLANG_FORMAT OFF CACHE BOOL "Do not add a clang-format target to the fetched code." FORCE)
+SET(DEPTHAI_INSTALL OFF CACHE BOOL "Do not install depthai from this project's build." FORCE)
+SET(DEPTHAI_BOOTSTRAP_VCPKG OFF CACHE BOOL "The project builds depthai's vcpkg dependencies itself." FORCE)
+SET(HUNTER_ENABLED OFF CACHE BOOL "XLink uses the vcpkg libusb from this project instead of Hunter." FORCE)
+
+# depthai-core needs exceptions and rtti, and its headers are not -Weverything clean.
+STRING(REPLACE "-fno-exceptions" "-fexceptions" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+STRING(REPLACE "-fno-rtti" "-frtti" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+STRING(REPLACE "-Weverything" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+STRING(REPLACE "/GR-" "/GR" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+STRING(REPLACE "-D_HAS_EXCEPTIONS=0" "-D_HAS_EXCEPTIONS=1" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+# XLink's macros need the GNU C extensions.
+SET(CMAKE_C_EXTENSIONS ON)
+
+IF(NOT DEFINED FETCHCONTENT_BASE_DIR)
+    SET(FETCHCONTENT_BASE_DIR "${CMAKE_BINARY_DIR}/_deps")
+ENDIF()
+IF(DEFINED FETCHCONTENT_SOURCE_DIR_DEPTHAI AND NOT FETCHCONTENT_SOURCE_DIR_DEPTHAI STREQUAL "")
+    SET(CAPTURE_OAKD_DEPTHAI_SOURCE "${FETCHCONTENT_SOURCE_DIR_DEPTHAI}")
+ELSE()
+    SET(CAPTURE_OAKD_DEPTHAI_SOURCE "${FETCHCONTENT_BASE_DIR}/depthai-src")
+ENDIF()
+IF(NOT EXISTS "${CAPTURE_OAKD_DEPTHAI_SOURCE}/CMakeLists.txt")
+    MESSAGE(STATUS "Fetching depthai-core ${DEPTHAI_GIT_TAG}.")
+    EXECUTE_PROCESS(
+        COMMAND "${GIT_EXECUTABLE}" clone --depth 1 --branch "${DEPTHAI_GIT_TAG}"
+                "https://github.com/luxonis/depthai-core.git"
+                "${CAPTURE_OAKD_DEPTHAI_SOURCE}"
+        RESULT_VARIABLE CAPTURE_OAKD_FETCH_RESULT
+        OUTPUT_VARIABLE CAPTURE_OAKD_FETCH_OUTPUT
+        ERROR_VARIABLE CAPTURE_OAKD_FETCH_ERROR
+    )
+    IF(NOT CAPTURE_OAKD_FETCH_RESULT EQUAL 0)
+        MESSAGE(FATAL_ERROR "git clone of depthai-core failed:\n${CAPTURE_OAKD_FETCH_OUTPUT}\n${CAPTURE_OAKD_FETCH_ERROR}")
+    ENDIF()
+ENDIF()
+IF(NOT DEFINED FETCHCONTENT_SOURCE_DIR_DEPTHAI OR FETCHCONTENT_SOURCE_DIR_DEPTHAI STREQUAL "")
+    EXECUTE_PROCESS(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CAPTURE_OAKD_DEPTHAI_SOURCE}" submodule update --init --recursive --depth 1
+        RESULT_VARIABLE CAPTURE_OAKD_SUBMODULE_RESULT
+        ERROR_VARIABLE CAPTURE_OAKD_SUBMODULE_ERROR
+    )
+    IF(NOT CAPTURE_OAKD_SUBMODULE_RESULT EQUAL 0)
+        MESSAGE(FATAL_ERROR "depthai-core submodules failed to initialize:\n${CAPTURE_OAKD_SUBMODULE_ERROR}")
+    ENDIF()
+ENDIF()
+
+FILE(READ "${CAPTURE_OAKD_DEPTHAI_SOURCE}/vcpkg.json" CAPTURE_OAKD_DEPTHAI_MANIFEST)
+STRING(JSON CAPTURE_OAKD_VCPKG_BASELINE GET "${CAPTURE_OAKD_DEPTHAI_MANIFEST}" "builtin-baseline")
+
+IF(NOT DEPTHAI_VCPKG_TRIPLET)
+    SET(CAPTURE_OAKD_VCPKG_ARCH "")
+    IF(CMAKE_SYSTEM_PROCESSOR MATCHES "^x86_64$" OR CMAKE_SYSTEM_PROCESSOR MATCHES "^AMD64$" OR CMAKE_SYSTEM_PROCESSOR MATCHES "^x64$")
+        SET(CAPTURE_OAKD_VCPKG_ARCH "x64")
+    ELSEIF(CMAKE_SYSTEM_PROCESSOR MATCHES "^aarch64$" OR CMAKE_SYSTEM_PROCESSOR MATCHES "^ARM64$" OR CMAKE_SYSTEM_PROCESSOR MATCHES "^arm64$")
+        SET(CAPTURE_OAKD_VCPKG_ARCH "arm64")
+    ELSEIF(CMAKE_SYSTEM_PROCESSOR MATCHES "^x86$" OR CMAKE_SYSTEM_PROCESSOR MATCHES "^i[3-6]86$")
+        SET(CAPTURE_OAKD_VCPKG_ARCH "x86")
+    ELSEIF(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm$" OR CMAKE_SYSTEM_PROCESSOR MATCHES "^armv")
+        SET(CAPTURE_OAKD_VCPKG_ARCH "arm")
+    ENDIF()
+    IF(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        SET(CAPTURE_OAKD_VCPKG_PLATFORM "windows")
+        IF(CMAKE_CXX_FLAGS MATCHES "_ITERATOR_DEBUG_LEVEL=0")
+            SET(CAPTURE_OAKD_VCPKG_PLATFORM "windows-no-iterator-debug")
+        ENDIF()
+    ELSEIF(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        SET(CAPTURE_OAKD_VCPKG_PLATFORM "osx")
+    ELSE()
+        SET(CAPTURE_OAKD_VCPKG_PLATFORM "linux")
+    ENDIF()
+    IF(CAPTURE_OAKD_VCPKG_ARCH STREQUAL "" OR CAPTURE_OAKD_VCPKG_PLATFORM STREQUAL "")
+        MESSAGE(FATAL_ERROR "Could not infer a vcpkg triplet for this host (${CMAKE_SYSTEM_PROCESSOR}/${CMAKE_SYSTEM_NAME}). Set DEPTHAI_VCPKG_TRIPLET explicitly.")
+    ENDIF()
+    SET(DEPTHAI_VCPKG_TRIPLET "${CAPTURE_OAKD_VCPKG_ARCH}-${CAPTURE_OAKD_VCPKG_PLATFORM}" CACHE STRING "vcpkg triplet used to build depthai's dependencies.")
+ENDIF()
+
+# The project builds with -D_ITERATOR_DEBUG_LEVEL=0 on MSVC, so the vcpkg C++ libraries it links must be built with it too.
+SET(CAPTURE_OAKD_VCPKG_TRIPLETS "${CMAKE_CURRENT_BINARY_DIR}/vcpkg_triplets")
+IF(DEPTHAI_VCPKG_TRIPLET MATCHES "^(.+)-windows-no-iterator-debug$")
+    STRING(CONCAT CAPTURE_OAKD_VCPKG_TRIPLET_CONTENT
+        "set(VCPKG_TARGET_ARCHITECTURE ${CMAKE_MATCH_1})\n"
+        "set(VCPKG_CRT_LINKAGE dynamic)\n"
+        "set(VCPKG_LIBRARY_LINKAGE dynamic)\n"
+        "set(VCPKG_C_FLAGS \"-D_ITERATOR_DEBUG_LEVEL=0\")\n"
+        "set(VCPKG_CXX_FLAGS \"-D_ITERATOR_DEBUG_LEVEL=0\")\n"
+    )
+    FILE(CONFIGURE OUTPUT "${CAPTURE_OAKD_VCPKG_TRIPLETS}/${DEPTHAI_VCPKG_TRIPLET}.cmake" CONTENT "${CAPTURE_OAKD_VCPKG_TRIPLET_CONTENT}" @ONLY)
+ENDIF()
+
+IF(NOT DEPTHAI_VCPKG_EXECUTABLE)
+    SET(DEPTHAI_VCPKG_EXECUTABLE "" CACHE FILEPATH "vcpkg executable to use for depthai's dependencies (default: a private checkout).")
+    IF(DEFINED ENV{VCPKG_ROOT} AND EXISTS "$ENV{VCPKG_ROOT}/.vcpkg-root")
+        SET(CAPTURE_OAKD_VCPKG_ROOT "$ENV{VCPKG_ROOT}")
+    ELSE()
+        SET(CAPTURE_OAKD_VCPKG_ROOT "${FETCHCONTENT_BASE_DIR}/vcpkg")
+        IF(NOT EXISTS "${CAPTURE_OAKD_VCPKG_ROOT}/scripts/ports.cmake")
+            MESSAGE(STATUS "Cloning vcpkg for depthai's manifest install.")
+            EXECUTE_PROCESS(
+                COMMAND "${GIT_EXECUTABLE}" clone --filter=blob:none --no-checkout
+                        "https://github.com/microsoft/vcpkg" "${CAPTURE_OAKD_VCPKG_ROOT}"
+                RESULT_VARIABLE CAPTURE_OAKD_VCPKG_CLONE_RESULT
+                OUTPUT_VARIABLE CAPTURE_OAKD_VCPKG_CLONE_OUTPUT
+                ERROR_VARIABLE CAPTURE_OAKD_VCPKG_CLONE_ERROR
+            )
+            IF(NOT CAPTURE_OAKD_VCPKG_CLONE_RESULT EQUAL 0)
+                MESSAGE(FATAL_ERROR "git clone of vcpkg failed:\n${CAPTURE_OAKD_VCPKG_CLONE_OUTPUT}\n${CAPTURE_OAKD_VCPKG_CLONE_ERROR}")
+            ENDIF()
+        ENDIF()
+        EXECUTE_PROCESS(
+            COMMAND "${GIT_EXECUTABLE}" -C "${CAPTURE_OAKD_VCPKG_ROOT}" checkout "${CAPTURE_OAKD_VCPKG_BASELINE}"
+            RESULT_VARIABLE CAPTURE_OAKD_VCPKG_CHECKOUT_RESULT
+            ERROR_VARIABLE CAPTURE_OAKD_VCPKG_CHECKOUT_ERROR
+        )
+        IF(NOT CAPTURE_OAKD_VCPKG_CHECKOUT_RESULT EQUAL 0)
+            MESSAGE(STATUS "vcpkg checkout (${CAPTURE_OAKD_VCPKG_BASELINE}) not applied: ${CAPTURE_OAKD_VCPKG_CHECKOUT_ERROR}")
+        ENDIF()
+    ENDIF()
+    IF(WIN32)
+        SET(DEPTHAI_VCPKG_EXECUTABLE "${CAPTURE_OAKD_VCPKG_ROOT}/vcpkg.exe")
+    ELSE()
+        SET(DEPTHAI_VCPKG_EXECUTABLE "${CAPTURE_OAKD_VCPKG_ROOT}/vcpkg")
+    ENDIF()
+    IF(NOT EXISTS "${DEPTHAI_VCPKG_EXECUTABLE}")
+        MESSAGE(STATUS "Bootstrapping vcpkg.")
+        IF(WIN32)
+            EXECUTE_PROCESS(
+                COMMAND "${CMAKE_COMMAND}" -E chdir "${CAPTURE_OAKD_VCPKG_ROOT}" "${CAPTURE_OAKD_VCPKG_ROOT}/bootstrap-vcpkg.bat" -disableMetrics
+                RESULT_VARIABLE CAPTURE_OAKD_VCPKG_BOOTSTRAP_RESULT
+                ERROR_VARIABLE CAPTURE_OAKD_VCPKG_BOOTSTRAP_ERROR
+            )
+        ELSE()
+            EXECUTE_PROCESS(
+                COMMAND "${CAPTURE_OAKD_VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
+                WORKING_DIRECTORY "${CAPTURE_OAKD_VCPKG_ROOT}"
+                RESULT_VARIABLE CAPTURE_OAKD_VCPKG_BOOTSTRAP_RESULT
+                ERROR_VARIABLE CAPTURE_OAKD_VCPKG_BOOTSTRAP_ERROR
+            )
+        ENDIF()
+        IF(NOT CAPTURE_OAKD_VCPKG_BOOTSTRAP_RESULT EQUAL 0)
+            MESSAGE(FATAL_ERROR "vcpkg bootstrap failed:\n${CAPTURE_OAKD_VCPKG_BOOTSTRAP_ERROR}")
+        ENDIF()
+    ENDIF()
+ENDIF()
+
+SET(CAPTURE_OAKD_VCPKG_PREFIX "${DEPTHAI_VCPKG_INSTALL_ROOT}/${DEPTHAI_VCPKG_TRIPLET}")
+SET(CAPTURE_OAKD_VCPKG_DONE_MARKER "${DEPTHAI_VCPKG_INSTALL_ROOT}/.depthai-${DEPTHAI_VCPKG_TRIPLET}-${CAPTURE_OAKD_VCPKG_BASELINE}.done")
+IF(NOT EXISTS "${CAPTURE_OAKD_VCPKG_DONE_MARKER}")
+    IF(CAPTURE_OAKD_HOST_TOOLS_MISSING)
+        MESSAGE(STATUS "Skipping 'capture-oakd': ${CAPTURE_OAKD_HOST_TOOLS_MISSING}.")
+        RETURN()
+    ENDIF()
+    SET(CAPTURE_OAKD_VCPKG_INSTALL_ARGS
+        install
+        --disable-metrics
+        --triplet=${DEPTHAI_VCPKG_TRIPLET}
+        --x-feature=usb
+        --x-manifest-root=${CAPTURE_OAKD_DEPTHAI_SOURCE}
+        --x-install-root=${DEPTHAI_VCPKG_INSTALL_ROOT}
+    )
+    IF(CAPTURE_OAKD_VCPKG_ROOT)
+        LIST(APPEND CAPTURE_OAKD_VCPKG_INSTALL_ARGS --vcpkg-root=${CAPTURE_OAKD_VCPKG_ROOT})
+    ENDIF()
+    IF(EXISTS "${CAPTURE_OAKD_VCPKG_TRIPLETS}/${DEPTHAI_VCPKG_TRIPLET}.cmake")
+        LIST(APPEND CAPTURE_OAKD_VCPKG_INSTALL_ARGS --overlay-triplets=${CAPTURE_OAKD_VCPKG_TRIPLETS})
+    ENDIF()
+    IF(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+        EXECUTE_PROCESS(
+            COMMAND "${DEPTHAI_VCPKG_EXECUTABLE}" ${CAPTURE_OAKD_VCPKG_INSTALL_ARGS}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+            RESULT_VARIABLE CAPTURE_OAKD_VCPKG_INSTALL_RESULT
+            OUTPUT_VARIABLE CAPTURE_OAKD_VCPKG_INSTALL_OUTPUT
+            ERROR_VARIABLE CAPTURE_OAKD_VCPKG_INSTALL_ERROR
+        )
+    ELSE()
+        EXECUTE_PROCESS(
+            COMMAND "${CMAKE_COMMAND}" -E env
+                    "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
+                    "${DEPTHAI_VCPKG_EXECUTABLE}" ${CAPTURE_OAKD_VCPKG_INSTALL_ARGS}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+            RESULT_VARIABLE CAPTURE_OAKD_VCPKG_INSTALL_RESULT
+            OUTPUT_VARIABLE CAPTURE_OAKD_VCPKG_INSTALL_OUTPUT
+            ERROR_VARIABLE CAPTURE_OAKD_VCPKG_INSTALL_ERROR
+        )
+    ENDIF()
+    IF(NOT CAPTURE_OAKD_VCPKG_INSTALL_RESULT EQUAL 0)
+        MESSAGE(FATAL_ERROR "vcpkg install of depthai's dependencies failed:\n${CAPTURE_OAKD_VCPKG_INSTALL_OUTPUT}\n${CAPTURE_OAKD_VCPKG_INSTALL_ERROR}")
+    ENDIF()
+
+    FILE(WRITE "${CAPTURE_OAKD_VCPKG_DONE_MARKER}"
+        "depthai vcpkg dependencies installed for ${CAPTURE_OAKD_VCPKG_BASELINE} / ${DEPTHAI_VCPKG_TRIPLET}.\n"
+        "Remove this file to force a rerun.\n")
+ENDIF()
+
+LIST(PREPEND CMAKE_PREFIX_PATH
+    "${CAPTURE_OAKD_VCPKG_PREFIX}/debug"
+    "${CAPTURE_OAKD_VCPKG_PREFIX}"
+)
+LIST(APPEND CMAKE_LIBRARY_PATH
+    "${CAPTURE_OAKD_VCPKG_PREFIX}/lib"
+    "${CAPTURE_OAKD_VCPKG_PREFIX}/debug/lib"
+)
+SET(VCPKG_INSTALLED_DIR "${DEPTHAI_VCPKG_INSTALL_ROOT}")
+SET(_VCPKG_INSTALLED_DIR "${DEPTHAI_VCPKG_INSTALL_ROOT}")
+SET(VCPKG_TARGET_TRIPLET "${DEPTHAI_VCPKG_TRIPLET}")
+
+FETCHCONTENT_DECLARE(
+    depthai
+    SOURCE_DIR "${CAPTURE_OAKD_DEPTHAI_SOURCE}"
+)
+# depthai is third party code, build it without this project's warnings and warnings as errors.
+SET(CAPTURE_OAKD_C_FLAGS "${CMAKE_C_FLAGS}")
+SET(CAPTURE_OAKD_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+STRING(REGEX REPLACE "(^| )[-/]W[^ ]*" "" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+STRING(REGEX REPLACE "(^| )[-/]W[^ ]*" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+FETCHCONTENT_MAKEAVAILABLE(depthai)
+SET(CMAKE_C_FLAGS "${CAPTURE_OAKD_C_FLAGS}")
+SET(CMAKE_CXX_FLAGS "${CAPTURE_OAKD_CXX_FLAGS}")
+# depthai's headers are not warning clean, so the tool includes them as system headers.
+GET_TARGET_PROPERTY(CAPTURE_OAKD_DEPTHAI_TARGET depthai::core ALIASED_TARGET)
+GET_TARGET_PROPERTY(CAPTURE_OAKD_DEPTHAI_INCLUDES ${CAPTURE_OAKD_DEPTHAI_TARGET} INTERFACE_INCLUDE_DIRECTORIES)
+SET_TARGET_PROPERTIES(${CAPTURE_OAKD_DEPTHAI_TARGET} PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${CAPTURE_OAKD_DEPTHAI_INCLUDES}")
+###############################################################################
+# TOOL
+###############################################################################
+GET_FILENAME_COMPONENT(TOOL_NAME "${CMAKE_CURRENT_SOURCE_DIR}" NAME)
+STRING(PREPEND TOOL_NAME "${PROJECT_NAME}-")
+FILE(GLOB_RECURSE TOOL_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp")
+ADD_EXECUTABLE(${TOOL_NAME} ${TOOL_FILES})
+TARGET_INCLUDE_DIRECTORIES(${TOOL_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/")
+TARGET_LINK_LIBRARIES(${TOOL_NAME} PRIVATE zeroslam-common)
+TARGET_LINK_LIBRARIES(${TOOL_NAME} PRIVATE depthai::core)
+TARGET_LINK_LIBRARIES(${TOOL_NAME} PRIVATE Threads::Threads)
+SET_TARGET_PROPERTIES(${TOOL_NAME} PROPERTIES FOLDER tools)
