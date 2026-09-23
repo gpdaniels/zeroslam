@@ -1243,5 +1243,32 @@ int main(int argc, char* argv[]) {
         REQUIRE(are_values_approx(identity_product_small.data(), math::matrix<double, 7, 7>::identity().data(), 49, 1e-4));
     }
 
+    {
+        REQUIRE(math::so3<double>().is_unit());
+        REQUIRE(math::se3<double>().rotation().is_unit());
+        REQUIRE(math::sim3<double>().transformation().rotation().is_unit());
+        REQUIRE(is_value_approx(math::sim3<double>().scale(), 1.0));
+        REQUIRE(math::so3<double>::identity().is_unit());
+        REQUIRE(!math::so3<double>(0.0, 0.5, 0.0, 0.0).is_unit());
+
+        math::so3<double> accumulated = math::so3<double>::identity();
+        math::se3<double> accumulated_pose = math::se3<double>::identity();
+        math::sim3<double> accumulated_similarity = math::sim3<double>::identity();
+        for (int step = 1; step <= 500; ++step) {
+            const double angle = 0.01 * static_cast<double>(step);
+            const math::so3<double> increment = math::so3<double>::exp({ { angle, -0.5 * angle, 0.25 * angle } });
+            accumulated = increment * accumulated;
+            REQUIRE(accumulated.is_unit());
+            REQUIRE(accumulated.inverse().is_unit());
+            REQUIRE(math::so3<double>(accumulated.get_matrix()).is_unit());
+            accumulated_pose = math::se3<double>::exp({ { angle, 0.0, -angle, 0.1, -0.2, 0.3 } }) * accumulated_pose;
+            REQUIRE(accumulated_pose.rotation().is_unit());
+            REQUIRE(accumulated_pose.inverse().rotation().is_unit());
+            accumulated_similarity = math::sim3<double>::exp({ { angle, 0.0, -angle, 0.1, -0.2, 0.3, 0.001 } }) * accumulated_similarity;
+            REQUIRE(accumulated_similarity.transformation().rotation().is_unit());
+            REQUIRE(accumulated_similarity.inverse().transformation().rotation().is_unit());
+        }
+    }
+
     return EXIT_SUCCESS;
 }

@@ -43,6 +43,8 @@ namespace math {
         constexpr so3(const type (&initial_rotation_quaternion_values)[4]);
         constexpr so3(const math::matrix<type, 3, 3>& initial_rotation_matrix);
         constexpr math::matrix<type, 4, 1> get_quaternion() const;
+        constexpr bool is_unit() const;
+        constexpr static const type unit_tolerance = type(1e-6);
         constexpr math::matrix<type, 3, 3> get_matrix() const;
         static constexpr so3 identity();
         static constexpr so3 rotation(const type& x, const type& y, const type& z);
@@ -110,6 +112,7 @@ namespace math {
         constexpr math::matrix<type, 7, 1> log() const;
         static math::matrix<type, 7, 7> left_jacobian(const math::matrix<type, 7, 1>& omega_upsilon_sigma);
         static math::matrix<type, 7, 7> left_jacobian_inverse(const math::matrix<type, 7, 1>& omega_upsilon_sigma);
+        static math::matrix<type, 7, 7> adjoint(const sim3& similarity);
         constexpr bool operator==(const sim3& rhs) const;
         constexpr bool operator!=(const sim3& rhs) const;
         constexpr sim3 operator*(const sim3& rhs) const;
@@ -119,7 +122,10 @@ namespace math {
 
 namespace math {
     template <typename type>
-    constexpr so3<type>::so3() = default;
+    constexpr so3<type>::so3()
+        : rotation_quaternion{ type(1), type(0), type(0), type(0) } {
+    }
+
     template <typename type>
     constexpr so3<type>::so3(const so3& other) = default;
     template <typename type>
@@ -158,6 +164,25 @@ namespace math {
 
     template <typename type>
     constexpr so3<type>::so3(const math::matrix<type, 3, 3>& initial_rotation_matrix) {
+        ASSERT(([&initial_rotation_matrix]() {
+                   for (size_t row = 0; row < 3; ++row) {
+                       for (size_t column = 0; column < 3; ++column) {
+                           type product = type(0);
+                           for (size_t k = 0; k < 3; ++k) {
+                               product += initial_rotation_matrix[k][row] * initial_rotation_matrix[k][column];
+                           }
+                           if (math::abs(product - ((row == column) ? type(1) : type(0))) > so3<type>::unit_tolerance) {
+                               return false;
+                           }
+                       }
+                   }
+                   const type determinant =
+                       initial_rotation_matrix[0][0] * ((initial_rotation_matrix[1][1] * initial_rotation_matrix[2][2]) - (initial_rotation_matrix[1][2] * initial_rotation_matrix[2][1])) -
+                       initial_rotation_matrix[0][1] * ((initial_rotation_matrix[1][0] * initial_rotation_matrix[2][2]) - (initial_rotation_matrix[1][2] * initial_rotation_matrix[2][0])) +
+                       initial_rotation_matrix[0][2] * ((initial_rotation_matrix[1][0] * initial_rotation_matrix[2][1]) - (initial_rotation_matrix[1][1] * initial_rotation_matrix[2][0]));
+                   return determinant > type(0);
+               }()),
+               "A rotation must be constructed from a rotation matrix.");
         const type rotation_trace = initial_rotation_matrix[0][0] + initial_rotation_matrix[1][1] + initial_rotation_matrix[2][2];
         if (rotation_trace > 0) {
             const type square_root_trace_plus_one = math::sqrt(rotation_trace + 1);
@@ -185,19 +210,32 @@ namespace math {
     }
 
     template <typename type>
+    constexpr bool so3<type>::is_unit() const {
+        const type length_squared = math::sqr(this->rotation_quaternion[0]) + math::sqr(this->rotation_quaternion[1]) + math::sqr(this->rotation_quaternion[2]) + math::sqr(this->rotation_quaternion[3]);
+        return math::abs(length_squared - type(1)) <= so3<type>::unit_tolerance;
+    }
+
+    template <typename type>
     constexpr math::matrix<type, 3, 3> so3<type>::get_matrix() const {
-        const type two_x = 2.0 * this->rotation_quaternion[1];
-        const type two_y = 2.0 * this->rotation_quaternion[2];
-        const type two_z = 2.0 * this->rotation_quaternion[3];
-        const type two_x_x = two_x * this->rotation_quaternion[1];
-        const type two_x_y = two_x * this->rotation_quaternion[2];
-        const type two_x_z = two_x * this->rotation_quaternion[3];
-        const type two_x_w = two_x * this->rotation_quaternion[0];
-        const type two_y_y = two_y * this->rotation_quaternion[2];
-        const type two_y_z = two_y * this->rotation_quaternion[3];
-        const type two_y_w = two_y * this->rotation_quaternion[0];
-        const type two_z_z = two_z * this->rotation_quaternion[3];
-        const type two_z_w = two_z * this->rotation_quaternion[0];
+        ASSERT(this->is_unit(), "A rotation's quaternion must be a unit one.");
+        const type length_squared = math::sqr(this->rotation_quaternion[0]) + math::sqr(this->rotation_quaternion[1]) + math::sqr(this->rotation_quaternion[2]) + math::sqr(this->rotation_quaternion[3]);
+        const type inverse_length = (length_squared < 0.000000000001) ? type(0) : (type(1) / math::sqrt(length_squared));
+        const type quaternion_w = inverse_length * this->rotation_quaternion[0];
+        const type quaternion_x = inverse_length * this->rotation_quaternion[1];
+        const type quaternion_y = inverse_length * this->rotation_quaternion[2];
+        const type quaternion_z = inverse_length * this->rotation_quaternion[3];
+        const type two_x = 2.0 * quaternion_x;
+        const type two_y = 2.0 * quaternion_y;
+        const type two_z = 2.0 * quaternion_z;
+        const type two_x_x = two_x * quaternion_x;
+        const type two_x_y = two_x * quaternion_y;
+        const type two_x_z = two_x * quaternion_z;
+        const type two_x_w = two_x * quaternion_w;
+        const type two_y_y = two_y * quaternion_y;
+        const type two_y_z = two_y * quaternion_z;
+        const type two_y_w = two_y * quaternion_w;
+        const type two_z_z = two_z * quaternion_z;
+        const type two_z_w = two_z * quaternion_w;
         return { { { 1.0 - (two_y_y + two_z_z), two_x_y - two_z_w, two_x_z + two_y_w },
                    { two_x_y + two_z_w, 1.0 - (two_x_x + two_z_z), two_y_z - two_x_w },
                    { two_x_z - two_y_w, two_y_z + two_x_w, 1.0 - (two_x_x + two_y_y) } } };
@@ -265,6 +303,7 @@ namespace math {
 
     template <typename type>
     constexpr math::matrix<type, 3, 1> so3<type>::log() const {
+        ASSERT(this->is_unit(), "A rotation's quaternion must be a unit one to take its logarithm.");
         const type real = this->rotation_quaternion[0];
         const math::matrix<type, 3, 1> imaginary = { { this->rotation_quaternion[1], this->rotation_quaternion[2], this->rotation_quaternion[3] } };
         const type imaginary_length_squared = imaginary.get_length_squared();
@@ -345,6 +384,7 @@ namespace math {
 
     template <typename type>
     constexpr math::matrix<type, 3, 1> so3<type>::operator*(const math::matrix<type, 3, 1>& point) const {
+        ASSERT(this->is_unit(), "A rotation's quaternion must be a unit one to rotate a point.");
         so3 point_quaternion = {
             0,
             point[0],
@@ -532,7 +572,10 @@ namespace math {
     }
 
     template <typename type>
-    constexpr sim3<type>::sim3() = default;
+    constexpr sim3<type>::sim3()
+        : transformation_se3()
+        , scale_scalar(type(1)) {
+    }
 
     template <typename type>
     constexpr sim3<type>::sim3(const se3<type>& initial_transformation_se3, type initial_scale_scalar)
@@ -761,6 +804,31 @@ namespace math {
                 result[i + 3][j + 3] = scaled_rotation_block_inverse[i][j];
             }
             result[i + 3][6] = inverse_sigma_column[i];
+        }
+        result[6][6] = 1.0;
+        return result;
+    }
+
+    template <typename type>
+    math::matrix<type, 7, 7> sim3<type>::adjoint(const sim3& similarity) {
+        const math::matrix<type, 3, 3> rotation = similarity.transformation().rotation().get_matrix();
+        const math::matrix<type, 3, 1>& translation = similarity.transformation().translation();
+        const type scale = similarity.scale();
+        const type translation_skew[3][3] = { { type(0), -translation[2], +translation[1] },
+                                              { +translation[2], type(0), -translation[0] },
+                                              { -translation[1], +translation[0], type(0) } };
+        math::matrix<type, 7, 7> result = math::matrix<type, 7, 7>::zero();
+        for (size_t row = 0; row < 3; ++row) {
+            for (size_t column = 0; column < 3; ++column) {
+                result[row][column] = rotation[row][column];
+                type translate_rotate = type(0);
+                for (size_t k = 0; k < 3; ++k) {
+                    translate_rotate += translation_skew[row][k] * rotation[k][column];
+                }
+                result[row + 3][column] = translate_rotate;
+                result[row + 3][column + 3] = scale * rotation[row][column];
+            }
+            result[row + 3][6] = -translation[row];
         }
         result[6][6] = 1.0;
         return result;

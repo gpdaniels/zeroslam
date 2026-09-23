@@ -67,7 +67,7 @@ namespace mapping {
     public:
         frame() {
             this->id = -1;
-            this->rotation = math::matrix<double, 3, 3>::zero();
+            this->rotation = math::matrix<double, 3, 3>::identity();
             this->translation = math::matrix<double, 3, 1>::zero();
         }
 
