@@ -16,6 +16,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "math/matrix.hpp"
 
+#include "core/random_pcg.hpp"
+
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
@@ -55,6 +57,10 @@ static inline bool are_values_approx(const array_type& lhs, const array_type& rh
         }
     }
     return true;
+}
+
+static inline double random_signed(core::random_pcg& rng) {
+    return (static_cast<double>(rng.get_random_raw() % 2000000u) / 1000000.0) - 1.0;
 }
 
 int main(int argc, char* argv[]) {
@@ -522,6 +528,93 @@ int main(int argc, char* argv[]) {
             REQUIRE(result[0][1] == 44);
             REQUIRE(result[1][0] == 44);
             REQUIRE(result[1][1] == 56);
+        }
+    }
+
+    {
+        core::random_pcg rng;
+
+        for (int trial = 0; trial < 200; ++trial) {
+            const double b00 = random_signed(rng);
+            const double b01 = random_signed(rng);
+            const double b10 = random_signed(rng);
+            const double b11 = ((trial % 5) == 0) ? 0.0 : random_signed(rng);
+            const math::matrix<double, 2, 2> b = { { { b00, b01 }, { b10, b11 } } };
+            const math::matrix<double, 2, 2> w = transpose(b) * b;
+            math::matrix<double, 2, 2> s;
+            REQUIRE(math::sqrt_symmetric_2x2(w, s));
+            REQUIRE(s[0][1] == s[1][0]);
+            const math::matrix<double, 2, 2> reconstructed = s * s;
+            for (size_t i = 0; i < 2; ++i) {
+                for (size_t j = 0; j < 2; ++j) {
+                    REQUIRE(is_value_approx(reconstructed[i][j], w[i][j], 1e-13));
+                }
+            }
+        }
+
+        {
+            const math::matrix<double, 2, 2> w = { { { 0.25, 0.0 }, { 0.0, 0.25 } } };
+            math::matrix<double, 2, 2> s;
+            REQUIRE(math::sqrt_symmetric_2x2(w, s));
+            REQUIRE(is_value_approx(s[0][0], 0.5, 1e-15));
+            REQUIRE(is_value_approx(s[1][1], 0.5, 1e-15));
+            REQUIRE(s[0][1] == 0.0);
+            REQUIRE(s[1][0] == 0.0);
+        }
+
+        {
+            const math::matrix<double, 2, 2> w = math::matrix<double, 2, 2>::zero();
+            math::matrix<double, 2, 2> s = math::matrix<double, 2, 2>::identity();
+            REQUIRE(math::sqrt_symmetric_2x2(w, s));
+            for (size_t i = 0; i < 2; ++i) {
+                for (size_t j = 0; j < 2; ++j) {
+                    REQUIRE(s[i][j] == 0.0);
+                }
+            }
+        }
+
+        {
+            const math::matrix<double, 2, 2> w = { { { 4.0, 2.0 }, { 2.0, 1.0 } } };
+            math::matrix<double, 2, 2> s;
+            REQUIRE(math::sqrt_symmetric_2x2(w, s));
+            const math::matrix<double, 2, 2> reconstructed = s * s;
+            for (size_t i = 0; i < 2; ++i) {
+                for (size_t j = 0; j < 2; ++j) {
+                    REQUIRE(is_value_approx(reconstructed[i][j], w[i][j], 1e-13));
+                }
+            }
+        }
+
+        {
+            const double rejected[][4] = {
+                { 1.0, 0.0, 0.0, -1.0 },
+                { -1.0, 0.0, 0.0, -1.0 },
+                { 1.0, 2.0, 2.0, 1.0 },
+                { 1.0, 1.0, -1.0, 1.0 },
+                { 0.0, 1.0, 1.0, 0.0 }
+            };
+            for (const auto& entries : rejected) {
+                const math::matrix<double, 2, 2> w = { { { entries[0], entries[1] }, { entries[2], entries[3] } } };
+                math::matrix<double, 2, 2> s = math::matrix<double, 2, 2>::identity();
+                REQUIRE(!math::sqrt_symmetric_2x2(w, s));
+                for (size_t i = 0; i < 2; ++i) {
+                    for (size_t j = 0; j < 2; ++j) {
+                        REQUIRE(s[i][j] == 0.0);
+                    }
+                }
+            }
+        }
+
+        {
+            const math::matrix<float, 2, 2> w = { { { 5.0f, 2.0f }, { 2.0f, 3.0f } } };
+            math::matrix<float, 2, 2> s;
+            REQUIRE(math::sqrt_symmetric_2x2(w, s));
+            const math::matrix<float, 2, 2> reconstructed = s * s;
+            for (size_t i = 0; i < 2; ++i) {
+                for (size_t j = 0; j < 2; ++j) {
+                    REQUIRE(is_value_approx(static_cast<double>(reconstructed[i][j]), static_cast<double>(w[i][j]), 1e-6));
+                }
+            }
         }
     }
 

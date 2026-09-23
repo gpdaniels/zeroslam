@@ -772,6 +772,44 @@ namespace math {
                     (value[0][0] * value[1][1] - value[1][0] * value[0][1]) * determinant_inverse } } };
         return true;
     }
+
+    template <typename type>
+    inline bool sqrt_symmetric_2x2(const matrix<type, 2, 2>& value, matrix<type, 2, 2>& out) {
+        type scale = 0;
+        for (size_t i = 0; i < 2; ++i) {
+            for (size_t j = 0; j < 2; ++j) {
+                scale = math::max(scale, math::abs(value[i][j]));
+            }
+        }
+        out = matrix<type, 2, 2>::zero();
+        if (!(scale > 0)) {
+            return (value[0][0] == 0) && (value[0][1] == 0) && (value[1][0] == 0) && (value[1][1] == 0);
+        }
+        const type tolerance = scale * static_cast<type>(1e-12);
+        if (math::abs(value[0][1] - value[1][0]) > tolerance) {
+            return false;
+        }
+        if (!(value[0][0] >= -tolerance) || !(value[1][1] >= -tolerance)) {
+            return false;
+        }
+        const type off_diagonal = static_cast<type>(0.5) * (value[0][1] + value[1][0]);
+        const type determinant = (value[0][0] * value[1][1]) - (off_diagonal * off_diagonal);
+        if (!(determinant >= -(tolerance * scale))) {
+            return false;
+        }
+        const type determinant_root = math::sqrt(math::max(determinant, static_cast<type>(0)));
+        const type trace = value[0][0] + value[1][1];
+        const type denominator_squared = trace + (static_cast<type>(2) * determinant_root);
+        if (!(denominator_squared > 0)) {
+            return false;
+        }
+        const type denominator = math::sqrt(denominator_squared);
+        out[0][0] = (value[0][0] + determinant_root) / denominator;
+        out[0][1] = off_diagonal / denominator;
+        out[1][0] = off_diagonal / denominator;
+        out[1][1] = (value[1][1] + determinant_root) / denominator;
+        return true;
+    }
 }
 
 #endif // ZEROSLAM_MATH_MATRIX_HPP
