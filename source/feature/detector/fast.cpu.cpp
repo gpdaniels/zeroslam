@@ -60,7 +60,7 @@ namespace feature::detector {
         };
         unsigned char threshold_map[255 + 1 + 255];
         for (int value = -255; value <= 255; ++value) {
-            threshold_map[value + 255] = (value < -threshold) + 2 * (value > threshold);
+            threshold_map[value + 255] = static_cast<unsigned char>((value < -threshold) + 2 * (value > threshold));
         }
         size_t feature_count = 0;
         for (int y = patch_radius; y < height - patch_radius; ++y) {

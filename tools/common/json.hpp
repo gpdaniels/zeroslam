@@ -236,34 +236,34 @@ namespace gtl {
                 return *this;
             }
 
-            value(null_type value)
+            value(null_type initial_value)
                 : type(contains::null_type) {
-                new (&null_value) null_type(value);
+                new (&null_value) null_type(initial_value);
             }
 
-            value(bool_type value)
+            value(bool_type initial_value)
                 : type(contains::bool_type) {
-                new (&bool_value) bool_type(value);
+                new (&bool_value) bool_type(initial_value);
             }
 
-            value(number_type value)
+            value(number_type initial_value)
                 : type(contains::number_type) {
-                new (&number_value) number_type(value);
+                new (&number_value) number_type(initial_value);
             }
 
-            value(const string_type& value)
+            value(const string_type& initial_value)
                 : type(contains::string_type) {
-                new (&string_value) string_type(value);
+                new (&string_value) string_type(initial_value);
             }
 
-            value(const object_type& value)
+            value(const object_type& initial_value)
                 : type(contains::object_type) {
-                new (&object_value) object_type(value);
+                new (&object_value) object_type(initial_value);
             }
 
-            value(const array_type& value)
+            value(const array_type& initial_value)
                 : type(contains::array_type) {
-                new (&array_value) array_type(value);
+                new (&array_value) array_type(initial_value);
             }
 
         private:
@@ -405,12 +405,12 @@ namespace gtl {
                     } break;
                     case contains::array_type: {
                         string_type string = "[";
-                        for (const auto& value : this->array_value) {
+                        for (const auto& element : this->array_value) {
                             if (string.size() == 1) {
-                                string += value.to_string();
+                                string += element.to_string();
                             }
                             else {
-                                string += "," + value.to_string();
+                                string += "," + element.to_string();
                             }
                         }
                         return string + "]";

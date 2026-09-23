@@ -27,15 +27,25 @@ namespace sensor::camera {
     class model;
 }
 
-template <typename type>
-inline void* operator new(size_t size, void* pointer, sensor::camera::model<type>* unused_type_tag) {
+inline void* operator new(size_t size, void* pointer, sensor::camera::model<float>* unused_type_tag) {
     static_cast<void>(size);
     static_cast<void>(unused_type_tag);
     return pointer;
 }
 
-template <typename type>
-inline void operator delete(void* data, void* pointer, sensor::camera::model<type>* unused_type_tag) {
+inline void operator delete(void* data, void* pointer, sensor::camera::model<float>* unused_type_tag) {
+    static_cast<void>(data);
+    static_cast<void>(pointer);
+    static_cast<void>(unused_type_tag);
+}
+
+inline void* operator new(size_t size, void* pointer, sensor::camera::model<double>* unused_type_tag) {
+    static_cast<void>(size);
+    static_cast<void>(unused_type_tag);
+    return pointer;
+}
+
+inline void operator delete(void* data, void* pointer, sensor::camera::model<double>* unused_type_tag) {
     static_cast<void>(data);
     static_cast<void>(pointer);
     static_cast<void>(unused_type_tag);

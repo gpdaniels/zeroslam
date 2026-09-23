@@ -238,10 +238,10 @@ public:
         unsigned char* data = img.get_data();
         std::fill(data, data + image_width * image_height, static_cast<unsigned char>(0));
         std::vector<double> depth_buffer(static_cast<size_t>(image_width * image_height), std::numeric_limits<double>::max());
-        for (const triangle& triangle : scene) {
-            const math::matrix<double, 3, 1> v0_cam = pose * triangle.v0;
-            const math::matrix<double, 3, 1> v1_cam = pose * triangle.v1;
-            const math::matrix<double, 3, 1> v2_cam = pose * triangle.v2;
+        for (const triangle& face : scene) {
+            const math::matrix<double, 3, 1> v0_cam = pose * face.v0;
+            const math::matrix<double, 3, 1> v1_cam = pose * face.v1;
+            const math::matrix<double, 3, 1> v2_cam = pose * face.v2;
             if ((v0_cam[2] <= 0.01) && (v1_cam[2] <= 0.01) && (v2_cam[2] <= 0.01)) {
                 continue;
             }
@@ -269,7 +269,7 @@ public:
                 static_cast<int>(u2 + 0.5),
                 static_cast<int>(v2 + 0.5),
                 v2_cam[2],
-                triangle.intensity
+                face.intensity
             );
         }
     }

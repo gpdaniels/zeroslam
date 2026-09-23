@@ -48,7 +48,8 @@ namespace feature::distributor {
         const int denominator = 2 * (max_features - 1);
         int square_size_max = numerator / denominator;
         int square_size_min = math::max(1, static_cast<int>(math::sqrt(static_cast<double>(features_detected_sorted_size) / static_cast<double>(2 * max_features))));
-        bool* const covered_squares = new bool[static_cast<unsigned long int>((max_width + 1) * (max_height + 1))];
+        const size_t covered_squares_size = static_cast<size_t>(max_width + 1) * static_cast<size_t>(max_height + 1);
+        bool* const covered_squares = new bool[covered_squares_size];
         int* const indexes = new int[static_cast<unsigned long int>(features_detected_sorted_size)];
         int indexes_size = 0;
         int square_size_previous = 0;
