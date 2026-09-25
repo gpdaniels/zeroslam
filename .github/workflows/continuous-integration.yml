@@ -42,6 +42,37 @@ jobs:
         ctest --test-dir build/${{ matrix.config }} --build-config ${{ matrix.config }} --output-on-failure --parallel 4
         rm -rf build/${{ matrix.config }}
 
+  build-tools:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ['ubuntu-latest', 'macos-latest', 'windows-latest']
+        config: ['Debug', 'Release']
+    name: Build tools on ${{ matrix.os }} in ${{ matrix.config }}
+    runs-on: ${{ matrix.os }}
+    steps:
+    - name: Checkout repository.
+      uses: actions/checkout@v7
+    - name: Install tool dependencies.
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" == "Linux" ]; then
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libgl1-mesa-dev pkg-config zip autoconf automake libtool
+        else
+          echo "Nothing to install for $RUNNER_OS."
+        fi
+    - name: Build all tools in ${{ matrix.config }}.
+      shell: bash
+      run: |
+        CMAKE_GENERATOR_PLATFORM_ARG=""
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          CMAKE_GENERATOR_PLATFORM_ARG="-DCMAKE_GENERATOR_PLATFORM=x64"
+        fi
+        cmake -S. -Bbuild/tools-${{ matrix.config }} -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DZEROSLAM_WERROR=ON -DZEROSLAM_CHECKS=OFF -DBUILD_ALL_TOOLS=ON ${CMAKE_GENERATOR_PLATFORM_ARG}
+        cmake --build build/tools-${{ matrix.config }} --config ${{ matrix.config }} --parallel 4
+        rm -rf build/tools-${{ matrix.config }}
+
   sanitize:
     strategy:
       fail-fast: false

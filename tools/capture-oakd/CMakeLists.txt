@@ -13,7 +13,15 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ]]
-
+GET_FILENAME_COMPONENT(TOOL_NAME "${CMAKE_CURRENT_SOURCE_DIR}" NAME)
+STRING(PREPEND TOOL_NAME "${PROJECT_NAME}-")
+STRING(TOUPPER "${TOOL_NAME}" TOOL_NAME_UPPER)
+STRING(REPLACE "-" "_" TOOL_NAME_UPPER "${TOOL_NAME_UPPER}")
+OPTION(BUILD_${TOOL_NAME_UPPER} "Build the '${TOOL_NAME}' tool." OFF)
+IF(NOT BUILD_ALL_TOOLS AND NOT BUILD_${TOOL_NAME_UPPER})
+    MESSAGE(STATUS "Skipping '${TOOL_NAME}', define BUILD_${TOOL_NAME_UPPER} or BUILD_ALL_TOOLS as TRUE to enable it.")
+    RETURN()
+ENDIF()
 ###############################################################################
 # DEPENDENCIES
 ###############################################################################
