@@ -38,6 +38,7 @@ jobs:
         fi
         cmake -S. -Bbuild/${{ matrix.config }} -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DZEROSLAM_WERROR=ON ${CMAKE_GENERATOR_PLATFORM_ARG}
         cmake --build build/${{ matrix.config }} --config ${{ matrix.config }} --parallel 4
+        cmake --build build/${{ matrix.config }} --config ${{ matrix.config }} --target tests --parallel 4
         ctest --test-dir build/${{ matrix.config }} --build-config ${{ matrix.config }} --output-on-failure --parallel 4
         rm -rf build/${{ matrix.config }}
 
@@ -61,5 +62,6 @@ jobs:
         fi
         cmake -S. -Bbuild/${{ matrix.sanitizer }} -DCMAKE_BUILD_TYPE=RelWithDebInfo -DZEROSLAM_WERROR=ON -DZEROSLAM_CHECKS=OFF ${SANITIZER_ARGS}
         cmake --build build/${{ matrix.sanitizer }} --parallel 4
+        cmake --build build/${{ matrix.sanitizer }} --target tests --parallel 4
         ctest --test-dir build/${{ matrix.sanitizer }} --output-on-failure --parallel 4
         rm -rf build/${{ matrix.sanitizer }}
