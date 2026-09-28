@@ -67,6 +67,7 @@ namespace feature::detector {
                 double sum_y;
                 int parent;
                 int main_child;
+                int merged_into;
                 float variation;
                 bool stable;
             };
@@ -85,17 +86,36 @@ namespace feature::detector {
                 }
                 return root;
             };
+            const int neighbours[4][2] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
             for (size_t index = 0; index < pixels; ++index) {
                 const int p = order[index];
                 const int g = level[static_cast<size_t>(p)];
                 const int px = p % width;
                 const int py = p / width;
-                int current = static_cast<int>(nodes.size());
-                nodes.push_back(node{ g, 1, static_cast<double>(px), static_cast<double>(py), -1, -1, 0.0f, false });
+                int current = -1;
+                for (int n = 0; (n < 4) && (current < 0); ++n) {
+                    const int nx = px + neighbours[n][0];
+                    const int ny = py + neighbours[n][1];
+                    if ((nx < 0) || (nx >= width) || (ny < 0) || (ny >= height)) {
+                        continue;
+                    }
+                    const int q = (ny * width) + nx;
+                    if (node_of[static_cast<size_t>(q)] < 0) {
+                        continue;
+                    }
+                    const int candidate = node_of[static_cast<size_t>(find(q))];
+                    if (nodes[static_cast<size_t>(candidate)].level == g) {
+                        current = candidate;
+                    }
+                }
+                if (current < 0) {
+                    current = static_cast<int>(nodes.size());
+                    nodes.push_back(node{ g, 0, 0.0, 0.0, -1, -1, -1, 0.0f, false });
+                }
+                nodes[static_cast<size_t>(current)].area += 1;
+                nodes[static_cast<size_t>(current)].sum_x += static_cast<double>(px);
+                nodes[static_cast<size_t>(current)].sum_y += static_cast<double>(py);
                 node_of[static_cast<size_t>(p)] = current;
-                parent[static_cast<size_t>(p)] = -1;
-                int root = p;
-                const int neighbours[4][2] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
                 for (int n = 0; n < 4; ++n) {
                     const int nx = px + neighbours[n][0];
                     const int ny = py + neighbours[n][1];
@@ -107,52 +127,56 @@ namespace feature::detector {
                         continue;
                     }
                     const int other_root = find(q);
-                    if (other_root == root) {
+                    if (other_root == p) {
                         continue;
                     }
                     const int other = node_of[static_cast<size_t>(other_root)];
-                    node& current_node = nodes[static_cast<size_t>(current)];
-                    node& other_node = nodes[static_cast<size_t>(other)];
-                    if (other_node.level == g) {
-                        node& survivor = (other_node.area >= current_node.area) ? other_node : current_node;
-                        node& absorbed = (other_node.area >= current_node.area) ? current_node : other_node;
-                        survivor.area += absorbed.area;
-                        survivor.sum_x += absorbed.sum_x;
-                        survivor.sum_y += absorbed.sum_y;
-                        if ((absorbed.main_child >= 0) && ((survivor.main_child < 0) || (nodes[static_cast<size_t>(absorbed.main_child)].area > nodes[static_cast<size_t>(survivor.main_child)].area))) {
-                            survivor.main_child = absorbed.main_child;
-                        }
-                        const int survivor_index = (&survivor == &other_node) ? other : current;
-                        current = survivor_index;
-                    }
-                    else {
-                        other_node.parent = current;
+                    if (other != current) {
+                        node& current_node = nodes[static_cast<size_t>(current)];
+                        node& other_node = nodes[static_cast<size_t>(other)];
                         current_node.area += other_node.area;
                         current_node.sum_x += other_node.sum_x;
                         current_node.sum_y += other_node.sum_y;
-                        if ((current_node.main_child < 0) || (other_node.area > nodes[static_cast<size_t>(current_node.main_child)].area)) {
-                            current_node.main_child = other;
+                        if (other_node.level == g) {
+                            other_node.merged_into = current;
+                        }
+                        else {
+                            other_node.parent = current;
                         }
                     }
-                    parent[static_cast<size_t>(other_root)] = root;
-                    node_of[static_cast<size_t>(root)] = current;
+                    parent[static_cast<size_t>(other_root)] = p;
+                }
+            }
+            for (node& n : nodes) {
+                if ((n.merged_into >= 0) || (n.parent < 0)) {
+                    continue;
+                }
+                while (nodes[static_cast<size_t>(n.parent)].merged_into >= 0) {
+                    n.parent = nodes[static_cast<size_t>(n.parent)].merged_into;
                 }
             }
             for (size_t i = 0; i < nodes.size(); ++i) {
-                node& n = nodes[i];
-                if ((n.area < settings.minimum_area) || (n.area > settings.maximum_area)) {
+                const node& n = nodes[i];
+                if ((n.merged_into >= 0) || (n.parent < 0)) {
+                    continue;
+                }
+                node& parent_node = nodes[static_cast<size_t>(n.parent)];
+                if ((parent_node.main_child < 0) || (n.area > nodes[static_cast<size_t>(parent_node.main_child)].area)) {
+                    parent_node.main_child = static_cast<int>(i);
+                }
+            }
+            for (node& n : nodes) {
+                if ((n.merged_into >= 0) || (n.area < settings.minimum_area) || (n.area > settings.maximum_area)) {
                     n.variation = 1.0e9f;
                     continue;
                 }
-                int up = static_cast<int>(i);
-                while ((nodes[static_cast<size_t>(up)].parent >= 0) && (nodes[static_cast<size_t>(nodes[static_cast<size_t>(up)].parent)].level <= n.level + settings.delta)) {
+                int up = n.parent;
+                int up_area = n.area;
+                while ((up >= 0) && (nodes[static_cast<size_t>(up)].level <= n.level + settings.delta)) {
+                    up_area = nodes[static_cast<size_t>(up)].area;
                     up = nodes[static_cast<size_t>(up)].parent;
                 }
-                int down = static_cast<int>(i);
-                while ((nodes[static_cast<size_t>(down)].main_child >= 0) && (nodes[static_cast<size_t>(nodes[static_cast<size_t>(down)].main_child)].level >= n.level - settings.delta)) {
-                    down = nodes[static_cast<size_t>(down)].main_child;
-                }
-                n.variation = static_cast<float>(nodes[static_cast<size_t>(up)].area - nodes[static_cast<size_t>(down)].area) / static_cast<float>(n.area);
+                n.variation = static_cast<float>(up_area - n.area) / static_cast<float>(n.area);
             }
             for (size_t i = 0; i < nodes.size(); ++i) {
                 node& n = nodes[i];
