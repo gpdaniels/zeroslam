@@ -259,5 +259,21 @@ int main(int argc, char* argv[]) {
     REQUIRE(closure.num_keyframes() == 40);
     REQUIRE(!closure.detect(42, identity, test_camera(), unconnected, nullptr, 0).found);
 
+    {
+        std::vector<feature::descriptor::binary<256>> descriptors;
+        for (const mapping::loop_closure::record& record : first) {
+            descriptors.push_back(record.descriptor);
+        }
+        const std::vector<int> recalled = closure.recall(descriptors.data(), descriptors.size(), 40);
+        REQUIRE(!recalled.empty());
+        REQUIRE(recalled.front() == 0);
+        closure.remove_keyframe(0);
+        REQUIRE(closure.num_keyframes() == 39);
+        for (const int keyframe_id : closure.recall(descriptors.data(), descriptors.size(), 40)) {
+            REQUIRE(keyframe_id != 0);
+        }
+        REQUIRE(!closure.detect(40, current_pose, test_camera(), unconnected, revisit.data(), revisit.size()).found);
+    }
+
     return EXIT_SUCCESS;
 }

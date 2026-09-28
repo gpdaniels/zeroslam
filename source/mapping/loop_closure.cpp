@@ -466,6 +466,7 @@ namespace mapping {
     }
 
     void loop_closure::remove_keyframe(const int keyframe_id) {
+        this->recognition.remove_keyframe(keyframe_id);
         this->keyframes.erase(keyframe_id);
     }
 
