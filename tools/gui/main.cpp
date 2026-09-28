@@ -1374,6 +1374,8 @@ int main(int argc, char* argv[]) {
             std::fprintf(stderr, "Failed to load the scene '%s': %s.\n", &scene_path_text[0], scene_error.c_str());
         }
         worker.channel.store(primary_visual_channel(loaded_scene));
+        worker.playback_time_nanoseconds.store(timeline.time_nanoseconds);
+        worker.pending_time_nanoseconds.store(-1);
         worker.start(loaded_scene);
     };
 
@@ -1408,6 +1410,7 @@ int main(int argc, char* argv[]) {
     }
 
     long long rendered_frames = 0;
+    bool load_requested = false;
     while (!shutdown_requested && window.is_open()) {
         gtl::window::event_type event;
         while (window.process(event)) {
@@ -1476,6 +1479,11 @@ int main(int argc, char* argv[]) {
         }
         if (!window.is_open()) {
             break;
+        }
+        if (load_requested) {
+            load_requested = false;
+            load_scene();
+            last_repaint = std::chrono::steady_clock::now();
         }
         pointer.mouse_x = mouse_x;
         pointer.mouse_y = mouse_y;
@@ -1793,7 +1801,7 @@ int main(int argc, char* argv[]) {
             controls.header("Scene");
             controls.text_input(editor, "mcap:", &scene_path_text[0], static_cast<int>(sizeof(scene_path_text)));
             if (controls.button("Load Scene", ui::panel::button_kind::positive)) {
-                load_scene();
+                load_requested = true;
             }
             if (controls.button("Reset SLAM", ui::panel::button_kind::negative, loaded_scene.is_loaded())) {
                 timeline.time_nanoseconds = loaded_scene.begin_time();
