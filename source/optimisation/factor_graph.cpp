@@ -521,7 +521,10 @@ namespace optimisation {
         const size_t block_count = state.block_vertices.size();
         state.blocks.resize(block_count);
 
-        core::thread_pool::instance().parallel_for(block_count, 16, [this, &state, &grouped_edges](const size_t block_index) {
+        const bool numeric_jacobians = std::any_of(this->edges.begin(), this->edges.end(), [](const edge* factor) {
+            return !factor->has_analytic_jacobians();
+        });
+        core::thread_pool::instance().parallel_for(block_count, numeric_jacobians ? block_count : 16, [this, &state, &grouped_edges](const size_t block_index) {
             const std::vector<edge*>& group = grouped_edges[state.block_vertices[block_index]];
             const vertex* const landmark_vertex = this->vertices_marginalised[state.block_vertices[block_index]];
             const bool landmark_is_free = !landmark_vertex->is_fixed();

@@ -198,6 +198,7 @@ namespace optimisation {
     public:
         void compute_residual();
         void compute_jacobians();
+        bool has_analytic_jacobians() const;
     };
 }
 

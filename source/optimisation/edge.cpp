@@ -206,6 +206,10 @@ namespace optimisation {
         }
     }
 
+    bool edge::has_analytic_jacobians() const {
+        return (this->functions == nullptr) || (this->functions->compute_jacobians != nullptr);
+    }
+
     void edge::compute_jacobians() {
         if (this->functions == nullptr) {
             return;
