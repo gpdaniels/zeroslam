@@ -73,7 +73,7 @@ namespace {
     }
 
     Class cls(const char* name) {
-        return objc_getClass(name);
+        return reinterpret_cast<Class>(objc_getClass(name));
     }
 
     template <typename function_type>

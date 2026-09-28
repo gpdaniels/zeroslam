@@ -481,9 +481,9 @@ namespace gtl {
         static id (*const msg_send_id)(id, SEL, id) = reinterpret_cast<id (*)(id, SEL, id)>(reinterpret_cast<void*>(objc_msgSend));
         static const char* (*const msg_send_utf8)(id, SEL) = reinterpret_cast<const char* (*)(id, SEL)>(reinterpret_cast<void*>(objc_msgSend));
 
-        static Class ns_autorelease_pool_class = objc_getClass("NSAutoreleasePool");
-        static Class ns_string_class = objc_getClass("NSString");
-        static Class ns_pasteboard_class = objc_getClass("NSPasteboard");
+        static Class ns_autorelease_pool_class = reinterpret_cast<Class>(objc_getClass("NSAutoreleasePool"));
+        static Class ns_string_class = reinterpret_cast<Class>(objc_getClass("NSString"));
+        static Class ns_pasteboard_class = reinterpret_cast<Class>(objc_getClass("NSPasteboard"));
         static SEL sel_alloc = sel_getUid("alloc");
         static SEL sel_init = sel_getUid("init");
         static SEL sel_drain = sel_getUid("drain");
@@ -562,9 +562,9 @@ namespace gtl {
         static id (*const msg_send_class_utf8)(Class, SEL, const char*) = reinterpret_cast<id (*)(Class, SEL, const char*)>(reinterpret_cast<void*>(objc_msgSend));
         static BOOL (*const msg_send_bool_id_id)(id, SEL, id, id) = reinterpret_cast<BOOL (*)(id, SEL, id, id)>(reinterpret_cast<void*>(objc_msgSend));
 
-        static Class ns_autorelease_pool_class = objc_getClass("NSAutoreleasePool");
-        static Class ns_string_class = objc_getClass("NSString");
-        static Class ns_pasteboard_class = objc_getClass("NSPasteboard");
+        static Class ns_autorelease_pool_class = reinterpret_cast<Class>(objc_getClass("NSAutoreleasePool"));
+        static Class ns_string_class = reinterpret_cast<Class>(objc_getClass("NSString"));
+        static Class ns_pasteboard_class = reinterpret_cast<Class>(objc_getClass("NSPasteboard"));
         static SEL sel_alloc = sel_getUid("alloc");
         static SEL sel_init = sel_getUid("init");
         static SEL sel_drain = sel_getUid("drain");
