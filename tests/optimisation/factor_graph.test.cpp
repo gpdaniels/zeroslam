@@ -634,5 +634,40 @@ int main(int argc, char* argv[]) {
         REQUIRE(!mixed.graph.get_diagnostics().used_square_root);
     }
 
+    {
+        core::random_pcg rng_marginalised(0x5eed0099ull);
+        problem marginalised;
+        build_problem(marginalised, rng_marginalised, 4, 10, false, false);
+        core::random_pcg rng_general(0x5eed0099ull);
+        problem general;
+        build_problem(general, rng_general, 4, 10, false, false);
+        general.landmarks[3]->set_marginalised(false);
+        REQUIRE(marginalised.graph.solve(5, true));
+        REQUIRE(general.graph.solve(5, true));
+        for (size_t i = 0; i < marginalised.cameras.size(); ++i) {
+            for (size_t p = 0; p < 7; ++p) {
+                REQUIRE(is_value_approx(marginalised.cameras[i]->get_parameters()[p], general.cameras[i]->get_parameters()[p], 1e-6));
+            }
+        }
+        for (size_t i = 0; i < marginalised.landmarks.size(); ++i) {
+            for (size_t p = 0; p < 3; ++p) {
+                REQUIRE(is_value_approx(marginalised.landmarks[i]->get_parameters()[p], general.landmarks[i]->get_parameters()[p], 1e-6));
+            }
+        }
+        REQUIRE(general.graph.remove_vertex(general.landmarks[3]));
+        REQUIRE(general.graph.remove_vertex(general.landmarks[4]));
+        REQUIRE(general.graph.solve(5, true));
+    }
+
+    {
+        core::random_pcg rng(0x5eed00aaull);
+        problem unsupported;
+        build_problem(unsupported, rng, 4, 10, false, false);
+        unsupported.cameras[1]->set_marginalised(true);
+        const double before = unsupported.landmarks[0]->get_parameters()[0];
+        REQUIRE(unsupported.graph.solve(5, true) == 0);
+        REQUIRE(unsupported.landmarks[0]->get_parameters()[0] == before);
+    }
+
     return EXIT_SUCCESS;
 }
