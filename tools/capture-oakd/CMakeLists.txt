@@ -282,6 +282,8 @@ FETCHCONTENT_DECLARE(
     depthai
     SOURCE_DIR "${CAPTURE_OAKD_DEPTHAI_SOURCE}"
 )
+# Link time optimisation recompiles depthai's code with this project's warnings as errors at the link, so build this directory without it.
+SET(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
 # depthai is third party code, build it without this project's warnings and warnings as errors.
 SET(CAPTURE_OAKD_C_FLAGS "${CMAKE_C_FLAGS}")
 SET(CAPTURE_OAKD_CXX_FLAGS "${CMAKE_CXX_FLAGS}")

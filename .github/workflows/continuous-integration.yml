@@ -33,13 +33,13 @@ jobs:
         ctest --test-dir build/format --build-config ${{ matrix.config }} --output-on-failure -R "^check_clang_format$"
         rm -rf build/format
 
-  build-and-test:
+  test:
     strategy:
       fail-fast: false
       matrix:
         os: ['ubuntu-latest', 'macos-latest', 'windows-latest']
         config: ['Debug', 'Release']
-    name: Build on ${{ matrix.os }} in ${{ matrix.config }}
+    name: Test on ${{ matrix.os }} in ${{ matrix.config }}
     runs-on: ${{ matrix.os }}
     steps:
     - name: Checkout repository.
@@ -57,7 +57,7 @@ jobs:
         ctest --test-dir build/${{ matrix.config }} --build-config ${{ matrix.config }} --output-on-failure --parallel 4
         rm -rf build/${{ matrix.config }}
 
-  build-tools:
+  tools:
     strategy:
       fail-fast: false
       matrix:
@@ -73,7 +73,7 @@ jobs:
       run: |
         if [ "$RUNNER_OS" == "Linux" ]; then
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libgl1-mesa-dev pkg-config zip autoconf automake libtool
+          sudo apt-get install -y libx11-dev libgl1-mesa-dev pkg-config zip autoconf automake libtool libudev-dev
         else
           echo "Nothing to install for $RUNNER_OS."
         fi
