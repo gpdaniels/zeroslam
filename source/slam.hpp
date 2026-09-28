@@ -2265,6 +2265,9 @@ public:
                         this->non_keyframe_anchors_.erase(blind_id);
                     }
                     this->blind_frame_ids_.clear();
+                    const int lost_frame_id = frame_current.id;
+                    this->non_keyframe_anchors_.erase(lost_frame_id);
+                    this->reconstruction.frames.erase(lost_frame_id);
                     if (this->reconstruction.frames.count(this->blind_run_origin_id_) != 0) {
                         this->last_tracked_frame_id_ = this->blind_run_origin_id_;
                     }
