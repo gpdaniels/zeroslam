@@ -431,5 +431,62 @@ int main(int argc, char* argv[]) {
         REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
     }
 
+    {
+        zeroslam_system* system = nullptr;
+        REQUIRE(zeroslam_create(&system) == zeroslam_return_success);
+
+        constexpr static const int width = 320;
+        constexpr static const int height = 240;
+        zeroslam_sensor_parameters_camera_struct camera_parameters{};
+        camera_parameters.width = width;
+        camera_parameters.height = height;
+        camera_parameters.focal_x = 262.5;
+        camera_parameters.focal_y = 262.5;
+        camera_parameters.centre_x = 160.0;
+        camera_parameters.centre_y = 120.0;
+        zeroslam_sensor_rig_struct rig{};
+        rig.type = zeroslam_sensor_camera;
+        rig.sensor_id = 3;
+        rig.parameters_length = static_cast<int>(sizeof(camera_parameters));
+        rig.parameters_data = &camera_parameters;
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig, 1) == zeroslam_return_success);
+
+        constexpr static const int frame_count = 21;
+        std::vector<std::vector<unsigned char>> frames(static_cast<size_t>(frame_count), std::vector<unsigned char>(static_cast<size_t>(width * height), 128));
+        for (int frame = 1; frame < frame_count; ++frame) {
+            render_corridor(0.05 * static_cast<double>(frame - 1), width, height, camera_parameters, frames[static_cast<size_t>(frame)].data());
+        }
+        std::vector<zeroslam_sensor_data_struct> batch(static_cast<size_t>(frame_count));
+        for (int frame = 0; frame < frame_count; ++frame) {
+            zeroslam_sensor_data_struct& data = batch[static_cast<size_t>(frame)];
+            data.sensor_id = 3;
+            data.timestamp = 1000 * (frame + 1);
+            data.measurement_length = width * height;
+            data.measurement_data = frames[static_cast<size_t>(frame)].data();
+        }
+
+        batch[2].measurement_length = 16;
+        REQUIRE(zeroslam_set_sensor_data(system, batch.data(), 3) == zeroslam_return_failure_invalid_sensor_data);
+        batch[2].measurement_length = width * height;
+        batch[2].timestamp = batch[1].timestamp;
+        REQUIRE(zeroslam_set_sensor_data(system, batch.data(), 3) == zeroslam_return_failure_invalid_sensor_data);
+        batch[2].timestamp = 3000;
+        long long int timestamp = -1;
+        REQUIRE(zeroslam_get_timestamp(system, &timestamp) == zeroslam_return_success);
+        REQUIRE(timestamp == 0);
+        zeroslam_pose_struct pose{};
+        REQUIRE(zeroslam_get_pose(system, &pose) == zeroslam_return_failure_invalid_argument);
+
+        REQUIRE(zeroslam_set_sensor_data(system, batch.data(), frame_count) == zeroslam_return_success);
+        REQUIRE(zeroslam_get_timestamp(system, &timestamp) == zeroslam_return_success);
+        REQUIRE(timestamp == 1000 * frame_count);
+
+        zeroslam_map_keyframes_struct keyframes{};
+        REQUIRE(zeroslam_get_map_keyframes(system, &keyframes) == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(keyframes.keyframes_length >= 2);
+
+        REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
+    }
+
     return EXIT_SUCCESS;
 }
