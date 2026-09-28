@@ -463,6 +463,7 @@ namespace optimisation {
         for (std::vector<edge*>& group : grouped_edges) {
             group.clear();
         }
+        state.general_neighbours.assign(general_count / 6, {});
         for (edge* factor : this->edges) {
             const vertex* marginalised_vertex = nullptr;
             for (const vertex* node : factor->get_vertices()) {
@@ -472,6 +473,13 @@ namespace optimisation {
             }
             if (marginalised_vertex == nullptr) {
                 this->accumulate_general_edge(factor);
+                for (const vertex* lhs : factor->get_vertices()) {
+                    for (const vertex* rhs : factor->get_vertices()) {
+                        if (!lhs->is_fixed() && !rhs->is_fixed()) {
+                            state.general_neighbours[static_cast<size_t>(lhs->get_ordering_id() / 6)].push_back(static_cast<size_t>(rhs->get_ordering_id() / 6));
+                        }
+                    }
+                }
                 continue;
             }
             const std::unordered_map<const vertex*, size_t>::const_iterator found = landmark_indices.find(marginalised_vertex);
@@ -480,6 +488,10 @@ namespace optimisation {
                 continue;
             }
             grouped_edges[found->second].push_back(factor);
+        }
+        for (std::vector<size_t>& neighbours : state.general_neighbours) {
+            std::sort(neighbours.begin(), neighbours.end());
+            neighbours.erase(std::unique(neighbours.begin(), neighbours.end()), neighbours.end());
         }
         state.general_right_hand_side.assign(general_count, static_cast<scalar>(0));
         for (size_t i = 0; i < general_count; ++i) {
@@ -694,11 +706,11 @@ namespace optimisation {
 
         state.increment.assign(static_cast<size_t>(general_params), static_cast<scalar>(0));
         state.scratch.assign(static_cast<size_t>(4 * general_params), static_cast<scalar>(0));
-        const auto apply_operator = [this, &state, &pool, general_groups, general_params, lambda, general_edges](const scalar* input, scalar* output) {
+        const auto apply_operator = [this, &state, &pool, general_groups, lambda, general_edges](const scalar* input, scalar* output) {
             pool.parallel_for(state.blocks.size(), 16, [&state, input](const size_t block_index) {
                 state.blocks[block_index].compute_operator_image(input);
             });
-            pool.parallel_for(static_cast<size_t>(general_groups), 1, [this, &state, input, output, general_params, lambda, general_edges](const size_t group) {
+            pool.parallel_for(static_cast<size_t>(general_groups), 1, [this, &state, input, output, lambda, general_edges](const size_t group) {
                 scalar* const target = output + (6 * group);
                 for (size_t i = 0; i < 6; ++i) {
                     target[i] = lambda * input[(6 * group) + i];
@@ -709,12 +721,14 @@ namespace optimisation {
                         block.add_operator_slot(state.pose_block_slot[static_cast<size_t>(k)], target);
                     }
                 }
-                if (general_edges) {
+                if (general_edges && !state.general_neighbours[group].empty()) {
                     for (size_t i = 0; i < 6; ++i) {
                         const size_t row = (6 * group) + i;
                         double sum = 0.0;
-                        for (int j = 0; j < general_params; ++j) {
-                            sum += this->h_pp[row][static_cast<size_t>(j)] * this->column_scale[static_cast<size_t>(j)] * static_cast<double>(input[j]);
+                        for (const size_t neighbour : state.general_neighbours[group]) {
+                            for (size_t j = 6 * neighbour; j < (6 * neighbour) + 6; ++j) {
+                                sum += this->h_pp[row][j] * this->column_scale[j] * static_cast<double>(input[j]);
+                            }
                         }
                         target[i] += static_cast<scalar>(this->column_scale[row] * sum);
                     }

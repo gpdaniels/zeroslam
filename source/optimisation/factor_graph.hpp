@@ -115,6 +115,7 @@ namespace optimisation {
             std::vector<scalar> preconditioner;
             std::vector<scalar> right_hand_side;
             std::vector<scalar> general_right_hand_side;
+            std::vector<std::vector<size_t>> general_neighbours;
             std::vector<scalar> increment;
             std::vector<scalar> scratch;
         };
