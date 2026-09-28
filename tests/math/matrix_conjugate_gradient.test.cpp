@@ -111,7 +111,7 @@ int main(int argc, char* argv[]) {
             std::vector<double> scratch(static_cast<size_t>(4 * size), 0.0);
             const math::conjugate_gradient_result result = math::conjugate_gradient(apply_operator, b.data(), x.data(), size, 10 * size, 1e-14, scratch.data());
             REQUIRE(result.converged);
-            REQUIRE(result.iterations <= 10 * size);
+            REQUIRE(result.iterations <= 2 * size);
             for (int i = 0; i < size; ++i) {
                 REQUIRE(is_value_approx(x[static_cast<size_t>(i)], expected[static_cast<size_t>(i)], 1e-10));
             }

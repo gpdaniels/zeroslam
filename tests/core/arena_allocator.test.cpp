@@ -50,7 +50,17 @@ int main(int argc, char* argv[]) {
         }
         std::vector<int, core::arena_allocator<int>> other(1000, 3);
         REQUIRE(other[999] == 3);
-        REQUIRE(core::arena_allocator<double>() == core::arena_allocator<int>());
+    }
+
+    {
+        int* released = nullptr;
+        {
+            core::arena::scope scope;
+            released = core::arena_allocator<int>(core::arena_allocator<double>()).allocate(16);
+            REQUIRE(released != nullptr);
+        }
+        core::arena::scope scope;
+        REQUIRE(core::arena::instance().allocate(16 * sizeof(int), alignof(int)) == released);
     }
 
     {
