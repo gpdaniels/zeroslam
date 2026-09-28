@@ -1071,6 +1071,7 @@ namespace mapping {
             const size_t landmarks_before_cull = this->landmarks.size();
 
             constexpr static const double outlier_scene_scale_multiple = 200.0;
+            constexpr static const double outlier_extent_fraction = 0.1;
             constexpr static const size_t outlier_minimum_frames = 10;
             bool outlier_bound_valid = false;
             double centroid_x = 0.0;
@@ -1106,7 +1107,8 @@ namespace mapping {
                     const double dz = cz[i] - centroid_z;
                     distances.push_back(math::sqrt((dx * dx) + (dy * dy) + (dz * dz)));
                 }
-                const double robust_scale = median(distances);
+                const double median_distance = median(distances);
+                const double robust_scale = math::max(median_distance, outlier_extent_fraction * distances.back());
                 if (robust_scale > 1.0e-9) {
                     const double bound = outlier_scene_scale_multiple * robust_scale;
                     outlier_distance_squared_maximum = bound * bound;
