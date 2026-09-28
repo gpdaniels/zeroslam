@@ -48,6 +48,34 @@ namespace {
             return ((this->window_handle != 0));
         }
 
+        static inline Display* context_error_display = nullptr;
+
+        static inline int context_error_count = 0;
+
+        static int count_context_error(Display* display, XErrorEvent*) {
+            if (display == x11_driver::context_error_display) {
+                ++x11_driver::context_error_count;
+            }
+            return 0;
+        }
+
+        template <typename create_type>
+        GLXContext create_context(create_type&& create) {
+            XSync(this->display_handle, False);
+            x11_driver::context_error_display = this->display_handle;
+            x11_driver::context_error_count = 0;
+            int (*const previous_handler)(Display*, XErrorEvent*) = XSetErrorHandler(&x11_driver::count_context_error);
+            GLXContext context = create();
+            XSync(this->display_handle, False);
+            XSetErrorHandler(previous_handler);
+            x11_driver::context_error_display = nullptr;
+            if ((x11_driver::context_error_count != 0) && (context != nullptr)) {
+                glXDestroyContext(this->display_handle, context);
+                context = nullptr;
+            }
+            return context;
+        }
+
         bool open(const position_type& position, const size_type& size, const std::string& title, const bool hardware_accelerated) override {
             if (this->is_open())
                 return false;
@@ -57,64 +85,10 @@ namespace {
                 return false;
             }
 
-            XSetWindowAttributes window_attributes;
-
-            window_attributes.event_mask =
-                KeyPressMask | KeyReleaseMask |
-                ButtonPressMask | ButtonReleaseMask |
-                EnterWindowMask | LeaveWindowMask |
-                PointerMotionMask |
-                Button1MotionMask | Button2MotionMask | Button3MotionMask | Button4MotionMask | Button5MotionMask | ButtonMotionMask |
-                KeymapStateMask |
-                ExposureMask |
-                VisibilityChangeMask |
-                StructureNotifyMask |
-                SubstructureNotifyMask |
-                FocusChangeMask |
-                PropertyChangeMask |
-                ColormapChangeMask |
-                OwnerGrabButtonMask;
-
-            window_attributes.override_redirect = False;
-
-            window_attributes.background_pixmap = None;
-
-            window_attributes.border_pixel = 0;
-
-            window_attributes.colormap = XCreateColormap(
-                this->display_handle,
-                (&(reinterpret_cast<_XPrivDisplay>(this->display_handle))->screens[((reinterpret_cast<_XPrivDisplay>(this->display_handle))->default_screen)])->root,
-                DefaultVisual(this->display_handle, DefaultScreen(this->display_handle)),
-                AllocNone
-            );
-
-            this->window_handle = XCreateWindow(
-                this->display_handle,
-                RootWindow(this->display_handle, DefaultScreen(this->display_handle)),
-                position.x,
-                position.y,
-                static_cast<unsigned int>(size.width),
-                static_cast<unsigned int>(size.height),
-                0,
-                DefaultDepth(this->display_handle, DefaultScreen(this->display_handle)),
-                InputOutput,
-                DefaultVisual(this->display_handle, DefaultScreen(this->display_handle)),
-                CWBorderPixel | CWBackPixmap | CWColormap | CWEventMask | CWOverrideRedirect,
-                &window_attributes
-            );
-
-            XSizeHints window_size{};
-            window_size.flags = PPosition | PSize;
-            window_size.x = position.x;
-            window_size.y = position.y;
-            window_size.width = size.width;
-            window_size.height = size.height;
-            XSetNormalHints(this->display_handle, this->window_handle, &window_size);
-
-            this->close_handler = XInternAtom(this->display_handle, "WM_DELETE_WINDOW", False);
-            XSetWMProtocols(this->display_handle, this->window_handle, &this->close_handler, 1);
-
-            this->set_title(title);
+            const int screen = DefaultScreen(this->display_handle);
+            Visual* visual = DefaultVisual(this->display_handle, screen);
+            int depth = DefaultDepth(this->display_handle, screen);
+            GLXFBConfig config = nullptr;
 
             if (hardware_accelerated) {
                 const int framebuffer_attributes[] = {
@@ -142,16 +116,81 @@ namespace {
                 };
 
                 int config_count = 0;
-                GLXFBConfig* configs = glXChooseFBConfig(this->display_handle, DefaultScreen(this->display_handle), framebuffer_attributes, &config_count);
-                if ((configs == nullptr) || (config_count <= 0)) {
-                    this->close();
-                    return false;
+                GLXFBConfig* configs = glXChooseFBConfig(this->display_handle, screen, framebuffer_attributes, &config_count);
+                if ((configs != nullptr) && (config_count > 0)) {
+                    config = configs[0];
+                }
+                if (configs != nullptr) {
+                    XFree(configs);
                 }
 
-                GLXFBConfig config = configs[0];
-                XFree(configs);
+                XVisualInfo* visual_info = (config != nullptr) ? glXGetVisualFromFBConfig(this->display_handle, config) : nullptr;
+                if (visual_info == nullptr) {
+                    XCloseDisplay(this->display_handle);
+                    this->display_handle = nullptr;
+                    return false;
+                }
+                visual = visual_info->visual;
+                depth = visual_info->depth;
+                XFree(visual_info);
+            }
 
-                int context_attributes[] = {
+            XSetWindowAttributes window_attributes;
+
+            window_attributes.event_mask =
+                KeyPressMask | KeyReleaseMask |
+                ButtonPressMask | ButtonReleaseMask |
+                EnterWindowMask | LeaveWindowMask |
+                PointerMotionMask |
+                Button1MotionMask | Button2MotionMask | Button3MotionMask | Button4MotionMask | Button5MotionMask | ButtonMotionMask |
+                KeymapStateMask |
+                ExposureMask |
+                VisibilityChangeMask |
+                StructureNotifyMask |
+                SubstructureNotifyMask |
+                FocusChangeMask |
+                PropertyChangeMask |
+                ColormapChangeMask |
+                OwnerGrabButtonMask;
+
+            window_attributes.override_redirect = False;
+
+            window_attributes.background_pixmap = None;
+
+            window_attributes.border_pixel = 0;
+
+            window_attributes.colormap = XCreateColormap(this->display_handle, RootWindow(this->display_handle, screen), visual, AllocNone);
+
+            this->window_handle = XCreateWindow(
+                this->display_handle,
+                RootWindow(this->display_handle, screen),
+                position.x,
+                position.y,
+                static_cast<unsigned int>(size.width),
+                static_cast<unsigned int>(size.height),
+                0,
+                depth,
+                InputOutput,
+                visual,
+                CWBorderPixel | CWBackPixmap | CWColormap | CWEventMask | CWOverrideRedirect,
+                &window_attributes
+            );
+
+            XSizeHints window_size{};
+            window_size.flags = PPosition | PSize;
+            window_size.x = position.x;
+            window_size.y = position.y;
+            window_size.width = size.width;
+            window_size.height = size.height;
+            XSetNormalHints(this->display_handle, this->window_handle, &window_size);
+
+            this->close_handler = XInternAtom(this->display_handle, "WM_DELETE_WINDOW", False);
+            XSetWMProtocols(this->display_handle, this->window_handle, &this->close_handler, 1);
+
+            this->set_title(title);
+
+            if (hardware_accelerated) {
+                const int context_attributes[] = {
                     GLX_CONTEXT_MAJOR_VERSION_ARB,
                     3,
                     GLX_CONTEXT_MINOR_VERSION_ARB,
@@ -164,12 +203,17 @@ namespace {
                 using PFNGLXCREATECONTEXTATTRIBSARBPROC = GLXContext (*)(Display*, GLXFBConfig, GLXContext, Bool, const int*);
                 PFNGLXCREATECONTEXTATTRIBSARBPROC glXCreateContextAttribsARB = reinterpret_cast<PFNGLXCREATECONTEXTATTRIBSARBPROC>(glXGetProcAddressARB(reinterpret_cast<const GLubyte*>("glXCreateContextAttribsARB")));
 
-                if (!glXCreateContextAttribsARB) {
-                    this->close();
-                    return false;
+                if (glXCreateContextAttribsARB) {
+                    this->opengl_context = this->create_context([&]() {
+                        return glXCreateContextAttribsARB(this->display_handle, config, nullptr, True, &context_attributes[0]);
+                    });
                 }
 
-                this->opengl_context = glXCreateContextAttribsARB(this->display_handle, config, nullptr, GL_TRUE, context_attributes);
+                if (!this->opengl_context) {
+                    this->opengl_context = this->create_context([&]() {
+                        return glXCreateNewContext(this->display_handle, config, GLX_RGBA_TYPE, nullptr, True);
+                    });
+                }
 
                 if (!this->opengl_context) {
                     this->close();
