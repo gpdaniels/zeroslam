@@ -28,11 +28,16 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
+#include <algorithm>
+#include <atomic>
 #include <cerrno>
-#include <csignal>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <fcntl.h>
+#include <mutex>
 #include <sys/select.h>
-#include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 #endif
 #endif
@@ -64,158 +69,263 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 namespace gtl {
 #if defined(GTL_CLIPBOARD_DRIVER_LINUX_X11) && GTL_CLIPBOARD_DRIVER_LINUX_X11
     namespace {
-        pid_t g_clipboard_owner_pid = 0;
+        class selection_owner final {
+        private:
+            struct atom_set final {
+                Atom clipboard;
+                Atom targets;
+                Atom utf8;
+                Atom text_plain;
+                Atom text_plain_utf8;
+                Atom manager;
+                Atom save_targets;
+            };
 
-        void reap_clipboard_owner() {
-            if (g_clipboard_owner_pid > 0) {
-                if (waitpid(g_clipboard_owner_pid, nullptr, WNOHANG) == g_clipboard_owner_pid) {
-                    g_clipboard_owner_pid = 0;
+            static inline std::atomic<Display*> owner_display{ nullptr };
+
+            static inline int (*previous_error_handler)(Display*, XErrorEvent*) = nullptr;
+
+            static inline bool error_handler_installed = false;
+
+            std::mutex mutex;
+
+            std::condition_variable acknowledged;
+
+            std::thread thread;
+
+            std::string text;
+
+            unsigned long long requested_generation = 0;
+
+            unsigned long long served_generation = 0;
+
+            bool owning = false;
+
+            bool running = false;
+
+            bool stopping = false;
+
+            int wake[2] = { -1, -1 };
+
+        private:
+            static int ignore_owner_errors(Display* display, XErrorEvent* error) {
+                if (display == selection_owner::owner_display.load()) {
+                    return 0;
                 }
-            }
-        }
-
-        void retire_clipboard_owner(const pid_t pid) {
-            if (pid > 0) {
-                kill(pid, SIGTERM);
-                waitpid(pid, nullptr, 0);
-            }
-        }
-
-        void host_clipboard(const std::string& text) {
-            reap_clipboard_owner();
-
-            const pid_t outgoing_owner_pid = g_clipboard_owner_pid;
-
-            int handshake[2] = { -1, -1 };
-            if (pipe(&handshake[0]) != 0) {
-                handshake[0] = -1;
-                handshake[1] = -1;
+                return (selection_owner::previous_error_handler != nullptr) ? selection_owner::previous_error_handler(display, error) : 0;
             }
 
-            pid_t pid = fork();
-            if (pid < 0) {
-                if (handshake[0] >= 0) {
-                    close(handshake[0]);
-                    close(handshake[1]);
+            static bool is_text_target(const Atom target, const atom_set& atoms) {
+                return (target == atoms.utf8) || (target == atoms.text_plain_utf8) || (target == atoms.text_plain) || (target == XA_STRING);
+            }
+
+            static void answer(Display* display, const XSelectionRequestEvent& request, const std::string& served, const atom_set& atoms) {
+                const Atom property = (request.property != None) ? request.property : request.target;
+                XEvent response{};
+                response.xselection.type = SelectionNotify;
+                response.xselection.display = request.display;
+                response.xselection.requestor = request.requestor;
+                response.xselection.selection = request.selection;
+                response.xselection.target = request.target;
+                response.xselection.property = property;
+                response.xselection.time = request.time;
+                if (request.target == atoms.targets) {
+                    Atom list[5] = { atoms.targets, atoms.utf8, atoms.text_plain, atoms.text_plain_utf8, XA_STRING };
+                    XChangeProperty(display, request.requestor, property, XA_ATOM, 32, PropModeReplace, reinterpret_cast<unsigned char*>(&list[0]), 5);
                 }
-                return;
-            }
-            if (pid > 0) {
-                g_clipboard_owner_pid = pid;
-                if (handshake[0] >= 0) {
-                    close(handshake[1]);
-                    constexpr static const long maximum_wait_microseconds = 1000000;
-                    long remaining_microseconds = maximum_wait_microseconds;
-                    while (remaining_microseconds > 0) {
-                        fd_set descriptors;
-                        FD_ZERO(&descriptors);
-                        FD_SET(handshake[0], &descriptors);
-                        struct timeval timeout;
-                        timeout.tv_sec = remaining_microseconds / 1000000;
-                        timeout.tv_usec = remaining_microseconds % 1000000;
-                        const int ready = select(handshake[0] + 1, &descriptors, nullptr, nullptr, &timeout);
-                        remaining_microseconds = (timeout.tv_sec * 1000000) + timeout.tv_usec;
-                        if ((ready < 0) && (errno == EINTR)) {
-                            continue;
-                        }
-                        if (ready > 0) {
-                            char acknowledgement = 0;
-                            const ssize_t received = ::read(handshake[0], &acknowledgement, 1);
-                            static_cast<void>(received);
-                        }
-                        break;
-                    }
-                    close(handshake[0]);
-                }
-                retire_clipboard_owner(outgoing_owner_pid);
-                return;
-            }
-
-            if (handshake[0] >= 0) {
-                close(handshake[0]);
-            }
-
-            Display* d = XOpenDisplay(nullptr);
-            if (!d) {
-                _exit(1);
-            }
-
-            Window w = XCreateSimpleWindow(d, DefaultRootWindow(d), 0, 0, 1, 1, 0, 0, 0);
-
-            Atom clipboard = XInternAtom(d, "CLIPBOARD", False);
-            Atom targets = XInternAtom(d, "TARGETS", False);
-            Atom utf8 = XInternAtom(d, "UTF8_STRING", False);
-            Atom text_plain = XInternAtom(d, "text/plain", False);
-            Atom text_plain_utf8 = XInternAtom(d, "text/plain;charset=utf-8", False);
-
-            XSetSelectionOwner(d, clipboard, w, CurrentTime);
-            XFlush(d);
-
-            static_cast<void>(XGetSelectionOwner(d, clipboard));
-            if (handshake[1] >= 0) {
-                const char acknowledgement = 1;
-                const ssize_t sent = ::write(handshake[1], &acknowledgement, 1);
-                static_cast<void>(sent);
-                close(handshake[1]);
-            }
-
-            int fd = ConnectionNumber(d);
-            fd_set readfds;
-            struct timeval tv;
-            int max_seconds = 60;
-            int elapsed = 0;
-
-            XEvent ev;
-            while (elapsed < max_seconds) {
-                FD_ZERO(&readfds);
-                FD_SET(fd, &readfds);
-                tv.tv_sec = 1;
-                tv.tv_usec = 0;
-
-                int select_result = select(fd + 1, &readfds, nullptr, nullptr, &tv);
-                if (select_result > 0) {
-                    while (XPending(d) > 0) {
-                        XNextEvent(d, &ev);
-
-                        if (ev.type == SelectionRequest) {
-                            XSelectionRequestEvent* req = &ev.xselectionrequest;
-                            XEvent res{};
-                            res.xselection.type = SelectionNotify;
-                            res.xselection.display = req->display;
-                            res.xselection.requestor = req->requestor;
-                            res.xselection.selection = req->selection;
-                            res.xselection.target = req->target;
-                            res.xselection.property = req->property;
-                            res.xselection.time = req->time;
-
-                            if (req->target == utf8 || req->target == text_plain_utf8 || req->target == text_plain || req->target == XA_STRING) {
-                                XChangeProperty(d, req->requestor, req->property, utf8, 8, PropModeReplace, reinterpret_cast<const unsigned char*>(text.c_str()), static_cast<int>(text.size()));
-                            }
-                            else if (req->target == targets) {
-                                Atom list[5] = { targets, utf8, text_plain, text_plain_utf8, XA_STRING };
-                                XChangeProperty(d, req->requestor, req->property, XA_ATOM, 32, PropModeReplace, reinterpret_cast<unsigned char*>(list), 5);
-                            }
-                            else {
-                                res.xselection.property = None;
-                            }
-
-                            XSendEvent(d, req->requestor, False, 0, &res);
-                            XFlush(d);
-                        }
-
-                        if (ev.type == SelectionClear) {
-                            elapsed = max_seconds;
-                            break;
-                        }
-                    }
+                else if (selection_owner::is_text_target(request.target, atoms)) {
+                    XChangeProperty(display, request.requestor, property, request.target, 8, PropModeReplace, reinterpret_cast<const unsigned char*>(served.data()), static_cast<int>(served.size()));
                 }
                 else {
-                    elapsed++;
+                    response.xselection.property = None;
+                }
+                XSendEvent(display, request.requestor, False, 0, &response);
+                XFlush(display);
+            }
+
+            bool wait_for_events(Display* display, const long timeout_microseconds) const {
+                const int connection = ConnectionNumber(display);
+                fd_set descriptors;
+                FD_ZERO(&descriptors);
+                FD_SET(connection, &descriptors);
+                FD_SET(this->wake[0], &descriptors);
+                struct timeval timeout;
+                timeout.tv_sec = timeout_microseconds / 1000000;
+                timeout.tv_usec = timeout_microseconds % 1000000;
+                const int ready = select(std::max(connection, this->wake[0]) + 1, &descriptors, nullptr, nullptr, (timeout_microseconds >= 0) ? &timeout : nullptr);
+                if ((ready > 0) && FD_ISSET(this->wake[0], &descriptors)) {
+                    char drained[64];
+                    while (::read(this->wake[0], &drained[0], sizeof(drained)) > 0) {
+                    }
+                }
+                return (ready > 0) || ((ready < 0) && (errno == EINTR));
+            }
+
+            void hand_over(Display* display, const Window window, const std::string& served, const atom_set& atoms) const {
+                if (XGetSelectionOwner(display, atoms.manager) == None) {
+                    return;
+                }
+                XConvertSelection(display, atoms.manager, atoms.save_targets, None, window, CurrentTime);
+                XFlush(display);
+                const std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+                while (std::chrono::steady_clock::now() < deadline) {
+                    while (XPending(display) > 0) {
+                        XEvent event;
+                        XNextEvent(display, &event);
+                        if (event.type == SelectionRequest) {
+                            selection_owner::answer(display, event.xselectionrequest, served, atoms);
+                        }
+                        else if ((event.type == SelectionNotify) && (event.xselection.selection == atoms.manager)) {
+                            return;
+                        }
+                    }
+                    const long remaining_microseconds = static_cast<long>(std::chrono::duration_cast<std::chrono::microseconds>(deadline - std::chrono::steady_clock::now()).count());
+                    if ((remaining_microseconds <= 0) || !this->wait_for_events(display, remaining_microseconds)) {
+                        return;
+                    }
                 }
             }
 
-            XCloseDisplay(d);
-            _exit(0);
+            void finish(const bool owned) {
+                std::lock_guard<std::mutex> lock(this->mutex);
+                this->owning = owned;
+                this->running = false;
+                this->served_generation = this->requested_generation;
+                this->acknowledged.notify_all();
+            }
+
+            void serve() {
+                Display* const display = XOpenDisplay(nullptr);
+                if (display == nullptr) {
+                    this->finish(false);
+                    return;
+                }
+                selection_owner::owner_display.store(display);
+                if (!selection_owner::error_handler_installed) {
+                    selection_owner::previous_error_handler = XSetErrorHandler(&selection_owner::ignore_owner_errors);
+                    selection_owner::error_handler_installed = true;
+                }
+
+                const Window window = XCreateSimpleWindow(display, DefaultRootWindow(display), 0, 0, 1, 1, 0, 0, 0);
+                atom_set atoms;
+                atoms.clipboard = XInternAtom(display, "CLIPBOARD", False);
+                atoms.targets = XInternAtom(display, "TARGETS", False);
+                atoms.utf8 = XInternAtom(display, "UTF8_STRING", False);
+                atoms.text_plain = XInternAtom(display, "text/plain", False);
+                atoms.text_plain_utf8 = XInternAtom(display, "text/plain;charset=utf-8", False);
+                atoms.manager = XInternAtom(display, "CLIPBOARD_MANAGER", False);
+                atoms.save_targets = XInternAtom(display, "SAVE_TARGETS", False);
+
+                std::string served;
+                bool owned = false;
+                while (true) {
+                    {
+                        std::lock_guard<std::mutex> lock(this->mutex);
+                        if (this->stopping) {
+                            break;
+                        }
+                        if (this->served_generation != this->requested_generation) {
+                            served = this->text;
+                            XSetSelectionOwner(display, atoms.clipboard, window, CurrentTime);
+                            owned = (XGetSelectionOwner(display, atoms.clipboard) == window);
+                            this->owning = owned;
+                            this->served_generation = this->requested_generation;
+                            this->acknowledged.notify_all();
+                        }
+                    }
+                    while (XPending(display) > 0) {
+                        XEvent event;
+                        XNextEvent(display, &event);
+                        if (event.type == SelectionRequest) {
+                            selection_owner::answer(display, event.xselectionrequest, served, atoms);
+                        }
+                        else if ((event.type == SelectionClear) && (event.xselectionclear.selection == atoms.clipboard)) {
+                            owned = false;
+                            std::lock_guard<std::mutex> lock(this->mutex);
+                            this->owning = false;
+                        }
+                    }
+                    this->wait_for_events(display, -1);
+                }
+
+                if (owned) {
+                    this->hand_over(display, window, served, atoms);
+                }
+                XDestroyWindow(display, window);
+                XCloseDisplay(display);
+                selection_owner::owner_display.store(nullptr);
+                this->finish(false);
+            }
+
+            void notify() const {
+                if (this->wake[1] >= 0) {
+                    const char wake_byte = 1;
+                    const ssize_t sent = ::write(this->wake[1], &wake_byte, 1);
+                    static_cast<void>(sent);
+                }
+            }
+
+        public:
+            ~selection_owner() {
+                {
+                    std::lock_guard<std::mutex> lock(this->mutex);
+                    this->stopping = true;
+                }
+                this->notify();
+                if (this->thread.joinable()) {
+                    this->thread.join();
+                }
+                for (const int descriptor : this->wake) {
+                    if (descriptor >= 0) {
+                        close(descriptor);
+                    }
+                }
+            }
+
+            selection_owner() = default;
+
+            selection_owner(const selection_owner&) = delete;
+
+            selection_owner(selection_owner&&) = delete;
+
+            selection_owner& operator=(const selection_owner&) = delete;
+
+            selection_owner& operator=(selection_owner&&) = delete;
+
+        public:
+            bool publish(const std::string& new_text) {
+                std::unique_lock<std::mutex> lock(this->mutex);
+                if (this->wake[0] < 0) {
+                    if (pipe(&this->wake[0]) != 0) {
+                        this->wake[0] = -1;
+                        this->wake[1] = -1;
+                        return false;
+                    }
+                    for (const int descriptor : this->wake) {
+                        fcntl(descriptor, F_SETFL, fcntl(descriptor, F_GETFL) | O_NONBLOCK);
+                        fcntl(descriptor, F_SETFD, FD_CLOEXEC);
+                    }
+                }
+                if (!this->running) {
+                    if (this->thread.joinable()) {
+                        this->thread.join();
+                    }
+                    this->running = true;
+                    this->thread = std::thread(&selection_owner::serve, this);
+                }
+                this->text = new_text;
+                const unsigned long long generation = ++this->requested_generation;
+                this->notify();
+                this->acknowledged.wait_for(lock, std::chrono::seconds(1), [&]() {
+                    return (this->served_generation >= generation) || !this->running;
+                });
+                return (this->served_generation >= generation) && this->owning;
+            }
+        };
+
+        selection_owner& clipboard_owner() {
+            static selection_owner owner;
+            return owner;
         }
     }
 #endif
@@ -223,8 +333,6 @@ namespace gtl {
     bool clipboard::read(std::string& text) {
         text.clear();
 #if defined(GTL_CLIPBOARD_DRIVER_LINUX_X11) && GTL_CLIPBOARD_DRIVER_LINUX_X11
-        reap_clipboard_owner();
-
         Display* display = XOpenDisplay(nullptr);
         if (!display) {
             return false;
@@ -407,8 +515,7 @@ namespace gtl {
 
     bool clipboard::write(const std::string& text) {
 #if defined(GTL_CLIPBOARD_DRIVER_LINUX_X11) && GTL_CLIPBOARD_DRIVER_LINUX_X11
-        host_clipboard(text);
-        return true;
+        return clipboard_owner().publish(text);
 
 #elif defined(GTL_CLIPBOARD_DRIVER_WINDOWS_WIN32) && GTL_CLIPBOARD_DRIVER_WINDOWS_WIN32
         if (!OpenClipboard(nullptr)) {
