@@ -232,6 +232,12 @@ int main(int argc, char* argv[]) {
 
     std::string error;
 
+    std::string output_directory;
+    if (!import::scene_output_paths(output_path, output_directory, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return EXIT_FAILURE;
+    }
+
     const std::string stereo_directory = stereo_directory_override.empty() ? eth3d_directory : stereo_directory_override;
     const std::string rgbd_directory = rgbd_directory_override.empty() ? eth3d_directory : rgbd_directory_override;
     const std::string imu_directory = imu_directory_override.empty() ? eth3d_directory : imu_directory_override;
@@ -355,7 +361,7 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    const std::string output_directory = gtl::paths::path_stem(output_path);
+    import::clear_scene_sensors(output_directory);
     if (!gtl::directory::make_directories(output_directory + "/sensor/image_01") || (stereo_enabled && !gtl::directory::make_directories(output_directory + "/sensor/image_02")) || (rgbd_enabled && !gtl::directory::make_directories(output_directory + "/sensor/depth_01"))) {
         std::fprintf(stderr, "Failed to create: %s\n", output_directory.c_str());
         return EXIT_FAILURE;

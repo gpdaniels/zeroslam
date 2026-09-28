@@ -68,6 +68,14 @@ namespace gtl {
         return make_directory(path);
     }
 
+    bool directory::remove_directory(const std::string& path) {
+#if defined(_WIN32)
+        return ::_rmdir(path.c_str()) == 0;
+#else
+        return ::rmdir(path.c_str()) == 0;
+#endif
+    }
+
     bool directory::list_directory(const std::string& path, std::vector<std::string>& names) {
         names.clear();
 #if defined(_WIN32)

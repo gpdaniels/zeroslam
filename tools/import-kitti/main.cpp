@@ -255,6 +255,12 @@ int main(int argc, char* argv[]) {
 
     std::string error;
 
+    std::string output_directory;
+    if (!import::scene_output_paths(output_path, output_directory, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return EXIT_FAILURE;
+    }
+
     std::printf("Reading camera calibration...\n");
     projection projections[camera_count];
     if (!read_projections(sequence_directory + "/calib.txt", &projections[0], error)) {
@@ -358,7 +364,7 @@ int main(int argc, char* argv[]) {
         std::printf("    %s = %s, %s, at (%.4f, %.4f, %.4f) m, [fx fy cx cy] = [%.4f %.4f %.4f %.4f].\n", camera.sensor_name.c_str(), camera_directory(camera.index).c_str(), (camera.index < 2) ? "greyscale" : "colour", camera.translation[0], camera.translation[1], camera.translation[2], camera.intrinsics[0], camera.intrinsics[1], camera.intrinsics[2], camera.intrinsics[3]);
     }
 
-    const std::string output_directory = gtl::paths::path_stem(output_path);
+    import::clear_scene_sensors(output_directory);
     for (const scene_camera& camera : cameras) {
         if (!gtl::directory::make_directories(output_directory + "/sensor/" + camera.sensor_name)) {
             std::fprintf(stderr, "Failed to create: %s\n", (output_directory + "/sensor/" + camera.sensor_name).c_str());

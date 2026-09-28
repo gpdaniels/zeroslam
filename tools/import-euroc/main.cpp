@@ -231,6 +231,12 @@ int main(int argc, char* argv[]) {
 
     std::string error;
 
+    std::string output_directory;
+    if (!import::scene_output_paths(output_path, output_directory, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return EXIT_FAILURE;
+    }
+
     std::printf("Reading camera calibration...\n");
     camera_calibration cam0;
     camera_calibration cam1;
@@ -305,7 +311,7 @@ int main(int argc, char* argv[]) {
     }
     std::printf("    %zu of %zu matched frames are inside the ground truth's coverage.\n", retained_frames.size(), matched_frames.size());
 
-    const std::string output_directory = gtl::paths::path_stem(output_path);
+    import::clear_scene_sensors(output_directory);
     if (!gtl::directory::make_directories(output_directory + "/sensor/image_01") || !gtl::directory::make_directories(output_directory + "/sensor/image_02")) {
         std::fprintf(stderr, "Failed to create: %s\n", output_directory.c_str());
         return EXIT_FAILURE;

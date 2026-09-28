@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ZEROSLAM_TOOLS_COMMON_IMPORT_HPP
 
 #include "dataset.hpp"
+#include "directory.hpp"
 #include "file.hpp"
 #include "paths.hpp"
 #include "process.hpp"
@@ -114,6 +115,73 @@ namespace import {
 
     inline void remove_absent_scene_file(const std::string& path) {
         std::remove(path.c_str());
+    }
+
+    // Both "v1.01.mcap" and "v1.01" write the directory "v1.01" and pack it into "v1.01.mcap".
+    inline bool scene_output_paths(std::string& output_path, std::string& directory, std::string& error) {
+        const std::string extension = ".mcap";
+        if (output_path.empty() || (output_path.back() == '/') || (output_path.back() == '\\')) {
+            error = "The output '" + output_path + "' is not a scene file name.";
+            return false;
+        }
+        std::string suffix = (output_path.size() > extension.size()) ? output_path.substr(output_path.size() - extension.size()) : std::string();
+        std::transform(suffix.begin(), suffix.end(), suffix.begin(), [](const char character) {
+            return static_cast<char>(((character >= 'A') && (character <= 'Z')) ? (character - 'A' + 'a') : character);
+        });
+        const char before_extension = (output_path.size() > extension.size()) ? output_path[output_path.size() - extension.size() - 1] : '/';
+        const bool has_extension = (suffix == extension) && (before_extension != '/') && (before_extension != '\\');
+        if (has_extension) {
+            directory = output_path.substr(0, output_path.size() - extension.size());
+        }
+        else {
+            directory = output_path;
+            output_path += extension;
+        }
+        if (gtl::paths::exists(directory) && !gtl::paths::is_directory(directory)) {
+            error = "The scene directory '" + directory + "' already exists as a file.";
+            return false;
+        }
+        if (gtl::paths::is_directory(output_path)) {
+            error = "The output '" + output_path + "' already exists as a directory.";
+            return false;
+        }
+        if (!has_extension) {
+            std::printf("The output has no '%s' extension, the scene is written to '%s'.\n", extension.c_str(), output_path.c_str());
+        }
+        return true;
+    }
+
+    inline bool is_scene_camera_name(const std::string& name) {
+        return dataset::is_valid_sensor_name(name, "image") || dataset::is_valid_sensor_name(name, "depth");
+    }
+
+    // Only removes the scene layout's own sensor files and camera frames, never anything else in the directory.
+    inline void clear_scene_sensors(const std::string& directory) {
+        const std::string sensor_directory = directory + "/sensor";
+        std::vector<std::string> entries;
+        if (!gtl::directory::list_directory(sensor_directory, entries)) {
+            return;
+        }
+        for (const std::string& entry : entries) {
+            const std::string path = sensor_directory + "/" + entry;
+            if (gtl::paths::is_regular_file(path)) {
+                const std::string name = gtl::paths::path_stem(entry);
+                if ((gtl::paths::path_extension(entry) == ".txt") && (is_scene_camera_name(name) || (dataset::inertial_type_of(name) != dataset::inertial_type::unknown))) {
+                    std::remove(path.c_str());
+                }
+            }
+            else if (gtl::paths::is_directory(path) && is_scene_camera_name(entry)) {
+                std::vector<std::string> frames;
+                gtl::directory::list_directory(path, frames);
+                for (const std::string& frame : frames) {
+                    const std::string frame_extension = gtl::paths::path_extension(frame);
+                    if (((frame_extension == ".pnm") || (frame_extension == ".pgm")) && gtl::paths::is_regular_file(path + "/" + frame)) {
+                        std::remove((path + "/" + frame).c_str());
+                    }
+                }
+                gtl::directory::remove_directory(path);
+            }
+        }
     }
 
     inline void pixel_centre_principal_point(double intrinsics[4]) {

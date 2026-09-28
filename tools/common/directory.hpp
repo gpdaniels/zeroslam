@@ -57,6 +57,11 @@ namespace gtl {
         /// @return true if the directory exists after the call, false otherwise.
         static bool make_directories(const std::string& path);
 
+        /// @brief  Remove one empty directory.
+        /// @param path The path of the directory to remove.
+        /// @return true if the directory was removed, false otherwise.
+        static bool remove_directory(const std::string& path);
+
         /// @brief  The names of the entries of a directory, excluding "." and "..", sorted so that a directory reads the same on every filesystem.
         /// @param path The path of the directory to list.
         /// @param[out] names The names of the entries of the directory.
