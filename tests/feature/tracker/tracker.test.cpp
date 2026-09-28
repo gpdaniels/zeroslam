@@ -46,6 +46,25 @@ static inline double texture(double x, double y) {
            25.0 * std::sin(0.30 * x - 0.12 * y);
 }
 
+static inline double broadband_texture(double x, double y) {
+    double value = 128.0;
+    for (int octave = 0; octave < 6; ++octave) {
+        const double frequency = 0.04 * std::pow(1.8, octave);
+        const double falloff = 1.0 + (0.5 * octave);
+        value += (40.0 / falloff) * std::sin((frequency * x) + (1.3 * octave)) * std::sin((1.1 * frequency * y) + (0.7 * octave));
+        value += (25.0 / falloff) * std::cos((0.8 * frequency * x) + (0.6 * frequency * y) + (2.1 * octave));
+    }
+    return value;
+}
+
+static inline double frame_noise(double x, double y, int frame) {
+    unsigned int hash = (static_cast<unsigned int>(x) * 73856093u) ^ (static_cast<unsigned int>(y) * 19349663u) ^ (static_cast<unsigned int>(frame + 1) * 83492791u);
+    hash ^= hash >> 13;
+    hash *= 0x5bd1e995u;
+    hash ^= hash >> 15;
+    return (static_cast<double>(hash % 1000u) / 1000.0) - 0.5;
+}
+
 template <typename function_type>
 static inline image::image make_image(size_t rows, size_t cols, function_type function) {
     image::image result(rows, cols);
@@ -728,6 +747,65 @@ int main(int argc, char* argv[]) {
         run(feature::tracker::patch_flow::model_kind::translation_illumination, 0.0f);
         run(feature::tracker::patch_flow::model_kind::affine_illumination, 0.0f);
         run(feature::tracker::patch_flow::model_kind::translation, 1.0f);
+    }
+
+    {
+        constexpr static const size_t wavelet_dimension = 256;
+        constexpr static const int base_x[4] = { 90, 128, 160, 110 };
+        constexpr static const int base_y[4] = { 90, 110, 150, 170 };
+        constexpr static const size_t point_count = 4;
+        constexpr static const int frame_count = 5;
+
+        const auto run = [&](const int step_x, const int step_y, const double noise, const feature::tracker::tracker::wavelet_seed_kind seed, const bool anchored, const int levels) {
+            feature::tracker::tracker::options opts;
+            opts.association = feature::tracker::tracker::association_kind::optical_flow;
+            opts.flow = feature::tracker::tracker::flow_kind::wavelet;
+            opts.wavelet_seed = seed;
+            opts.wavelet_levels = levels;
+            opts.anchored_patches = anchored;
+            feature::tracker::tracker manager(opts);
+            int point_ids[point_count] = { -1, -1, -1, -1 };
+            for (int k = 0; k < frame_count; ++k) {
+                const image::image frame = make_image(wavelet_dimension, wavelet_dimension, [=](double x, double y) {
+                    return broadband_texture(x - static_cast<double>(k * step_x), y - static_cast<double>(k * step_y)) + (noise * frame_noise(x, y, k));
+                });
+                std::vector<feature::point> keypoints;
+                std::vector<feature::descriptor::binary<256>> descriptors;
+                for (size_t p = 0; (k == 0) && (p < point_count); ++p) {
+                    keypoints.push_back(feature::point{ static_cast<float>(base_x[p]), static_cast<float>(base_y[p]), 0.0f, 0.0f, 0 });
+                    descriptors.push_back(describe_at(frame, base_x[p], base_y[p]));
+                }
+                manager.update(k, image::pyramid(frame), keypoints, descriptors);
+                if (k == 0) {
+                    REQUIRE(manager.tracks().size() == point_count);
+                    for (size_t p = 0; p < point_count; ++p) {
+                        point_ids[p] = manager.tracks()[p].id;
+                        REQUIRE((manager.tracks()[p].wavelet_anchored != nullptr) == anchored);
+                        REQUIRE(manager.tracks()[p].anchored == nullptr);
+                    }
+                }
+            }
+            size_t followed_count = 0;
+            for (size_t p = 0; p < point_count; ++p) {
+                const feature::tracker::tracker::track* const followed = manager.find(point_ids[p]);
+                if ((followed == nullptr) || !followed->active) {
+                    continue;
+                }
+                const double expected_x = static_cast<double>(base_x[p] + ((frame_count - 1) * step_x));
+                const double expected_y = static_cast<double>(base_y[p] + ((frame_count - 1) * step_y));
+                followed_count += ((std::abs(static_cast<double>(followed->x) - expected_x) < 1.0) && (std::abs(static_cast<double>(followed->y) - expected_y) < 1.0)) ? 1u : 0u;
+            }
+            return followed_count;
+        };
+
+        REQUIRE(run(2, 1, 0.0, feature::tracker::tracker::wavelet_seed_kind::rest, false, 6) == point_count);
+        REQUIRE(run(6, 3, 0.0, feature::tracker::tracker::wavelet_seed_kind::rest, false, 6) == point_count);
+        REQUIRE(run(2, 1, 0.0, feature::tracker::tracker::wavelet_seed_kind::rest, true, 6) == point_count);
+        REQUIRE(run(6, 3, 0.0, feature::tracker::tracker::wavelet_seed_kind::rest, true, 6) == point_count);
+        REQUIRE(run(10, 5, 0.0, feature::tracker::tracker::wavelet_seed_kind::rest, false, 4) == 0);
+        REQUIRE(run(10, 5, 0.0, feature::tracker::tracker::wavelet_seed_kind::klt, false, 4) == point_count);
+        REQUIRE(run(2, 1, 40.0, feature::tracker::tracker::wavelet_seed_kind::klt, false, 6) == 0);
+        REQUIRE(run(2, 1, 40.0, feature::tracker::tracker::wavelet_seed_kind::klt_fallback, false, 6) == point_count);
     }
 
     return EXIT_SUCCESS;
