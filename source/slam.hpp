@@ -2064,6 +2064,22 @@ public:
             }
             const size_t correspondence_count = init_correspondences.size();
 
+            const size_t inlier_floor = 50;
+            if ((correspondence_count < inlier_floor) && (frame_current.id != this->init_anchor_frame_id_)) {
+                core::logger::log(core::logger::level::note, "Init anchor moved from frame %d to frame %d: %zu tracks span them.", this->init_anchor_frame_id_, frame_current.id, correspondence_count);
+                const mapping::frame& anchor_previous = this->reconstruction.frames.at(this->init_anchor_frame_id_);
+                frame_current.rotation = anchor_previous.rotation;
+                frame_current.translation = anchor_previous.translation;
+                this->reconstruction.frames.erase(this->init_anchor_frame_id_);
+                this->init_anchor_frame_id_ = frame_current.id;
+                if (this->keyframe_ids_.empty()) {
+                    this->reconstruction.gauge_frame_id = frame_current.id;
+                    this->last_keyframe_id_ = frame_current.id;
+                }
+                this->last_tracked_frame_id_ = frame_current.id;
+                return;
+            }
+
             const float essential_inlier_threshold = 1.0e-5f;
 
             const float model_selection_threshold = 1.0e-5f;
@@ -2117,26 +2133,10 @@ public:
             }
             core::logger::log(core::logger::level::debug, "Support: %zu of %zu inliers support the recovered pose.", recover_pose_support, inliers);
 
-            const size_t inlier_floor = 50;
             const double inlier_fraction_minimum = 0.5;
             const double parallax_degrees_minimum = 2.0;
             const double reprojection_fraction_minimum = 0.7;
             const double reprojection_error_squared_maximum = 9.0 * static_cast<double>(essential_inlier_threshold);
-
-            if ((correspondence_count < inlier_floor) && (frame_current.id != this->init_anchor_frame_id_)) {
-                core::logger::log(core::logger::level::note, "Init anchor moved from frame %d to frame %d: %zu tracks span them.", this->init_anchor_frame_id_, frame_current.id, correspondence_count);
-                const mapping::frame& anchor_previous = this->reconstruction.frames.at(this->init_anchor_frame_id_);
-                frame_current.rotation = anchor_previous.rotation;
-                frame_current.translation = anchor_previous.translation;
-                this->reconstruction.frames.erase(this->init_anchor_frame_id_);
-                this->init_anchor_frame_id_ = frame_current.id;
-                if (this->keyframe_ids_.empty()) {
-                    this->reconstruction.gauge_frame_id = frame_current.id;
-                    this->last_keyframe_id_ = frame_current.id;
-                }
-                this->last_tracked_frame_id_ = frame_current.id;
-                return;
-            }
 
             const math::matrix<double, 3, 1> camera_centre_lhs = math::matrix<double, 3, 1>::zero();
             const math::matrix<double, 3, 1> camera_centre_rhs = -math::transpose(rotation) * translation;
