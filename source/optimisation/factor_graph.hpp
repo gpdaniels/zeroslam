@@ -187,6 +187,10 @@ namespace optimisation {
 
         bool select_square_root_path() const;
 
+        bool linearisation_limits_hold() const;
+
+        void partition_vertices();
+
         static bool invert_landmark_block(const double (&damped)[maximum_landmark_dimensions][maximum_landmark_dimensions], int dimensions, double (&inverse)[maximum_landmark_dimensions][maximum_landmark_dimensions]);
 
         template <typename scalar>

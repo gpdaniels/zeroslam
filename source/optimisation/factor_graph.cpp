@@ -82,34 +82,12 @@ namespace optimisation {
         if (this->vertex_set.count(node) == 0) {
             return false;
         }
-        int found_index = -1;
-        for (int i = 0; i < static_cast<int>(this->vertices_general.size()); ++i) {
-            if (this->vertices_general[static_cast<size_t>(i)] == node) {
-                found_index = i;
-                break;
-            }
-        }
-        if (found_index == -1) {
-            for (int i = 0; i < static_cast<int>(this->vertices_marginalised.size()); ++i) {
-                if (this->vertices_marginalised[static_cast<size_t>(i)] == node) {
-                    found_index = i;
-                    break;
-                }
-            }
-        }
-        if (found_index == -1) {
-            return false;
-        }
         std::vector<edge*> remove_edges = this->get_connected_edges(node);
         for (size_t i = 0; i < remove_edges.size(); i++) {
             this->remove_edge(remove_edges[i]);
         }
-        if (node->is_marginalised()) {
-            this->vertices_marginalised.erase(this->vertices_marginalised.begin() + found_index);
-        }
-        else {
-            this->vertices_general.erase(this->vertices_general.begin() + found_index);
-        }
+        this->vertices_general.erase(std::remove(this->vertices_general.begin(), this->vertices_general.end(), node), this->vertices_general.end());
+        this->vertices_marginalised.erase(std::remove(this->vertices_marginalised.begin(), this->vertices_marginalised.end(), node), this->vertices_marginalised.end());
         node->set_ordering_id(-1);
         this->vertex_to_edge.erase(node);
         this->vertex_set.erase(node);
@@ -181,6 +159,9 @@ namespace optimisation {
         }
 
         this->set_ordering();
+        if (!this->linearisation_limits_hold()) {
+            return 0;
+        }
 
         this->last_diagnostics = diagnostics();
 
@@ -294,6 +275,9 @@ namespace optimisation {
             factor->compute_residual();
         }
         this->set_ordering();
+        if (!this->linearisation_limits_hold()) {
+            return false;
+        }
         this->last_diagnostics = diagnostics();
         this->linearise();
         this->damping_lambda = lambda;
@@ -380,7 +364,48 @@ namespace optimisation {
         return this->solve_linear_system();
     }
 
+    bool factor_graph::linearisation_limits_hold() const {
+        for (const vertex* node : this->vertices_marginalised) {
+            if (!node->is_fixed() && (node->get_local_dimensions() > factor_graph::maximum_landmark_dimensions)) {
+                core::logger::log(core::logger::level::error, "Cannot solve: a marginalised vertex has %d local dimensions, more than the %d the landmark blocks hold.", node->get_local_dimensions(), factor_graph::maximum_landmark_dimensions);
+                return false;
+            }
+        }
+        for (const edge* factor : this->edges) {
+            if (factor->get_residual().rows() > factor_graph::maximum_residuals) {
+                core::logger::log(core::logger::level::error, "Cannot solve: an edge has %zu residuals, more than the %zu the linearisation holds.", factor->get_residual().rows(), factor_graph::maximum_residuals);
+                return false;
+            }
+            size_t marginalised_count = 0;
+            for (const vertex* node : factor->get_vertices()) {
+                marginalised_count += node->is_marginalised() ? 1u : 0u;
+            }
+            if (marginalised_count > 1) {
+                core::logger::log(core::logger::level::error, "Cannot solve: an edge touches %zu marginalised vertices, at most one is supported.", marginalised_count);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void factor_graph::partition_vertices() {
+        this->vertices_general.clear();
+        this->vertices_marginalised.clear();
+        for (vertex& node : this->vertex_storage) {
+            if (this->vertex_set.count(&node) == 0) {
+                continue;
+            }
+            if (node.is_marginalised()) {
+                this->vertices_marginalised.push_back(&node);
+            }
+            else {
+                this->vertices_general.push_back(&node);
+            }
+        }
+    }
+
     void factor_graph::set_ordering() {
+        this->partition_vertices();
         this->count_general_params = 0;
         this->count_marginalised_params = 0;
         for (const auto& node : this->vertices_general) {
