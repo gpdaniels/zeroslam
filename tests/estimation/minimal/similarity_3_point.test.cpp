@@ -161,6 +161,25 @@ int main(int argc, char* argv[]) {
         for (size_t k = 0; k < 3; ++k) {
             REQUIRE(is_value_approx(static_cast<double>(translation[k]), truth_translation[k], 1e-3));
         }
+        const double collinear[4][3] = {
+            { 0.3, -1.2, 2.0 },
+            { 1.4, 0.9, 1.3 },
+            { 2.5, 3.0, 0.6 },
+            { 3.6, 5.1, -0.1 }
+        };
+        double collinear_target[4 * 3];
+        map_points(truth_rotation, truth_translation, truth_scale, &collinear[0][0], 4, collinear_target);
+        float collinear_f[4 * 3];
+        float collinear_target_f[4 * 3];
+        for (size_t k = 0; k < 4 * 3; ++k) {
+            collinear_f[k] = static_cast<float>(collinear[k / 3][k % 3]);
+            collinear_target_f[k] = static_cast<float>(collinear_target[k]);
+        }
+        REQUIRE(!estimation::minimal::similarity_3_point<float>::solve(collinear_f, collinear_target_f, 4, rotation, translation, scale));
+        double rotation_double[9];
+        double translation_double[3];
+        double scale_double = 0.0;
+        REQUIRE(!estimation::minimal::similarity_3_point<double>::solve(&collinear[0][0], collinear_target, 4, rotation_double, translation_double, scale_double));
     }
 
     return EXIT_SUCCESS;
