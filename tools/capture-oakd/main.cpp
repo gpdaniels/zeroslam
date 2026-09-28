@@ -165,19 +165,34 @@ namespace {
         stream.last_timestamp_nanoseconds = timestamp_nanoseconds;
     }
 
-    bool mono_pixels(const dai::ImgFrame& frame, const unsigned char*& pixels, std::string& error) {
+    bool packed_rows(const dai::ImgFrame& frame, const std::size_t bytes_per_pixel, std::vector<unsigned char>& packed, std::string& error) {
+        const dai::span<const std::uint8_t> data = frame.getData();
+        const std::size_t width = frame.getWidth();
+        const std::size_t height = frame.getHeight();
+        const std::size_t row_bytes = width * bytes_per_pixel;
+        const std::size_t stride = frame.getStride();
+        const std::size_t offset = frame.fb.p1Offset;
+        if (stride < row_bytes) {
+            error = "a frame has a row stride of " + std::to_string(stride) + " bytes for " + std::to_string(row_bytes) + " bytes of pixels";
+            return false;
+        }
+        if ((height > 0) && (data.size() < (offset + (stride * (height - 1)) + row_bytes))) {
+            error = "a frame holds " + std::to_string(data.size()) + " bytes for " + std::to_string(height) + " rows with a stride of " + std::to_string(stride) + " bytes";
+            return false;
+        }
+        packed.resize(row_bytes * height);
+        for (std::size_t row = 0; row < height; ++row) {
+            std::memcpy(packed.data() + (row * row_bytes), data.data() + offset + (row * stride), row_bytes);
+        }
+        return true;
+    }
+
+    bool mono_pixels(const dai::ImgFrame& frame, std::vector<unsigned char>& pixels, std::string& error) {
         if ((frame.getType() != dai::ImgFrame::Type::GRAY8) && (frame.getType() != dai::ImgFrame::Type::RAW8)) {
             error = "the camera returned a frame that is neither GRAY8 nor RAW8";
             return false;
         }
-        const dai::span<const std::uint8_t> data = frame.getData();
-        const std::size_t expected = static_cast<std::size_t>(frame.getWidth()) * frame.getHeight();
-        if (data.size() < expected) {
-            error = "a mono frame holds " + std::to_string(data.size()) + " bytes for " + std::to_string(expected) + " pixels";
-            return false;
-        }
-        pixels = data.data();
-        return true;
+        return packed_rows(frame, 1, pixels, error);
     }
 
     void frame_intrinsics(const dai::ImgFrame& frame, double intrinsics[4]) {
@@ -479,6 +494,9 @@ int main(int argc, char* argv[]) {
         std::printf("Capturing (ctrl-c to stop)...\n");
         pipeline.start();
 
+        std::vector<unsigned char> left_pixels;
+        std::vector<unsigned char> right_pixels;
+        std::vector<unsigned char> depth_pixels;
         std::vector<float> depth_metres;
         bool warned_about_distortion = false;
         long long last_magnetometer_timestamp_nanoseconds = -1;
@@ -525,8 +543,6 @@ int main(int argc, char* argv[]) {
                     first_kept_timestamp_nanoseconds = timestamp;
                 }
 
-                const unsigned char* left_pixels = nullptr;
-                const unsigned char* right_pixels = nullptr;
                 std::string error;
                 if (!mono_pixels(*left_frame, left_pixels, error) || !mono_pixels(*right_frame, right_pixels, error)) {
                     std::fprintf(stderr, "%s.\n", error.c_str());
@@ -555,25 +571,24 @@ int main(int argc, char* argv[]) {
 
                 double intrinsics[4] = {};
                 frame_intrinsics(*left_frame, &intrinsics[0]);
-                write_frame(writer, tf_channel, streams[0], timestamp, left_frame->getWidth(), left_frame->getHeight(), "mono8", 1, left_pixels, &intrinsics[0], left_distortion, distortion_model);
+                write_frame(writer, tf_channel, streams[0], timestamp, left_frame->getWidth(), left_frame->getHeight(), "mono8", 1, left_pixels.data(), &intrinsics[0], left_distortion, distortion_model);
                 frame_intrinsics(*right_frame, &intrinsics[0]);
-                write_frame(writer, tf_channel, streams[1], timestamp, right_frame->getWidth(), right_frame->getHeight(), "mono8", 1, right_pixels, &intrinsics[0], right_distortion, distortion_model);
+                write_frame(writer, tf_channel, streams[1], timestamp, right_frame->getWidth(), right_frame->getHeight(), "mono8", 1, right_pixels.data(), &intrinsics[0], right_distortion, distortion_model);
 
                 if (settings.depth) {
                     if (depth_frame->getType() != dai::ImgFrame::Type::RAW16) {
                         std::fprintf(stderr, "The stereo node returned a depth frame that is not RAW16.\n");
                         return EXIT_FAILURE;
                     }
-                    const dai::span<const std::uint8_t> data = depth_frame->getData();
-                    const std::size_t pixels = static_cast<std::size_t>(depth_frame->getWidth()) * depth_frame->getHeight();
-                    if (data.size() < (pixels * 2)) {
-                        std::fprintf(stderr, "A depth frame holds %zu bytes for %zu pixels.\n", data.size(), pixels);
+                    if (!packed_rows(*depth_frame, 2, depth_pixels, error)) {
+                        std::fprintf(stderr, "%s.\n", error.c_str());
                         return EXIT_FAILURE;
                     }
+                    const std::size_t pixels = depth_pixels.size() / 2;
                     depth_metres.resize(pixels);
                     for (std::size_t index = 0; index < pixels; ++index) {
                         unsigned short millimetres = 0;
-                        std::memcpy(&millimetres, data.data() + (index * 2), sizeof(millimetres));
+                        std::memcpy(&millimetres, depth_pixels.data() + (index * 2), sizeof(millimetres));
                         depth_metres[index] = static_cast<float>(static_cast<double>(millimetres) / 1000.0);
                     }
                     frame_intrinsics(*depth_frame, &intrinsics[0]);
