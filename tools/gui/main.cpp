@@ -1410,6 +1410,7 @@ int main(int argc, char* argv[]) {
     }
 
     long long rendered_frames = 0;
+    bool close_requested = false;
     bool load_requested = false;
     while (!shutdown_requested && window.is_open()) {
         gtl::window::event_type event;
@@ -1475,9 +1476,12 @@ int main(int argc, char* argv[]) {
                         camera.zoom(event.data.scroll);
                     }
                     break;
+                case gtl::window::event_type::input_type::close:
+                    close_requested = true;
+                    break;
             }
         }
-        if (!window.is_open()) {
+        if (close_requested || !window.is_open()) {
             break;
         }
         if (load_requested) {
@@ -2144,6 +2148,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    window.prepare();
     for (gui::image_texture& texture : channel_textures) {
         texture.release();
     }

@@ -751,8 +751,8 @@ namespace {
                 switch (x11_event.type) {
                     case ClientMessage: {
                         if ((x11_event.xclient.format == 32) && (x11_event.xclient.data.l[0] == static_cast<long>(this->close_handler))) {
-                            this->close();
-                            return false;
+                            event.input = event_type::input_type::close;
+                            return true;
                         }
                         break;
                     }

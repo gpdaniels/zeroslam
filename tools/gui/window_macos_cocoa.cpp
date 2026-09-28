@@ -550,6 +550,7 @@ namespace {
         id delegate = nullptr;
         id opengl_context = nullptr;
         bool closed = false;
+        bool close_reported = false;
         bool hidden_cursor = false;
         bool grabbed_input = false;
         NSUInteger modifier_flags = 0;
@@ -585,6 +586,7 @@ namespace {
             }
 
             this->closed = false;
+            this->close_reported = false;
             this->modifier_flags = 0;
             this->events.clear();
             this->hidden_cursor = false;
@@ -669,6 +671,7 @@ namespace {
             this->window_handle = nullptr;
             this->content_view = nullptr;
             this->closed = false;
+            this->close_reported = false;
             this->events.clear();
             this->pixel_buffer.clear();
         }
@@ -918,13 +921,21 @@ namespace {
             msg<void(id, SEL)>::send(icon, sel("release"));
         }
 
+        bool report_close(event_type& event) {
+            if (this->close_reported) {
+                return false;
+            }
+            this->close_reported = true;
+            event.input = event_type::input_type::close;
+            return true;
+        }
+
         bool process(event_type& event) override {
             if (!this->is_open())
                 return false;
 
             if (this->closed) {
-                this->close();
-                return false;
+                return this->report_close(event);
             }
 
             if (this->events.empty()) {
@@ -932,8 +943,7 @@ namespace {
             }
 
             if (this->closed) {
-                this->close();
-                return false;
+                return this->report_close(event);
             }
 
             if (this->events.empty()) {

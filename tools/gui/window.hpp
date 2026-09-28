@@ -74,7 +74,8 @@ namespace gtl {
                 mouse_press,
                 mouse_release,
                 mouse_scroll,
-                mouse_move
+                mouse_move,
+                close
             };
 
         public:

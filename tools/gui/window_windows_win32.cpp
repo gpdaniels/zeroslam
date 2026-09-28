@@ -615,10 +615,14 @@ namespace {
                         return false;
                     }
 
-                    case WM_ENDSESSION:
-                    case WM_CLOSE: {
+                    case WM_ENDSESSION: {
                         this->close();
                         return false;
+                    }
+
+                    case WM_CLOSE: {
+                        event.input = event_type::input_type::close;
+                        return true;
                     }
 
                     case WM_SIZE:
