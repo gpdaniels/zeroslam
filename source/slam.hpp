@@ -966,6 +966,7 @@ private:
     static constexpr size_t line_landmarks_per_keyframe_maximum = 40;
 
     std::unordered_set<int> keyframe_ids_;
+    size_t keyframes_inserted_ = 0;
     int last_keyframe_id_ = 0;
 
     struct anchored_observation final {
@@ -2195,6 +2196,7 @@ public:
 
             this->keyframe_ids_.insert(this->init_anchor_frame_id_);
             this->keyframe_ids_.insert(frame_current.id);
+            this->keyframes_inserted_ += 2;
             this->last_keyframe_id_ = frame_current.id;
             is_keyframe = true;
             if (this->reinitialising_) {
@@ -2362,6 +2364,7 @@ public:
         }
 
         this->keyframe_ids_.insert(frame_current.id);
+        ++this->keyframes_inserted_;
         this->last_keyframe_id_ = frame_current.id;
 
         {
@@ -2555,7 +2558,7 @@ public:
             broad_ba_window = math::max(broad_ba_window, 10);
         }
         this->reconstruction.optimise(broad_ba_window, false, 50, true);
-        const bool globally_adjusted = (this->frontend.global_adjustment_keyframes > 0) && ((this->keyframe_ids_.size() % static_cast<size_t>(this->frontend.global_adjustment_keyframes)) == 0);
+        const bool globally_adjusted = (this->frontend.global_adjustment_keyframes > 0) && ((this->keyframes_inserted_ % static_cast<size_t>(this->frontend.global_adjustment_keyframes)) == 0);
         if (globally_adjusted) {
             this->reconstruction.optimise(0, false, 20, true);
         }
