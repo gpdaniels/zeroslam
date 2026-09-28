@@ -441,6 +441,9 @@ namespace mapping {
                 // Global BA or window not specified: include everything.
                 for (const auto& [frame_id, _] : this->frames) {
                     relevant_frame_ids.insert(frame_id);
+                    if ((frame_id != this->gauge_frame_id) && (this->anchor_frame_ids.count(frame_id) == 0)) {
+                        active_frame_ids.insert(frame_id);
+                    }
                 }
                 for (const auto& [landmark_id, _] : this->landmarks) {
                     active_landmark_ids.insert(static_cast<int>(landmark_id));
