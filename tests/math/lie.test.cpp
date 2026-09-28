@@ -1145,6 +1145,14 @@ int main(int argc, char* argv[]) {
     }
 
     {
+        const math::sim3<double> similarity = { { math::so3<double>::rotation(0.3, -0.5, 0.7), { { 0.5, -0.6, 0.7 } } }, 0.8 };
+        const math::matrix<double, 7, 7> adjoint = math::sim3<double>::adjoint(similarity);
+        const math::matrix<double, 7, 1> tangent = { { 0.02, -0.01, 0.03, -0.04, 0.05, 0.01, -0.02 } };
+        const math::matrix<double, 7, 1> conjugated = (similarity * math::sim3<double>::exp(tangent) * similarity.inverse()).log();
+        REQUIRE(are_values_approx(adjoint * tangent, conjugated, 7, 1e-9));
+    }
+
+    {
         REQUIRE((math::sim3<double>({ { { { 1, 0, 0, 0 } }, { { 0, 0, 0 } } }, 1 }) == math::sim3<double>::identity()));
         REQUIRE((math::sim3<double>({ { { { 1, 0, 0, 0 } }, { { 0, 0, 0 } } }, 1 }) != math::sim3<double>::identity()) == false);
         REQUIRE((math::sim3<double>({ { { { 1, 0, 0, 0 } }, { { 0, 0, 0 } } }, 2 }) != math::sim3<double>::identity()));
