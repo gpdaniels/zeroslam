@@ -23,6 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -97,6 +98,45 @@ int main(int argc, char* argv[]) {
         second.drain();
         REQUIRE(first_total == 100);
         REQUIRE(second_total == 200);
+    }
+
+    if (pool.thread_count() > 0) {
+        std::atomic<bool> released(false);
+        std::atomic<size_t> blocked(0);
+        std::atomic<int> inverted(0);
+        std::atomic<int> total(0);
+        core::thread_pool::queue gate(pool, -1);
+        for (size_t i = 0; i < pool.thread_count(); ++i) {
+            gate.push([&released, &blocked]() {
+                ++blocked;
+                while (!released) {
+                    std::this_thread::yield();
+                }
+            });
+        }
+        while (blocked < pool.thread_count()) {
+            std::this_thread::yield();
+        }
+        core::thread_pool::queue urgent(pool, 0);
+        core::thread_pool::queue deferred(pool, 1);
+        for (int i = 0; i < 100; ++i) {
+            deferred.push([&urgent, &inverted, &total]() {
+                inverted += urgent.empty() ? 0 : 1;
+                ++total;
+            });
+            urgent.push([&total]() {
+                ++total;
+            });
+        }
+        released = true;
+        while (!urgent.finished() || !deferred.finished()) {
+            std::this_thread::yield();
+        }
+        gate.drain();
+        urgent.drain();
+        deferred.drain();
+        REQUIRE(total == 200);
+        REQUIRE(inverted == 0);
     }
 
     {
