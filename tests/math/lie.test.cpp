@@ -1276,6 +1276,16 @@ int main(int argc, char* argv[]) {
             REQUIRE(accumulated_similarity.transformation().rotation().is_unit());
             REQUIRE(accumulated_similarity.inverse().transformation().rotation().is_unit());
         }
+
+        const math::matrix<double, 4, 1> halved = math::so3<double>(0.0, 0.5, 0.0, 0.0).normalised().get_quaternion();
+        REQUIRE(is_value_approx(halved[0], 0.0) && is_value_approx(halved[1], 1.0) && is_value_approx(halved[2], 0.0) && is_value_approx(halved[3], 0.0));
+
+        const math::matrix<double, 4, 1> unit = math::so3<double>::exp({ { 0.3, -0.2, 0.1 } }).get_quaternion();
+        const double stretch = 1.0 + 1e-7;
+        const math::so3<double> stretched(stretch * unit[0], stretch * unit[1], stretch * unit[2], stretch * unit[3]);
+        const math::matrix<double, 4, 1> round_trip = math::so3<double>(stretched.get_matrix() * stretch).get_quaternion();
+        REQUIRE(std::abs(round_trip.get_length_squared() - 1.0) < 1e-12);
+        REQUIRE(std::abs(stretched.normalised().get_quaternion().get_length_squared() - 1.0) < 1e-12);
     }
 
     return EXIT_SUCCESS;

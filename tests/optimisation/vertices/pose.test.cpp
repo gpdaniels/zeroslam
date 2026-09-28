@@ -71,5 +71,15 @@ int main(int argc, char* argv[]) {
     const double quaternion_norm = std::sqrt((vertex.get_parameters()[3] * vertex.get_parameters()[3]) + (vertex.get_parameters()[4] * vertex.get_parameters()[4]) + (vertex.get_parameters()[5] * vertex.get_parameters()[5]) + (vertex.get_parameters()[6] * vertex.get_parameters()[6]));
     REQUIRE(is_value_approx(quaternion_norm, 1.0));
 
+    {
+        const double stretch = 1.0 + 1e-7;
+        const double stretched[7] = { 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, stretch };
+        REQUIRE(vertex.set_parameters(&stretched[0], 7));
+        const double zero[6] = {};
+        vertex.plus(&zero[0]);
+        const double* const parameters = vertex.get_parameters();
+        REQUIRE(std::abs(((parameters[3] * parameters[3]) + (parameters[4] * parameters[4]) + (parameters[5] * parameters[5]) + (parameters[6] * parameters[6])) - 1.0) < 1e-12);
+    }
+
     return EXIT_SUCCESS;
 }
