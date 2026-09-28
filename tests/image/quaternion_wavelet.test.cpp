@@ -208,11 +208,10 @@ int main() {
         REQUIRE(image::quaternion_wavelet::phases(&components[0], first, second, third));
         REQUIRE(std::abs(first - (0.5 * (plus_angle + minus_angle))) < 1e-9);
         REQUIRE(std::abs(second - (0.5 * (plus_angle - minus_angle))) < 1e-9);
-        REQUIRE(third >= -0.25 * pi);
-        REQUIRE(third <= 0.25 * pi);
         const double modulus = static_cast<double>(image::quaternion_wavelet::modulus(&components[0]));
         const double plus_power = (static_cast<double>(plus_real) * static_cast<double>(plus_real)) + (static_cast<double>(plus_imaginary) * static_cast<double>(plus_imaginary));
         const double minus_power = (static_cast<double>(minus_real) * static_cast<double>(minus_real)) + (static_cast<double>(minus_imaginary) * static_cast<double>(minus_imaginary));
+        REQUIRE(std::abs(third - (0.5 * std::asin((minus_power - plus_power) / (plus_power + minus_power)))) < 1e-9);
         REQUIRE(std::abs((plus_power + minus_power) - (2.0 * modulus * modulus)) < 1e-6);
         const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
         REQUIRE(!image::quaternion_wavelet::phases(&zero[0], first, second, third));
