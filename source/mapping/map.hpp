@@ -378,7 +378,7 @@ namespace mapping {
                             continue;
                         }
                         for (const auto& obs : landmark_obs) {
-                            if ((active_frame_ids.count(obs.frame_id) == 0) && (obs.frame_id != this->gauge_frame_id)) {
+                            if ((active_frame_ids.count(obs.frame_id) == 0) && (obs.frame_id != this->gauge_frame_id) && (this->anchor_frame_ids.count(obs.frame_id) == 0)) {
                                 ++shared_with_window[obs.frame_id];
                             }
                         }
