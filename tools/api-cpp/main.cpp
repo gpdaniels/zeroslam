@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -40,30 +41,22 @@ namespace {
         std::exit(EXIT_FAILURE);
     }
 
-    class random_generator final {
-    private:
-        unsigned int state;
-
-    public:
-        explicit random_generator(unsigned int seed)
-            : state(seed) {
-        }
-
-        unsigned int next() {
-            this->state = (this->state * 1664525u) + 1013904223u;
-            return this->state >> 8;
-        }
-    };
-
-    void generate_frame(std::vector<unsigned char>& pixels, int width, int height, int frame_index) {
-        random_generator random(2026u + static_cast<unsigned int>(frame_index));
+    void render_corridor(std::vector<unsigned char>& pixels, int width, int height, const zeroslam_sensor_parameters_camera_struct& camera, double camera_x) {
+        constexpr static const double wall_depth = 6.0;
         for (int row = 0; row < height; ++row) {
+            const double ray_y = ((static_cast<double>(row) + 0.5) - camera.centre_y) / camera.focal_y;
+            const bool wall = (std::abs(ray_y) * wall_depth) <= 1.0;
+            const double depth = wall ? wall_depth : (1.0 / std::abs(ray_y));
+            const unsigned long long int surface = wall ? 1ull : ((ray_y > 0.0) ? 2ull : 3ull);
+            const long long int cell_v = static_cast<long long int>(std::floor(4.0 * (wall ? (ray_y * depth) : depth)));
             for (int column = 0; column < width; ++column) {
-                const int shifted_column = column + (2 * frame_index);
-                const int blob = ((shifted_column / 16) + (row / 16)) % 2;
-                const int noise = static_cast<int>(random.next() % 40u);
-                const int value = 100 + (60 * blob) + noise;
-                pixels[static_cast<size_t>((row * width) + column)] = static_cast<unsigned char>((value > 255) ? 255 : value);
+                const double ray_x = ((static_cast<double>(column) + 0.5) - camera.centre_x) / camera.focal_x;
+                const long long int cell_u = static_cast<long long int>(std::floor(4.0 * (camera_x + (ray_x * depth))));
+                unsigned long long int hash = (static_cast<unsigned long long int>(cell_u) * 73856093ull) ^ (static_cast<unsigned long long int>(cell_v) * 19349663ull) ^ (surface * 83492791ull);
+                hash ^= hash >> 13;
+                hash *= 0x5bd1e995ull;
+                hash ^= hash >> 15;
+                pixels[static_cast<size_t>((row * width) + column)] = static_cast<unsigned char>(40ull + (hash % 176ull));
             }
         }
     }
@@ -92,7 +85,7 @@ int main(int argc, char* argv[]) {
         REQUIRE(result == zeroslam_return_success);
         std::printf("%s", configuration.data());
 
-        const char* const delta = "verbosity=1\n";
+        const char* const delta = "verbosity=1\nlines=on\n";
         result = system.set_configuration(delta, static_cast<int>(std::strlen(delta)));
         std::printf("set_configuration: %s\n", zeroslam_return_enum_to_string(result));
         REQUIRE(result == zeroslam_return_success);
@@ -122,11 +115,11 @@ int main(int argc, char* argv[]) {
     std::printf("set_sensor_rig: %s (%s, id %d, %dx%d)\n", zeroslam_return_enum_to_string(result), zeroslam_sensor_enum_to_string(rig.type), rig.sensor_id, width, height);
     REQUIRE(result == zeroslam_return_success);
 
-    constexpr static const int frame_count = 5;
+    constexpr static const int frame_count = 20;
     constexpr static const long long int frame_interval = 33333333ll;
     std::vector<unsigned char> pixels(static_cast<size_t>(width * height));
     for (int frame_index = 0; frame_index < frame_count; ++frame_index) {
-        generate_frame(pixels, width, height, frame_index);
+        render_corridor(pixels, width, height, camera_parameters, 0.05 * frame_index);
         zeroslam_sensor_data_struct data{};
         data.timestamp = 1000000000ll + (frame_interval * frame_index);
         data.sensor_id = sensor_id;
@@ -167,21 +160,16 @@ int main(int argc, char* argv[]) {
         zeroslam_map_chunk_struct chunk{};
         result = system.get_map_chunk(0.0f, 0.0f, 0.0f, &chunk);
         std::printf("get_map_chunk: %s (%d points)\n", zeroslam_return_enum_to_string(result), chunk.points_length);
-        if (result == zeroslam_return_failure_insufficient_data_length) {
-            REQUIRE(chunk.points_length > 0);
-            std::vector<zeroslam_point_struct> points(static_cast<size_t>(chunk.points_length));
-            chunk.points = points.data();
-            result = system.get_map_chunk(0.0f, 0.0f, 0.0f, &chunk);
-            std::printf("get_map_chunk (sized): %s (%d points)\n", zeroslam_return_enum_to_string(result), chunk.points_length);
-            REQUIRE(result == zeroslam_return_success);
-            for (int index = 0; (index < chunk.points_length) && (index < 5); ++index) {
-                const zeroslam_point_struct& point = points[static_cast<size_t>(index)];
-                std::printf("  point %d: (%.3f, %.3f, %.3f) confidence %.3f\n", index, static_cast<double>(point.x), static_cast<double>(point.y), static_cast<double>(point.z), static_cast<double>(point.confidence));
-            }
-        }
-        else {
-            REQUIRE(result == zeroslam_return_success);
-            REQUIRE(chunk.points_length == 0);
+        REQUIRE(result == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(chunk.points_length > 0);
+        std::vector<zeroslam_point_struct> points(static_cast<size_t>(chunk.points_length));
+        chunk.points = points.data();
+        result = system.get_map_chunk(0.0f, 0.0f, 0.0f, &chunk);
+        std::printf("get_map_chunk (sized): %s (%d points)\n", zeroslam_return_enum_to_string(result), chunk.points_length);
+        REQUIRE(result == zeroslam_return_success);
+        for (int index = 0; (index < chunk.points_length) && (index < 5); ++index) {
+            const zeroslam_point_struct& point = points[static_cast<size_t>(index)];
+            std::printf("  point %d: (%.3f, %.3f, %.3f) confidence %.3f\n", index, static_cast<double>(point.x), static_cast<double>(point.y), static_cast<double>(point.z), static_cast<double>(point.confidence));
         }
     }
 
@@ -189,30 +177,22 @@ int main(int argc, char* argv[]) {
         zeroslam_map_lines_struct lines{};
         result = system.get_map_lines(&lines);
         std::printf("get_map_lines: %s (%d lines)\n", zeroslam_return_enum_to_string(result), lines.lines_length);
-        std::vector<zeroslam_line_struct> line_buffer;
-        if (result == zeroslam_return_failure_insufficient_data_length) {
-            line_buffer.resize(static_cast<size_t>(lines.lines_length));
-            lines.lines = line_buffer.data();
-            REQUIRE(system.get_map_lines(&lines) == zeroslam_return_success);
-        }
-        else {
-            REQUIRE(result == zeroslam_return_success);
-        }
+        REQUIRE(result == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(lines.lines_length > 0);
+        std::vector<zeroslam_line_struct> line_buffer(static_cast<size_t>(lines.lines_length));
+        lines.lines = line_buffer.data();
+        REQUIRE(system.get_map_lines(&lines) == zeroslam_return_success);
         zeroslam_map_edges_struct edges{};
         result = system.get_map_edges(&edges);
         std::printf("get_map_edges: %s (%d edges)\n", zeroslam_return_enum_to_string(result), edges.edges_length);
-        std::vector<zeroslam_edge_struct> edge_buffer;
-        if (result == zeroslam_return_failure_insufficient_data_length) {
-            edge_buffer.resize(static_cast<size_t>(edges.edges_length));
-            edges.edges = edge_buffer.data();
-            REQUIRE(system.get_map_edges(&edges) == zeroslam_return_success);
-            for (int index = 0; (index < edges.edges_length) && (index < 5); ++index) {
-                const zeroslam_edge_struct& edge = edge_buffer[static_cast<size_t>(index)];
-                std::printf("  edge %d: %lld - %lld type %d weight %d\n", index, edge.timestamp_a, edge.timestamp_b, edge.type, edge.weight);
-            }
-        }
-        else {
-            REQUIRE(result == zeroslam_return_success);
+        REQUIRE(result == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(edges.edges_length > 0);
+        std::vector<zeroslam_edge_struct> edge_buffer(static_cast<size_t>(edges.edges_length));
+        edges.edges = edge_buffer.data();
+        REQUIRE(system.get_map_edges(&edges) == zeroslam_return_success);
+        for (int index = 0; (index < edges.edges_length) && (index < 5); ++index) {
+            const zeroslam_edge_struct& edge = edge_buffer[static_cast<size_t>(index)];
+            std::printf("  edge %d: %lld - %lld type %d weight %d\n", index, edge.timestamp_a, edge.timestamp_b, edge.type, edge.weight);
         }
     }
 

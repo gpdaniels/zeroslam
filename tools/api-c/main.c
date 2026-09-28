@@ -30,20 +30,28 @@ static void require(int passed, const char* expression, int line) {
     exit(EXIT_FAILURE);
 }
 
-static unsigned int random_next(unsigned int* state) {
-    *state = (*state * 1664525u) + 1013904223u;
-    return *state >> 8;
+static long long int floor_to_integer(double value) {
+    const long long int truncated = (long long int)value;
+    return ((double)truncated > value) ? (truncated - 1) : truncated;
 }
 
-static void generate_frame(unsigned char* pixels, int width, int height, int frame_index) {
-    unsigned int state = 2026u + (unsigned int)frame_index;
+static void render_corridor(unsigned char* pixels, int width, int height, const zeroslam_sensor_parameters_camera_struct* camera, double camera_x) {
+    const double wall_depth = 6.0;
     for (int row = 0; row < height; ++row) {
+        const double ray_y = (((double)row + 0.5) - camera->centre_y) / camera->focal_y;
+        const double ray_y_magnitude = (ray_y < 0.0) ? -ray_y : ray_y;
+        const int wall = (ray_y_magnitude * wall_depth) <= 1.0;
+        const double depth = wall ? wall_depth : (1.0 / ray_y_magnitude);
+        const unsigned long long int surface = wall ? 1ull : ((ray_y > 0.0) ? 2ull : 3ull);
+        const long long int cell_v = floor_to_integer(4.0 * (wall ? (ray_y * depth) : depth));
         for (int column = 0; column < width; ++column) {
-            const int shifted_column = column + (2 * frame_index);
-            const int blob = ((shifted_column / 16) + (row / 16)) % 2;
-            const int noise = (int)(random_next(&state) % 40u);
-            const int value = 100 + (60 * blob) + noise;
-            pixels[(row * width) + column] = (unsigned char)((value > 255) ? 255 : value);
+            const double ray_x = (((double)column + 0.5) - camera->centre_x) / camera->focal_x;
+            const long long int cell_u = floor_to_integer(4.0 * (camera_x + (ray_x * depth)));
+            unsigned long long int hash = ((unsigned long long int)cell_u * 73856093ull) ^ ((unsigned long long int)cell_v * 19349663ull) ^ (surface * 83492791ull);
+            hash ^= hash >> 13;
+            hash *= 0x5bd1e995ull;
+            hash ^= hash >> 15;
+            pixels[(row * width) + column] = (unsigned char)(40ull + (hash % 176ull));
         }
     }
 }
@@ -75,7 +83,7 @@ int main(int argc, char* argv[]) {
         printf("%s", configuration);
         free(configuration);
 
-        const char* const delta = "verbosity=1\n";
+        const char* const delta = "verbosity=1\nlines=on\n";
         result = zeroslam_set_configuration(system, delta, (int)strlen(delta));
         printf("set_configuration: %s\n", zeroslam_return_enum_to_string(result));
         REQUIRE(result == zeroslam_return_success);
@@ -107,12 +115,12 @@ int main(int argc, char* argv[]) {
     printf("set_sensor_rig: %s (%s, id %d, %dx%d)\n", zeroslam_return_enum_to_string(result), zeroslam_sensor_enum_to_string(rig.type), rig.sensor_id, width, height);
     REQUIRE(result == zeroslam_return_success);
 
-    const int frame_count = 5;
+    const int frame_count = 20;
     const long long int frame_interval = 33333333ll;
     unsigned char* pixels = (unsigned char*)malloc((size_t)(width * height));
     REQUIRE(pixels != NULL);
     for (int frame_index = 0; frame_index < frame_count; ++frame_index) {
-        generate_frame(pixels, width, height, frame_index);
+        render_corridor(pixels, width, height, &camera_parameters, 0.05 * frame_index);
         zeroslam_sensor_data_struct data;
         memset(&data, 0, sizeof(data));
         data.timestamp = 1000000000ll + (frame_interval * frame_index);
@@ -157,22 +165,17 @@ int main(int argc, char* argv[]) {
         memset(&chunk, 0, sizeof(chunk));
         result = zeroslam_get_map_chunk(system, 0.0f, 0.0f, 0.0f, &chunk);
         printf("get_map_chunk: %s (%d points)\n", zeroslam_return_enum_to_string(result), chunk.points_length);
-        if (result == zeroslam_return_failure_insufficient_data_length) {
-            REQUIRE(chunk.points_length > 0);
-            chunk.points = (zeroslam_point_struct*)malloc(sizeof(zeroslam_point_struct) * (size_t)chunk.points_length);
-            REQUIRE(chunk.points != NULL);
-            result = zeroslam_get_map_chunk(system, 0.0f, 0.0f, 0.0f, &chunk);
-            printf("get_map_chunk (sized): %s (%d points)\n", zeroslam_return_enum_to_string(result), chunk.points_length);
-            REQUIRE(result == zeroslam_return_success);
-            for (int index = 0; (index < chunk.points_length) && (index < 5); ++index) {
-                printf("  point %d: (%.3f, %.3f, %.3f) confidence %.3f\n", index, (double)chunk.points[index].x, (double)chunk.points[index].y, (double)chunk.points[index].z, (double)chunk.points[index].confidence);
-            }
-            free(chunk.points);
+        REQUIRE(result == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(chunk.points_length > 0);
+        chunk.points = (zeroslam_point_struct*)malloc(sizeof(zeroslam_point_struct) * (size_t)chunk.points_length);
+        REQUIRE(chunk.points != NULL);
+        result = zeroslam_get_map_chunk(system, 0.0f, 0.0f, 0.0f, &chunk);
+        printf("get_map_chunk (sized): %s (%d points)\n", zeroslam_return_enum_to_string(result), chunk.points_length);
+        REQUIRE(result == zeroslam_return_success);
+        for (int index = 0; (index < chunk.points_length) && (index < 5); ++index) {
+            printf("  point %d: (%.3f, %.3f, %.3f) confidence %.3f\n", index, (double)chunk.points[index].x, (double)chunk.points[index].y, (double)chunk.points[index].z, (double)chunk.points[index].confidence);
         }
-        else {
-            REQUIRE(result == zeroslam_return_success);
-            REQUIRE(chunk.points_length == 0);
-        }
+        free(chunk.points);
     }
 
     {
@@ -180,31 +183,25 @@ int main(int argc, char* argv[]) {
         memset(&lines, 0, sizeof(lines));
         result = zeroslam_get_map_lines(system, &lines);
         printf("get_map_lines: %s (%d lines)\n", zeroslam_return_enum_to_string(result), lines.lines_length);
-        if (result == zeroslam_return_failure_insufficient_data_length) {
-            lines.lines = (zeroslam_line_struct*)malloc(sizeof(zeroslam_line_struct) * (size_t)lines.lines_length);
-            REQUIRE(lines.lines != NULL);
-            REQUIRE(zeroslam_get_map_lines(system, &lines) == zeroslam_return_success);
-            free(lines.lines);
-        }
-        else {
-            REQUIRE(result == zeroslam_return_success);
-        }
+        REQUIRE(result == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(lines.lines_length > 0);
+        lines.lines = (zeroslam_line_struct*)malloc(sizeof(zeroslam_line_struct) * (size_t)lines.lines_length);
+        REQUIRE(lines.lines != NULL);
+        REQUIRE(zeroslam_get_map_lines(system, &lines) == zeroslam_return_success);
+        free(lines.lines);
         zeroslam_map_edges_struct edges;
         memset(&edges, 0, sizeof(edges));
         result = zeroslam_get_map_edges(system, &edges);
         printf("get_map_edges: %s (%d edges)\n", zeroslam_return_enum_to_string(result), edges.edges_length);
-        if (result == zeroslam_return_failure_insufficient_data_length) {
-            edges.edges = (zeroslam_edge_struct*)malloc(sizeof(zeroslam_edge_struct) * (size_t)edges.edges_length);
-            REQUIRE(edges.edges != NULL);
-            REQUIRE(zeroslam_get_map_edges(system, &edges) == zeroslam_return_success);
-            for (int index = 0; (index < edges.edges_length) && (index < 5); ++index) {
-                printf("  edge %d: %lld - %lld type %d weight %d\n", index, edges.edges[index].timestamp_a, edges.edges[index].timestamp_b, edges.edges[index].type, edges.edges[index].weight);
-            }
-            free(edges.edges);
+        REQUIRE(result == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(edges.edges_length > 0);
+        edges.edges = (zeroslam_edge_struct*)malloc(sizeof(zeroslam_edge_struct) * (size_t)edges.edges_length);
+        REQUIRE(edges.edges != NULL);
+        REQUIRE(zeroslam_get_map_edges(system, &edges) == zeroslam_return_success);
+        for (int index = 0; (index < edges.edges_length) && (index < 5); ++index) {
+            printf("  edge %d: %lld - %lld type %d weight %d\n", index, edges.edges[index].timestamp_a, edges.edges[index].timestamp_b, edges.edges[index].type, edges.edges[index].weight);
         }
-        else {
-            REQUIRE(result == zeroslam_return_success);
-        }
+        free(edges.edges);
     }
 
     REQUIRE(zeroslam_get_timestamp(NULL, &timestamp) == zeroslam_return_failure_invalid_system);

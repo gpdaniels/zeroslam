@@ -16,7 +16,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "api.hpp"
 
-#include "simulation/scene.hpp"
+#include "math/math.hpp"
 #include "zeroslam/zeroslam.hpp"
 
 #if defined(_MSC_VER)
@@ -37,6 +37,25 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define __builtin_trap() __debugbreak()
 #endif
 #define REQUIRE(ASSERTION) static_cast<void>((ASSERTION) || (std::fprintf(stderr, "ERROR[%d]: Requirement '%s' failed.\n", __LINE__, #ASSERTION), __builtin_trap(), 0))
+
+static void render_corridor(const double camera_x, const int width, const int height, const zeroslam_sensor_parameters_camera_struct& camera, unsigned char* const pixels) {
+    constexpr static const double wall_depth = 6.0;
+    for (int row = 0; row < height; ++row) {
+        const double ray_y = (static_cast<double>(row) + 0.5 - camera.centre_y) / camera.focal_y;
+        for (int column = 0; column < width; ++column) {
+            const double ray_x = (static_cast<double>(column) + 0.5 - camera.centre_x) / camera.focal_x;
+            const bool wall = (math::abs(ray_y) * wall_depth) <= 1.0;
+            const double depth = wall ? wall_depth : (1.0 / math::abs(ray_y));
+            const long long int cell_u = static_cast<long long int>(math::floor(4.0 * (camera_x + (ray_x * depth))));
+            const long long int cell_v = static_cast<long long int>(math::floor(4.0 * (wall ? (ray_y * depth) : depth)));
+            unsigned long long int hash = (static_cast<unsigned long long int>(cell_u) * 73856093ull) ^ (static_cast<unsigned long long int>(cell_v) * 19349663ull) ^ ((wall ? 1ull : ((ray_y > 0.0) ? 2ull : 3ull)) * 83492791ull);
+            hash ^= hash >> 13;
+            hash *= 0x5bd1e995ull;
+            hash ^= hash >> 15;
+            pixels[static_cast<size_t>((row * width) + column)] = static_cast<unsigned char>(40ull + (hash % 176ull));
+        }
+    }
+}
 
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
@@ -306,20 +325,16 @@ int main(int argc, char* argv[]) {
         rig.parameters_data = &camera_parameters;
         REQUIRE(zeroslam_set_sensor_rig(system, &rig, 1) == zeroslam_return_success);
 
-        simulation::random_stream random(2026);
-        std::vector<unsigned char> pixels(static_cast<size_t>(width * height));
-        for (int row = 0; row < height; ++row) {
-            for (int column = 0; column < width; ++column) {
-                const double value = 127.0 + 60.0 * math::sin(0.11 * static_cast<double>(column)) * math::cos(0.13 * static_cast<double>(row)) + 40.0 * random.uniform();
-                pixels[static_cast<size_t>(row * width + column)] = static_cast<unsigned char>(math::max(0.0, math::min(255.0, value)));
-            }
-        }
+        const char* const lines_on = "lines=on\n";
+        REQUIRE(zeroslam_set_configuration(system, lines_on, static_cast<int>(std::strlen(lines_on))) == zeroslam_return_success);
 
+        std::vector<unsigned char> pixels(static_cast<size_t>(width * height));
         zeroslam_sensor_data_struct data{};
         data.sensor_id = 3;
         data.measurement_length = width * height;
         data.measurement_data = pixels.data();
 
+        render_corridor(0.0, width, height, camera_parameters, pixels.data());
         data.timestamp = 1000;
         data.sensor_id = 9;
         REQUIRE(zeroslam_set_sensor_data(system, &data, 1) == zeroslam_return_failure_invalid_sensor_data);
@@ -329,20 +344,25 @@ int main(int argc, char* argv[]) {
         data.measurement_length = width * height;
 
         REQUIRE(zeroslam_set_sensor_data(system, &data, 1) == zeroslam_return_success);
-        data.timestamp = 2000;
-        REQUIRE(zeroslam_set_sensor_data(system, &data, 1) == zeroslam_return_success);
-        data.timestamp = 2000;
         REQUIRE(zeroslam_set_sensor_data(system, &data, 1) == zeroslam_return_failure_invalid_sensor_data);
+
+        constexpr static const int frame_count = 20;
+        for (int frame = 1; frame < frame_count; ++frame) {
+            render_corridor(0.05 * static_cast<double>(frame), width, height, camera_parameters, pixels.data());
+            data.timestamp = 1000 * (frame + 1);
+            REQUIRE(zeroslam_set_sensor_data(system, &data, 1) == zeroslam_return_success);
+        }
 
         long long int timestamp = 0;
         REQUIRE(zeroslam_get_timestamp(system, &timestamp) == zeroslam_return_success);
-        REQUIRE(timestamp == 2000);
+        REQUIRE(timestamp == 1000 * frame_count);
 
         REQUIRE(zeroslam_set_sensor_rig(system, &rig, 1) == zeroslam_return_failure_invalid_rig_sensor);
 
         zeroslam_pose_struct pose{};
         REQUIRE(zeroslam_get_pose(system, &pose) == zeroslam_return_success);
-        REQUIRE((pose.timestamp == 1000) || (pose.timestamp == 2000));
+        REQUIRE(pose.timestamp == 1000 * frame_count);
+        REQUIRE((pose.pose[0] != 0.0) || (pose.pose[1] != 0.0) || (pose.pose[2] != 0.0));
         zeroslam_pose_struct pose_first{};
         REQUIRE(zeroslam_get_pose_at_timestamp(system, &pose_first, 1000) == zeroslam_return_success);
         REQUIRE(pose_first.pose[0] == 0.0);
@@ -354,67 +374,56 @@ int main(int argc, char* argv[]) {
         zeroslam_map_chunk_struct chunk{};
         chunk.points = nullptr;
         chunk.points_length = 0;
-        const zeroslam_return_enum chunk_result = zeroslam_get_map_chunk(system, 0.0f, 0.0f, 0.0f, &chunk);
-        if (chunk_result == zeroslam_return_success) {
-            REQUIRE(chunk.points_length == 0);
-        }
-        else {
-            REQUIRE(chunk_result == zeroslam_return_failure_insufficient_data_length);
-            REQUIRE(chunk.points_length > 0);
-            std::vector<zeroslam_point_struct> points(static_cast<size_t>(chunk.points_length));
-            chunk.points = points.data();
-            chunk.points_length = static_cast<int>(points.size());
-            REQUIRE(zeroslam_get_map_chunk(system, 0.0f, 0.0f, 0.0f, &chunk) == zeroslam_return_success);
-            REQUIRE(chunk.points_length == static_cast<int>(points.size()));
+        REQUIRE(zeroslam_get_map_chunk(system, 0.0f, 0.0f, 0.0f, &chunk) == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(chunk.points_length > 0);
+        std::vector<zeroslam_point_struct> points(static_cast<size_t>(chunk.points_length));
+        chunk.points = points.data();
+        chunk.points_length = static_cast<int>(points.size()) - 1;
+        REQUIRE(zeroslam_get_map_chunk(system, 0.0f, 0.0f, 0.0f, &chunk) == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(chunk.points_length == static_cast<int>(points.size()));
+        REQUIRE(zeroslam_get_map_chunk(system, 0.0f, 0.0f, 0.0f, &chunk) == zeroslam_return_success);
+        REQUIRE(chunk.points_length == static_cast<int>(points.size()));
+        REQUIRE(chunk.timestamp == 1000 * frame_count);
+        for (const zeroslam_point_struct& point : points) {
+            REQUIRE((point.x >= chunk.min_x) && (point.x <= chunk.max_x));
+            REQUIRE((point.z >= chunk.min_z) && (point.z <= chunk.max_z));
         }
 
         zeroslam_map_lines_struct lines{};
-        const zeroslam_return_enum lines_result = zeroslam_get_map_lines(system, &lines);
-        if (lines_result == zeroslam_return_success) {
-            REQUIRE(lines.lines_length == 0);
-        }
-        else {
-            REQUIRE(lines_result == zeroslam_return_failure_insufficient_data_length);
-            std::vector<zeroslam_line_struct> line_buffer(static_cast<size_t>(lines.lines_length));
-            lines.lines = line_buffer.data();
-            REQUIRE(zeroslam_get_map_lines(system, &lines) == zeroslam_return_success);
-            REQUIRE(lines.lines_length == static_cast<int>(line_buffer.size()));
-        }
+        REQUIRE(zeroslam_get_map_lines(system, &lines) == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(lines.lines_length > 0);
+        std::vector<zeroslam_line_struct> line_buffer(static_cast<size_t>(lines.lines_length));
+        lines.lines = line_buffer.data();
+        REQUIRE(zeroslam_get_map_lines(system, &lines) == zeroslam_return_success);
+        REQUIRE(lines.lines_length == static_cast<int>(line_buffer.size()));
+
         zeroslam_map_edges_struct edges{};
-        const zeroslam_return_enum edges_result = zeroslam_get_map_edges(system, &edges);
-        if (edges_result == zeroslam_return_success) {
-            REQUIRE(edges.edges_length == 0);
+        REQUIRE(zeroslam_get_map_edges(system, &edges) == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(edges.edges_length > 0);
+        std::vector<zeroslam_edge_struct> edge_buffer(static_cast<size_t>(edges.edges_length));
+        edges.edges = edge_buffer.data();
+        REQUIRE(zeroslam_get_map_edges(system, &edges) == zeroslam_return_success);
+        REQUIRE(edges.edges_length == static_cast<int>(edge_buffer.size()));
+        for (const zeroslam_edge_struct& edge : edge_buffer) {
+            REQUIRE((edge.type == zeroslam_edge_covisibility) || (edge.type == zeroslam_edge_loop));
+            REQUIRE(edge.weight > 0);
+            REQUIRE(edge.timestamp_a != edge.timestamp_b);
+            zeroslam_pose_struct stored_pose{};
+            REQUIRE(zeroslam_get_pose_at_timestamp(system, &stored_pose, edge.timestamp_a) == zeroslam_return_success);
+            REQUIRE(zeroslam_get_pose_at_timestamp(system, &stored_pose, edge.timestamp_b) == zeroslam_return_success);
         }
-        else {
-            REQUIRE(edges_result == zeroslam_return_failure_insufficient_data_length);
-            std::vector<zeroslam_edge_struct> edge_buffer(static_cast<size_t>(edges.edges_length));
-            edges.edges = edge_buffer.data();
-            REQUIRE(zeroslam_get_map_edges(system, &edges) == zeroslam_return_success);
-            REQUIRE(edges.edges_length == static_cast<int>(edge_buffer.size()));
-            for (const zeroslam_edge_struct& edge : edge_buffer) {
-                REQUIRE((edge.type == zeroslam_edge_covisibility) || (edge.type == zeroslam_edge_loop));
-                REQUIRE(edge.weight > 0);
-                REQUIRE(edge.timestamp_a != edge.timestamp_b);
-                zeroslam_pose_struct stored_pose{};
-                REQUIRE(zeroslam_get_pose_at_timestamp(system, &stored_pose, edge.timestamp_a) == zeroslam_return_success);
-                REQUIRE(zeroslam_get_pose_at_timestamp(system, &stored_pose, edge.timestamp_b) == zeroslam_return_success);
-            }
-        }
+
         zeroslam_map_keyframes_struct keyframes{};
-        const zeroslam_return_enum keyframes_result = zeroslam_get_map_keyframes(system, &keyframes);
-        if (keyframes_result == zeroslam_return_success) {
-            REQUIRE(keyframes.keyframes_length == 0);
-        }
-        else {
-            REQUIRE(keyframes_result == zeroslam_return_failure_insufficient_data_length);
-            std::vector<long long int> keyframe_buffer(static_cast<size_t>(keyframes.keyframes_length));
-            keyframes.keyframes = keyframe_buffer.data();
-            REQUIRE(zeroslam_get_map_keyframes(system, &keyframes) == zeroslam_return_success);
-            for (size_t i = 0; i < keyframe_buffer.size(); ++i) {
-                REQUIRE((i == 0) || (keyframe_buffer[i] > keyframe_buffer[i - 1]));
-                zeroslam_pose_struct stored_pose{};
-                REQUIRE(zeroslam_get_pose_at_timestamp(system, &stored_pose, keyframe_buffer[i]) == zeroslam_return_success);
-            }
+        REQUIRE(zeroslam_get_map_keyframes(system, &keyframes) == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(keyframes.keyframes_length >= 2);
+        std::vector<long long int> keyframe_buffer(static_cast<size_t>(keyframes.keyframes_length));
+        keyframes.keyframes = keyframe_buffer.data();
+        REQUIRE(zeroslam_get_map_keyframes(system, &keyframes) == zeroslam_return_success);
+        REQUIRE(keyframes.keyframes_length == static_cast<int>(keyframe_buffer.size()));
+        for (size_t i = 0; i < keyframe_buffer.size(); ++i) {
+            REQUIRE((i == 0) || (keyframe_buffer[i] > keyframe_buffer[i - 1]));
+            zeroslam_pose_struct stored_pose{};
+            REQUIRE(zeroslam_get_pose_at_timestamp(system, &stored_pose, keyframe_buffer[i]) == zeroslam_return_success);
         }
         REQUIRE(zeroslam_get_map_lines(nullptr, &lines) == zeroslam_return_failure_invalid_system);
         REQUIRE(zeroslam_get_map_edges(system, nullptr) == zeroslam_return_failure_invalid_argument);
