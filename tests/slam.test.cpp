@@ -55,7 +55,7 @@ private:
     int image_height;
 
 public:
-    world(int width, int height)
+    world(int width, int height, bool enclosed = false)
         : image_width(width)
         , image_height(height) {
         core::random_pcg rng;
@@ -65,7 +65,7 @@ public:
         add_cube(-3.0, 0.0, 6.0, 1.0, static_cast<unsigned char>(rng.get_random_raw() % 256));
         add_cube(3.0, 0.0, 6.0, 1.0, static_cast<unsigned char>(rng.get_random_raw() % 256));
         double floor_y = 3.0;
-        for (int i = -3; i <= 3; i++) {
+        for (int i = -10; i <= 10; i++) {
             for (int j = 0; j <= 6; j++) {
                 const double x = i * 2.0;
                 const double z = j * 2.0 + 4.0;
@@ -74,12 +74,42 @@ public:
             }
         }
         double wall_z = 18.0;
-        for (int i = -3; i <= 3; i++) {
+        for (int i = -10; i <= 10; i++) {
             for (int j = 0; j <= 6; j++) {
                 const double x = i * 2.0;
                 const double y = 1.0 - j * 2.0;
                 scene.push_back({ { { x, y, wall_z } }, { { x + 2.0, y, wall_z } }, { { x + 2.0, y + 2.0, wall_z } }, static_cast<unsigned char>(rng.get_random_raw() % 256) });
                 scene.push_back({ { { x, y, wall_z } }, { { x + 2.0, y + 2.0, wall_z } }, { { x, y + 2.0, wall_z } }, static_cast<unsigned char>(rng.get_random_raw() % 256) });
+            }
+        }
+        if (!enclosed) {
+            return;
+        }
+        for (int i = -10; i <= 10; i++) {
+            for (int j = 0; j <= 4; j++) {
+                const double x = i * 2.0;
+                const double z = j * 2.0 - 6.0;
+                scene.push_back({ { { x, floor_y, z } }, { { x + 2.0, floor_y, z } }, { { x + 2.0, floor_y, z + 2.0 } }, static_cast<unsigned char>(rng.get_random_raw() % 256) });
+                scene.push_back({ { { x, floor_y, z } }, { { x + 2.0, floor_y, z + 2.0 } }, { { x, floor_y, z + 2.0 } }, static_cast<unsigned char>(rng.get_random_raw() % 256) });
+            }
+        }
+        const double back_z = -6.0;
+        for (int i = -10; i <= 10; i++) {
+            for (int j = 0; j <= 6; j++) {
+                const double x = i * 2.0;
+                const double y = 1.0 - j * 2.0;
+                scene.push_back({ { { x, y, back_z } }, { { x + 2.0, y, back_z } }, { { x + 2.0, y + 2.0, back_z } }, static_cast<unsigned char>(rng.get_random_raw() % 256) });
+                scene.push_back({ { { x, y, back_z } }, { { x + 2.0, y + 2.0, back_z } }, { { x, y + 2.0, back_z } }, static_cast<unsigned char>(rng.get_random_raw() % 256) });
+            }
+        }
+        for (const double side_x : { -12.0, 14.0 }) {
+            for (int i = 0; i < 12; i++) {
+                for (int j = 0; j <= 6; j++) {
+                    const double z = i * 2.0 - 6.0;
+                    const double y = 1.0 - j * 2.0;
+                    scene.push_back({ { { side_x, y, z } }, { { side_x, y, z + 2.0 } }, { { side_x, y + 2.0, z + 2.0 } }, static_cast<unsigned char>(rng.get_random_raw() % 256) });
+                    scene.push_back({ { { side_x, y, z } }, { { side_x, y + 2.0, z + 2.0 } }, { { side_x, y + 2.0, z } }, static_cast<unsigned char>(rng.get_random_raw() % 256) });
+                }
             }
         }
     }
@@ -120,6 +150,7 @@ private:
         scene.push_back(triangle{ v[0], v[5], v[4], static_cast<unsigned char>(base_intensity - 50) });
     }
 
+    template <typename shader_type>
     void fill_triangle(
         unsigned char* data,
         double* depth_buffer,
@@ -132,7 +163,7 @@ private:
         int x2,
         int y2,
         double z2,
-        unsigned char intensity
+        const shader_type& shade
     ) {
         if (y0 > y1) {
             std::swap(y0, y1);
@@ -167,7 +198,7 @@ private:
                 int idx = y * image_width + x;
                 if (z < depth_buffer[idx]) {
                     depth_buffer[idx] = z;
-                    data[idx] = intensity;
+                    data[idx] = shade(x, y);
                 }
             }
         };
@@ -218,6 +249,7 @@ private:
 
 public:
     void render_frame(const math::se3<double>& pose, const math::matrix<double, 3, 3>& intrinsics, image::image& img) {
+        const math::se3<double> camera_to_world = pose.inverse();
         unsigned char* data = img.get_data();
         std::fill(data, data + image_width * image_height, static_cast<unsigned char>(0));
         std::vector<double> depth_buffer(static_cast<size_t>(image_width * image_height), std::numeric_limits<double>::max());
@@ -240,6 +272,10 @@ public:
             if (!project_point(intrinsics, v2_cam, u2, v2)) {
                 continue;
             }
+            const math::matrix<double, 3, 1> edge_a = v1_cam - v0_cam;
+            const math::matrix<double, 3, 1> edge_b = v2_cam - v0_cam;
+            const math::matrix<double, 3, 1> normal = { { (edge_a[1] * edge_b[2]) - (edge_a[2] * edge_b[1]), (edge_a[2] * edge_b[0]) - (edge_a[0] * edge_b[2]), (edge_a[0] * edge_b[1]) - (edge_a[1] * edge_b[0]) } };
+            const double plane_offset = (normal[0] * v0_cam[0]) + (normal[1] * v0_cam[1]) + (normal[2] * v0_cam[2]);
             fill_triangle(
                 data,
                 depth_buffer.data(),
@@ -252,7 +288,23 @@ public:
                 static_cast<int>(std::floor(u2)),
                 static_cast<int>(std::floor(v2)),
                 v2_cam[2],
-                face.intensity
+                [&](const int x, const int y) {
+                    const math::matrix<double, 3, 1> ray = { { (static_cast<double>(x) + 0.5 - intrinsics[0][2]) / intrinsics[0][0], (static_cast<double>(y) + 0.5 - intrinsics[1][2]) / intrinsics[1][1], 1.0 } };
+                    const double facing = (normal[0] * ray[0]) + (normal[1] * ray[1]) + (normal[2] * ray[2]);
+                    if (std::abs(facing) < 1.0e-12) {
+                        return face.intensity;
+                    }
+                    const double distance = plane_offset / facing;
+                    const math::matrix<double, 3, 1> surface = camera_to_world * math::matrix<double, 3, 1>{ { distance * ray[0], distance * ray[1], distance * ray[2] } };
+                    unsigned int hash = 2166136261u;
+                    for (size_t axis = 0; axis < 3; ++axis) {
+                        hash = (hash ^ static_cast<unsigned int>(static_cast<int>(std::floor((4.0 * surface[axis]) + 0.125)))) * 16777619u;
+                    }
+                    hash ^= hash >> 15;
+                    hash *= 0x2c1b3c6du;
+                    hash ^= hash >> 12;
+                    return static_cast<unsigned char>((static_cast<unsigned int>(face.intensity) + (hash % 256u)) / 2u);
+                }
             );
         }
     }
@@ -637,19 +689,27 @@ static void test_predict_constant_velocity() {
 }
 
 static void test_loop_closure(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer, const mapping::frame::settings::association_kind association = mapping::frame::settings::association_kind::klt) {
+    constexpr static const int approach_frames = 8;
+    constexpr static const int circle_frames = 72;
+    constexpr static const int overlap_frames = 18;
+    constexpr static const double radius = 3.0;
     std::vector<math::se3<double>> trajectory;
-    for (int i = 0; i < 24; i++) {
-        trajectory.push_back({ math::so3<double>::rotation(0, 0, 0), { { i * 0.5, 0, 0 } } });
+    for (int i = 0; i < approach_frames; i++) {
+        const math::matrix<double, 3, 1> centre = { { (i - approach_frames) * 0.25, 0.0, 6.0 - radius } };
+        trajectory.push_back({ math::so3<double>::identity(), -centre });
     }
-    for (int i = 23; i >= 0; i--) {
-        trajectory.push_back({ math::so3<double>::rotation(0, 0, 0), { { i * 0.5, 0, 0 } } });
+    for (int i = 0; i <= circle_frames + overlap_frames; i++) {
+        const double angle = 2.0 * 3.14159265358979323846 * static_cast<double>(i) / static_cast<double>(circle_frames);
+        const math::so3<double> rotation = math::so3<double>::rotation(0, angle, 0);
+        const math::matrix<double, 3, 1> centre = { { radius * std::sin(angle), 0.0, 6.0 - (radius * std::cos(angle)) } };
+        trajectory.push_back({ rotation, -(rotation * centre) });
     }
 
     slam system;
     system.frontend.association = association;
     system.frontend.track_collision_distance = 0.0f;
     for (const math::se3<double>& pose : trajectory) {
-        image::image frame(static_cast<size_t>(width), static_cast<size_t>(height));
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
         renderer.render_frame(pose, intrinsics, frame);
         system.process_frame(intrinsics, frame);
     }
@@ -668,7 +728,13 @@ static void test_loop_closure(const int width, const int height, const math::mat
     }
     const int last_frame_id = static_cast<int>(trajectory.size()) - 1;
     REQUIRE(system.reconstruction.frames.count(last_frame_id) != 0);
-    REQUIRE(std::sqrt(system.reconstruction.frames.at(last_frame_id).translation.get_length_squared()) < 0.15 * furthest);
+    REQUIRE(system.reconstruction.frames.count(approach_frames) != 0);
+    REQUIRE(system.reconstruction.frames.count(approach_frames + circle_frames) != 0);
+    const mapping::frame& circle_start = system.reconstruction.frames.at(approach_frames);
+    const mapping::frame& circle_end = system.reconstruction.frames.at(approach_frames + circle_frames);
+    const math::matrix<double, 3, 1> start_centre = -math::transpose(circle_start.rotation) * circle_start.translation;
+    const math::matrix<double, 3, 1> end_centre = -math::transpose(circle_end.rotation) * circle_end.translation;
+    REQUIRE(std::sqrt((end_centre - start_centre).get_length_squared()) < 0.15 * furthest);
 }
 
 static void test_relocalisation(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {
@@ -681,14 +747,14 @@ static void test_relocalisation(const int width, const int height, const math::m
     slam system;
     REQUIRE(system.state() == slam::tracking_state::initialising);
     for (const math::se3<double>& pose : outward) {
-        image::image frame(static_cast<size_t>(width), static_cast<size_t>(height));
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
         renderer.render_frame(pose, intrinsics, frame);
         system.process_frame(intrinsics, frame);
     }
     REQUIRE(system.state() == slam::tracking_state::tracking);
     const size_t frames_before_blackout = system.reconstruction.frames.size();
     for (int gap = 0; gap < 60; ++gap) {
-        image::image frame(static_cast<size_t>(width), static_cast<size_t>(height), black.data());
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width), black.data());
         system.process_frame(intrinsics, frame);
     }
     REQUIRE(system.state() == slam::tracking_state::initialising);
@@ -696,7 +762,7 @@ static void test_relocalisation(const int width, const int height, const math::m
 
     const int relocalised_frame_id = 24 + 60;
     for (int i = 23; i >= 0; i--) {
-        image::image frame(static_cast<size_t>(width), static_cast<size_t>(height));
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
         renderer.render_frame(outward[static_cast<size_t>(i)], intrinsics, frame);
         system.process_frame(intrinsics, frame);
         if (i == 23) {
@@ -738,7 +804,7 @@ static void test_submap_join(const int width, const int height, const math::matr
         outward.push_back({ math::so3<double>::rotation(0, 0, 0), { { i * 0.5, 0, 0 } } });
     }
     std::vector<math::se3<double>> back;
-    for (int i = -12; i < 24; i++) {
+    for (int i = -32; i < 24; i++) {
         back.push_back({ math::so3<double>::rotation(0, 0, 0), { { i * 0.5, 0, 0 } } });
     }
     const std::vector<unsigned char> black(static_cast<size_t>(width) * static_cast<size_t>(height), 0);
@@ -746,20 +812,20 @@ static void test_submap_join(const int width, const int height, const math::matr
     slam system;
     system.frontend.track_collision_distance = 0.0f;
     for (const math::se3<double>& pose : outward) {
-        image::image frame(static_cast<size_t>(width), static_cast<size_t>(height));
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
         renderer.render_frame(pose, intrinsics, frame);
         system.process_frame(intrinsics, frame);
     }
     REQUIRE(system.state() == slam::tracking_state::tracking);
     for (int gap = 0; gap < 60; ++gap) {
-        image::image frame(static_cast<size_t>(width), static_cast<size_t>(height), black.data());
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width), black.data());
         system.process_frame(intrinsics, frame);
     }
     REQUIRE(system.state() == slam::tracking_state::initialising);
     const size_t keyframes_before = system.keyframe_ids().size();
 
     for (const math::se3<double>& pose : back) {
-        image::image frame(static_cast<size_t>(width), static_cast<size_t>(height));
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
         renderer.render_frame(pose, intrinsics, frame);
         system.process_frame(intrinsics, frame);
     }
@@ -799,7 +865,7 @@ static void test_rotation_only(const int width, const int height, const math::ma
     slam system;
     system.frontend.inverse_depth = true;
     for (const math::se3<double>& pose : trajectory) {
-        image::image frame(static_cast<size_t>(width), static_cast<size_t>(height));
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
         renderer.render_frame(pose, intrinsics, frame);
         system.process_frame(intrinsics, frame);
     }
@@ -838,7 +904,7 @@ static void test_lines(const int width, const int height, const math::matrix<dou
     slam system;
     system.frontend.lines = true;
     for (const math::se3<double>& pose : trajectory) {
-        image::image frame(static_cast<size_t>(width), static_cast<size_t>(height));
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
         renderer.render_frame(pose, intrinsics, frame);
         system.process_frame(intrinsics, frame);
     }
@@ -877,16 +943,18 @@ static void test_lines(const int width, const int height, const math::matrix<dou
 
 static void test_map_reacquisition(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {
     std::vector<math::se3<double>> trajectory;
-    for (int i = 0; i < 12; i++) {
-        trajectory.push_back({ math::so3<double>::rotation(0, 0, 0), { { i * 0.3, 0, 0 } } });
-    }
-    for (int i = 11; i >= 0; i--) {
-        trajectory.push_back({ math::so3<double>::rotation(0, 0, 0), { { i * 0.3, 0, 0 } } });
+    for (int sweep = 0; sweep < 3; sweep++) {
+        for (int i = (sweep == 0) ? 0 : 1; i < 16; i++) {
+            trajectory.push_back({ math::so3<double>::rotation(0, 0, 0), { { i * 0.3, 0, 0 } } });
+        }
+        for (int i = 14; i >= 0; i--) {
+            trajectory.push_back({ math::so3<double>::rotation(0, 0, 0), { { i * 0.3, 0, 0 } } });
+        }
     }
 
     const auto run = [&](slam& system) {
         for (const math::se3<double>& pose : trajectory) {
-            image::image frame(static_cast<size_t>(width), static_cast<size_t>(height));
+            image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
             renderer.render_frame(pose, intrinsics, frame);
             system.process_frame(intrinsics, frame);
         }
@@ -978,7 +1046,7 @@ int main(int argc, char* argv[]) {
     slam system;
 
     for (const math::se3<double>& pose : trajectory) {
-        image::image frame(static_cast<size_t>(width), static_cast<size_t>(height));
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
         renderer.render_frame(pose, intrinsics, frame);
         system.process_frame(intrinsics, frame);
         std::fflush(stdout);
@@ -1014,9 +1082,10 @@ int main(int argc, char* argv[]) {
     REQUIRE(distance > 0.05);
 
     test_map_reacquisition(width, height, intrinsics, renderer);
-    test_loop_closure(width, height, intrinsics, renderer);
-    test_loop_closure(width, height, intrinsics, renderer, mapping::frame::settings::association_kind::match);
-    test_loop_closure(width, height, intrinsics, renderer, mapping::frame::settings::association_kind::both);
+    world room(width, height, true);
+    test_loop_closure(width, height, intrinsics, room);
+    test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::match);
+    test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::both);
     test_relocalisation(width, height, intrinsics, renderer);
     test_submap_join(width, height, intrinsics, renderer);
     test_lines(width, height, intrinsics, renderer);
