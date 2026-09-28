@@ -54,6 +54,19 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace {
     constexpr static const char* const association_names[3] = { "klt", "match", "both" };
+    constexpr static const char* const detector_names[7] = { "fast", "mser", "harris", "klt", "forstner", "rohr", "kenney" };
+    constexpr static const char* const detector_labels[7] = { "FAST", "MSER", "Harris", "KLT", "Forstner", "Rohr", "Kenney" };
+    constexpr static const char* const descriptor_names[3] = { "orb", "teblid", "bsift" };
+    constexpr static const char* const descriptor_labels[3] = { "ORB", "TEBLID", "BSIFT" };
+
+    int index_of(const char* const* const names, const int count, const std::string& name) {
+        for (int i = 0; i < count; ++i) {
+            if (name == names[i]) {
+                return i;
+            }
+        }
+        return -1;
+    }
 
     std::atomic<bool> shutdown_requested{ false };
 
@@ -73,7 +86,7 @@ namespace {
         std::printf("        --exit-after [n]       - Exit after n rendered frames.\n");
         std::printf("        --load-map [file]      - Display a saved map instead of running the slam system.\n");
         std::printf("        --save-map [file]      - Write the built map out when the run ends.\n");
-        std::printf("        --config [key=value]   - A front end setting to start with: tracker=klt|extrema, lines=on|off, culling=on|off or association=klt|match|both, default both (repeatable).\n");
+        std::printf("        --config [key=value]   - A front end setting to start with: tracker=klt|extrema, lines=on|off, culling=on|off, association=klt|match|both (default both), detector=fast|mser|harris|klt|forstner|rohr|kenney (default fast), descriptor=orb|teblid|bsift (default orb) or flow=intensity|wavelet (default intensity) (repeatable).\n");
         std::printf("        --help                 - Show this message.\n");
     }
 
@@ -584,6 +597,9 @@ namespace {
         std::atomic<bool> lines_enabled{ false };
         std::atomic<bool> culling_enabled{ true };
         std::atomic<int> association_choice{ 0 };
+        std::atomic<int> detector_choice{ 0 };
+        std::atomic<int> descriptor_choice{ 0 };
+        std::atomic<bool> wavelet_flow{ false };
 
     private:
         std::thread thread;
@@ -599,6 +615,9 @@ namespace {
         bool applied_lines = false;
         bool applied_culling = true;
         int applied_association = -1;
+        int applied_detector = -1;
+        int applied_descriptor = -1;
+        bool applied_wavelet = false;
         gtl::triple_buffer<gui::render_snapshot> snapshots;
 
         void publish() {
@@ -610,11 +629,14 @@ namespace {
             const bool lines_on = this->lines_enabled.load();
             const bool culling_on = this->culling_enabled.load();
             const int association = this->association_choice.load();
-            if ((tracker == this->applied_tracker) && (lines_on == this->applied_lines) && (culling_on == this->applied_culling) && (association == this->applied_association)) {
+            const int detector = this->detector_choice.load();
+            const int descriptor = this->descriptor_choice.load();
+            const bool wavelet = this->wavelet_flow.load();
+            if ((tracker == this->applied_tracker) && (lines_on == this->applied_lines) && (culling_on == this->applied_culling) && (association == this->applied_association) && (detector == this->applied_detector) && (descriptor == this->applied_descriptor) && (wavelet == this->applied_wavelet)) {
                 return;
             }
-            char text[128];
-            const int length = std::snprintf(&text[0], sizeof(text), "tracker=%s\nlines=%s\nculling=%s\nassociation=%s\n", (tracker == 1) ? "extrema" : "klt", lines_on ? "on" : "off", culling_on ? "on" : "off", association_names[static_cast<std::size_t>(((association >= 0) && (association < 3)) ? association : 0)]);
+            char text[256];
+            const int length = std::snprintf(&text[0], sizeof(text), "tracker=%s\nlines=%s\nculling=%s\nassociation=%s\ndetector=%s\ndescriptor=%s\nflow=%s\n", (tracker == 1) ? "extrema" : "klt", lines_on ? "on" : "off", culling_on ? "on" : "off", association_names[static_cast<std::size_t>(((association >= 0) && (association < 3)) ? association : 0)], detector_names[static_cast<std::size_t>(((detector >= 0) && (detector < 7)) ? detector : 0)], descriptor_names[static_cast<std::size_t>(((descriptor >= 0) && (descriptor < 3)) ? descriptor : 0)], wavelet ? "wavelet" : "intensity");
             if ((length > 0) && (this->system.set_configuration(&text[0], length) != zeroslam_return_success)) {
                 std::fprintf(stderr, "The library rejected the front end configuration.\n");
             }
@@ -622,6 +644,9 @@ namespace {
             this->applied_lines = lines_on;
             this->applied_culling = culling_on;
             this->applied_association = association;
+            this->applied_detector = detector;
+            this->applied_descriptor = descriptor;
+            this->applied_wavelet = wavelet;
         }
 
         bool describe_rig(const scene::image_channel& channel_fed) {
@@ -1130,6 +1155,9 @@ int main(int argc, char* argv[]) {
     bool initial_lines = false;
     bool initial_culling = true;
     int initial_association = 2;
+    int initial_detector = 0;
+    int initial_descriptor = 0;
+    bool initial_wavelet = false;
     for (int i = 1; i < argc; ++i) {
         const auto take_string = [&](const char* const name, std::string& destination) -> bool {
             if (i + 1 >= argc) {
@@ -1206,8 +1234,20 @@ int main(int argc, char* argv[]) {
             else if (setting == "association=both") {
                 initial_association = 2;
             }
+            else if ((setting.rfind("detector=", 0) == 0) && (index_of(&detector_names[0], 7, setting.substr(9)) >= 0)) {
+                initial_detector = index_of(&detector_names[0], 7, setting.substr(9));
+            }
+            else if ((setting.rfind("descriptor=", 0) == 0) && (index_of(&descriptor_names[0], 3, setting.substr(11)) >= 0)) {
+                initial_descriptor = index_of(&descriptor_names[0], 3, setting.substr(11));
+            }
+            else if (setting == "flow=intensity") {
+                initial_wavelet = false;
+            }
+            else if (setting == "flow=wavelet") {
+                initial_wavelet = true;
+            }
             else {
-                std::fprintf(stderr, "Unknown --config setting: %s (tracker=klt|extrema, lines=on|off, culling=on|off, association=klt|match|both)\n", setting.c_str());
+                std::fprintf(stderr, "Unknown --config setting: %s (tracker=klt|extrema, lines=on|off, culling=on|off, association=klt|match|both, detector=fast|mser|harris|klt|forstner|rohr|kenney, descriptor=orb|teblid|bsift, flow=intensity|wavelet)\n", setting.c_str());
                 return EXIT_FAILURE;
             }
         }
@@ -1290,6 +1330,9 @@ int main(int argc, char* argv[]) {
     bool feature_lines = false;
     bool feature_culling = true;
     int feature_association = 2;
+    int feature_detector = 0;
+    int feature_descriptor = 0;
+    bool feature_wavelet = false;
 
     bool show_image_strip = true;
     bool show_landmarks = true;
@@ -1318,7 +1361,6 @@ int main(int argc, char* argv[]) {
     std::vector<scene::decoded_image> channel_images;
     std::vector<long long> channel_image_indices;
     std::vector<gui::image_texture> channel_textures;
-    int displayed_channel = 0;
 
     metrics::result accuracy;
     anchor_pair anchor;
@@ -1355,7 +1397,6 @@ int main(int argc, char* argv[]) {
             texture.release();
         }
         channel_textures.clear();
-        displayed_channel = 0;
         reset_evaluation();
         truth_camera.clear();
         truth_camera_for_channel = -2;
@@ -1367,7 +1408,6 @@ int main(int argc, char* argv[]) {
             channel_textures.resize(loaded_scene.image_channels().size());
             timeline.time_nanoseconds = loaded_scene.begin_time();
             timeline.state = playback::mode::paused;
-            displayed_channel = (primary_visual_channel(loaded_scene) >= 0) ? primary_visual_channel(loaded_scene) : 0;
             std::printf("Loaded scene '%s': %zu image channels, %zu imu channels, %zu ground truth poses.\n", &scene_path_text[0], loaded_scene.image_channels().size(), loaded_scene.imu_channels().size(), loaded_scene.ground_truth().size());
         }
         else {
@@ -1395,10 +1435,16 @@ int main(int argc, char* argv[]) {
     feature_lines = initial_lines;
     feature_culling = initial_culling;
     feature_association = initial_association;
+    feature_detector = initial_detector;
+    feature_descriptor = initial_descriptor;
+    feature_wavelet = initial_wavelet;
     worker.tracker_choice.store(feature_tracker);
     worker.lines_enabled.store(feature_lines);
     worker.culling_enabled.store(feature_culling);
     worker.association_choice.store(feature_association);
+    worker.detector_choice.store(feature_detector);
+    worker.descriptor_choice.store(feature_descriptor);
+    worker.wavelet_flow.store(feature_wavelet);
     if (scene_path.empty()) {
         worker.start(loaded_scene);
     }
@@ -1544,9 +1590,7 @@ int main(int argc, char* argv[]) {
                 strip_channels.push_back(static_cast<int>(i));
             }
         }
-        if (!strip_channels.empty() && (std::find(strip_channels.begin(), strip_channels.end(), displayed_channel) == strip_channels.end())) {
-            displayed_channel = (std::find(strip_channels.begin(), strip_channels.end(), primary) != strip_channels.end()) ? primary : strip_channels.front();
-        }
+        const int stepped_channel = (primary >= 0) ? primary : (strip_channels.empty() ? -1 : strip_channels.front());
 
         if (loaded_scene.is_loaded() && (primary != truth_camera_for_channel)) {
             truth_camera_for_channel = primary;
@@ -1750,7 +1794,7 @@ int main(int argc, char* argv[]) {
                 glVertex2i(placed.x, placed.y + placed.height);
                 glEnd();
                 glLineWidth(line_size);
-                if (column != displayed_channel) {
+                if (column != primary) {
                     continue;
                 }
 
@@ -1820,14 +1864,17 @@ int main(int argc, char* argv[]) {
             controls.header("Features");
             {
                 const char* const trackers[2] = { "Points", "Curvature" };
-                const int pressed = controls.button_row(&trackers[0], 2, feature_tracker);
-                if ((pressed >= 0) && (pressed != feature_tracker)) {
-                    feature_tracker = pressed;
-                    worker.tracker_choice.store(feature_tracker);
+                const auto restart = [&]() {
                     timeline.time_nanoseconds = loaded_scene.begin_time();
                     timeline.state = playback::mode::paused;
                     worker.reset.store(true);
                     reset_evaluation();
+                };
+                const int pressed = controls.button_row(&trackers[0], 2, feature_tracker);
+                if ((pressed >= 0) && (pressed != feature_tracker)) {
+                    feature_tracker = pressed;
+                    worker.tracker_choice.store(feature_tracker);
+                    restart();
                 }
                 if (controls.checkbox("Lines", &feature_lines)) {
                     worker.lines_enabled.store(feature_lines);
@@ -1840,6 +1887,25 @@ int main(int argc, char* argv[]) {
                 if ((association_pressed >= 0) && (association_pressed != feature_association)) {
                     feature_association = association_pressed;
                     worker.association_choice.store(feature_association);
+                }
+                if (controls.checkbox("Wavelet Flow", &feature_wavelet, feature_tracker == 0)) {
+                    worker.wavelet_flow.store(feature_wavelet);
+                }
+                controls.label_dim("Detector:");
+                const int detector_first = controls.button_row(&detector_labels[0], 4, (feature_detector < 4) ? feature_detector : -1, feature_tracker == 0);
+                const int detector_second = controls.button_row(&detector_labels[4], 3, (feature_detector >= 4) ? (feature_detector - 4) : -1, feature_tracker == 0);
+                const int detector_pressed = (detector_first >= 0) ? detector_first : ((detector_second >= 0) ? (detector_second + 4) : -1);
+                if ((detector_pressed >= 0) && (detector_pressed != feature_detector)) {
+                    feature_detector = detector_pressed;
+                    worker.detector_choice.store(feature_detector);
+                    restart();
+                }
+                controls.label_dim("Descriptor:");
+                const int descriptor_pressed = controls.button_row(&descriptor_labels[0], 3, feature_descriptor, feature_tracker == 0);
+                if ((descriptor_pressed >= 0) && (descriptor_pressed != feature_descriptor)) {
+                    feature_descriptor = descriptor_pressed;
+                    worker.descriptor_choice.store(feature_descriptor);
+                    restart();
                 }
             }
             controls.text_input(editor, "map:", &map_path_text[0], static_cast<int>(sizeof(map_path_text)));
@@ -1887,9 +1953,6 @@ int main(int argc, char* argv[]) {
                 std::snprintf(&text[0], sizeof(text), "%s %s %ux%u", channel.sensor_name.c_str(), channel.is_depth() ? "(depth)" : "(visual)", channel.width, channel.height);
                 if (controls.checkbox(&text[0], &channel.selected_for_slam)) {
                     worker.channel.store(primary_visual_channel(loaded_scene));
-                    if (channel.selected_for_slam) {
-                        displayed_channel = static_cast<int>(i);
-                    }
                 }
                 if (!channel.has_intrinsics) {
                     controls.label_dim("  no camera_info, cannot slam");
@@ -1910,10 +1973,10 @@ int main(int argc, char* argv[]) {
                 const char* const transport[4] = { "|<", "[]", playing ? "||" : ">", ">|" };
                 const int pressed = controls.button_row(&transport[0], 4, playing ? 2 : -1, loaded_scene.is_loaded());
                 const auto step_by = [&](const long long direction) {
-                    if ((displayed_channel < 0) || (displayed_channel >= static_cast<int>(channels.size())) || channels[static_cast<std::size_t>(displayed_channel)].messages.empty()) {
+                    if ((stepped_channel < 0) || (stepped_channel >= static_cast<int>(channels.size())) || channels[static_cast<std::size_t>(stepped_channel)].messages.empty()) {
                         return;
                     }
-                    const scene::image_channel& channel = channels[static_cast<std::size_t>(displayed_channel)];
+                    const scene::image_channel& channel = channels[static_cast<std::size_t>(stepped_channel)];
                     const long long last = static_cast<long long>(channel.messages.size()) - 1;
                     const long long index = std::min(last, std::max(0LL, scene::scene::message_index_at(channel, timeline.time_nanoseconds) + direction));
                     seek(channel.log_times[static_cast<std::size_t>(index)]);
@@ -1947,14 +2010,6 @@ int main(int argc, char* argv[]) {
             }
 
             controls.header("Display");
-            if (strip_channels.size() > 1) {
-                char text[128] = {};
-                std::snprintf(&text[0], sizeof(text), "Features on: %s", channels[static_cast<std::size_t>(displayed_channel)].sensor_name.c_str());
-                if (controls.button(&text[0])) {
-                    const auto shown = std::find(strip_channels.begin(), strip_channels.end(), displayed_channel);
-                    displayed_channel = strip_channels[static_cast<std::size_t>((shown - strip_channels.begin()) + 1) % strip_channels.size()];
-                }
-            }
             controls.checkbox("Image Panel", &show_image_strip);
             controls.checkbox("Landmarks", &show_landmarks);
             controls.checkbox("Line Landmarks", &show_lines);
