@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/edge.hpp"
 
 #include "optimisation/loss.hpp"
+#include "optimisation/losses/cauchy.hpp"
 #include "optimisation/losses/huber.hpp"
 #include "optimisation/vertex.hpp"
 #include "optimisation/vertices/point.hpp"
@@ -106,6 +107,14 @@ int main(int argc, char* argv[]) {
     edge.robust_info(rho_delta, robust_information);
     REQUIRE(rho_delta < 1.0);
     REQUIRE(is_value_approx(robust_information[0][0], rho_delta * 4.0));
+
+    edge.set_loss(optimisation::loss(optimisation::losses::cauchy(3.0)));
+    edge.robust_info(rho_delta, robust_information, false);
+    REQUIRE(is_value_approx(rho_delta, 9.0 / 13.0));
+    REQUIRE(is_value_approx(robust_information[0][0], 36.0 / 13.0));
+    edge.robust_info(rho_delta, robust_information);
+    REQUIRE(is_value_approx(rho_delta, 9.0 / 13.0));
+    REQUIRE(is_value_approx(robust_information[0][0], 180.0 / 169.0));
 
     return EXIT_SUCCESS;
 }

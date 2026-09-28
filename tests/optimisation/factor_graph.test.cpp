@@ -132,6 +132,46 @@ static void build_problem(problem& built, core::random_pcg& rng, const size_t ca
     }
 }
 
+static size_t add_mixed_blocks(problem& built, core::random_pcg& rng) {
+    const sensor::camera::pinhole<double> camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
+    const optimisation::loss robust_loss{ optimisation::losses::huber(1.0) };
+    const double correlated[4] = { 2.0e4, 0.5e4, 0.5e4, 1.0e4 };
+    const math::matrix<double, 0, 0> information(2, 2, &correlated[0]);
+    for (size_t l = 0; l < built.landmarks.size(); ++l) {
+        built.landmarks[l]->set_fixed((l % 5) == 1);
+        if ((l % 2) == 0) {
+            for (optimisation::edge* const connected : built.graph.get_connected_edges(built.landmarks[l])) {
+                connected->set_information(information);
+            }
+        }
+    }
+    constexpr static const size_t single_count = 6;
+    for (size_t i = 0; i < single_count; ++i) {
+        optimisation::vertex* const camera = built.cameras[1 + (i % (built.cameras.size() - 1))];
+        const double* const camera_parameters = camera->get_parameters();
+        const double quaternion[4] = { camera_parameters[6], camera_parameters[3], camera_parameters[4], camera_parameters[5] };
+        const math::se3<double> pose(math::so3<double>(quaternion), math::matrix<double, 3, 1>{ { camera_parameters[0], camera_parameters[1], camera_parameters[2] } });
+        const math::matrix<double, 3, 1> location{ { rng.get_random(-1.0, 1.0) + (0.1 * static_cast<double>(built.cameras.size())), rng.get_random(-1.0, 1.0), rng.get_random(3.0, 6.0) } };
+        math::matrix<double, 2, 1> pixel;
+        REQUIRE(camera_model.project((pose * location).data(), pixel.data()));
+        optimisation::vertex landmark_vertex{ optimisation::vertices::point() };
+        const math::matrix<double, 3, 1> noisy = location + math::matrix<double, 3, 1>{ { rng.get_random(-0.05, 0.05), rng.get_random(-0.05, 0.05), rng.get_random(-0.05, 0.05) } };
+        REQUIRE(landmark_vertex.set_parameters(noisy.data(), 3));
+        landmark_vertex.set_marginalised(true);
+        landmark_vertex.set_fixed((i % 3) == 0);
+        optimisation::vertex* const landmark = built.graph.add_vertex(static_cast<optimisation::vertex&&>(landmark_vertex));
+        built.landmarks.push_back(landmark);
+        optimisation::edge edge{ optimisation::edges::reprojection(sensor::camera::model<double>(camera_model)) };
+        edge.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { pixel[0] + rng.get_random(-0.001, 0.001), pixel[1] + rng.get_random(-0.001, 0.001) } }.data()));
+        edge.add_vertex(camera);
+        edge.add_vertex(landmark);
+        edge.set_information(information);
+        edge.set_loss(robust_loss);
+        REQUIRE(built.graph.add_edge(static_cast<optimisation::edge&&>(edge)) != nullptr);
+    }
+    return single_count;
+}
+
 static void add_lines(problem& built, core::random_pcg& rng, const size_t line_count, std::vector<geometry::plucker>& true_lines) {
     const sensor::camera::pinhole<double> camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
     const optimisation::loss robust_loss{ optimisation::losses::huber(1.0) };
@@ -407,10 +447,24 @@ int main(int argc, char* argv[]) {
         REQUIRE(factor_graph.get_current_chi() < initialChi2);
     }
 
-    for (const bool baseline_edge : { false, true }) {
+    for (const int variant : { 0, 1, 2 }) {
         core::random_pcg rng(0x5eed0066ull);
         problem built;
-        build_problem(built, rng, 6, 25, baseline_edge, false);
+        build_problem(built, rng, 6, 25, variant > 0, false);
+        const size_t single_blocks = (variant == 2) ? add_mixed_blocks(built, rng) : 0;
+        if (variant == 2) {
+            static_cast<void>(built.graph.get_current_chi());
+            size_t down_weighted = 0;
+            size_t full_weight = 0;
+            for (optimisation::vertex* const landmark : built.landmarks) {
+                for (const optimisation::edge* const connected : built.graph.get_connected_edges(landmark)) {
+                    down_weighted += (connected->robust_weight() < 1.0) ? 1u : 0u;
+                    full_weight += (connected->robust_weight() == 1.0) ? 1u : 0u;
+                }
+            }
+            REQUIRE(down_weighted > 0);
+            REQUIRE(full_weight > 0);
+        }
         built.graph.set_conjugate_gradient_tolerance(1e-14);
         built.graph.set_conjugate_gradient_iteration_limit(100000);
         for (const double lambda : { 1e-6, 1e-2, 1.0, 1e2 }) {
@@ -422,7 +476,7 @@ int main(int argc, char* argv[]) {
             built.graph.set_strategy(optimisation::factor_graph::strategy::square_root);
             REQUIRE(built.graph.compute_damped_step(lambda, step_square_root));
             REQUIRE(built.graph.get_diagnostics().used_square_root);
-            REQUIRE(built.graph.get_diagnostics().landmark_blocks == 25);
+            REQUIRE(built.graph.get_diagnostics().landmark_blocks == static_cast<int>(25 + single_blocks));
             REQUIRE(built.graph.get_diagnostics().reduced_solves == 1);
             REQUIRE(built.graph.get_diagnostics().reduced_failures == 0);
             REQUIRE(step_dense.rows() == step_square_root.rows());
