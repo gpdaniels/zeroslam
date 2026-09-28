@@ -26,13 +26,14 @@ namespace optimisation::vertices {
         const math::sim3<double> current_similarity(math::se3<double>(current_rotation, current_translation), parameters[7]);
         const math::sim3<double> update = math::sim3<double>::exp({ { delta[0], delta[1], delta[2], delta[3], delta[4], delta[5], delta[6] } });
         const math::sim3<double> next_similarity = update * current_similarity;
+        const math::so3<double> next_rotation = next_similarity.transformation().rotation().normalised();
         parameters[0] = next_similarity.transformation().translation()[0];
         parameters[1] = next_similarity.transformation().translation()[1];
         parameters[2] = next_similarity.transformation().translation()[2];
-        parameters[3] = next_similarity.transformation().rotation().get_quaternion()[1];
-        parameters[4] = next_similarity.transformation().rotation().get_quaternion()[2];
-        parameters[5] = next_similarity.transformation().rotation().get_quaternion()[3];
-        parameters[6] = next_similarity.transformation().rotation().get_quaternion()[0];
+        parameters[3] = next_rotation.get_quaternion()[1];
+        parameters[4] = next_rotation.get_quaternion()[2];
+        parameters[5] = next_rotation.get_quaternion()[3];
+        parameters[6] = next_rotation.get_quaternion()[0];
         parameters[7] = next_similarity.scale();
     }
 }

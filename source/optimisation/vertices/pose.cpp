@@ -25,12 +25,13 @@ namespace optimisation::vertices {
         const math::se3<double> current_pose(current_rotation, current_translation);
         const math::se3<double> update = math::se3<double>::exp({ { delta[0], delta[1], delta[2], delta[3], delta[4], delta[5] } });
         const math::se3<double> next_pose = update * current_pose;
+        const math::so3<double> next_rotation = next_pose.rotation().normalised();
         parameters[0] = next_pose.translation()[0];
         parameters[1] = next_pose.translation()[1];
         parameters[2] = next_pose.translation()[2];
-        parameters[3] = next_pose.rotation().get_quaternion()[1];
-        parameters[4] = next_pose.rotation().get_quaternion()[2];
-        parameters[5] = next_pose.rotation().get_quaternion()[3];
-        parameters[6] = next_pose.rotation().get_quaternion()[0];
+        parameters[3] = next_rotation.get_quaternion()[1];
+        parameters[4] = next_rotation.get_quaternion()[2];
+        parameters[5] = next_rotation.get_quaternion()[3];
+        parameters[6] = next_rotation.get_quaternion()[0];
     }
 }

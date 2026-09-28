@@ -44,6 +44,7 @@ namespace math {
         constexpr so3(const math::matrix<type, 3, 3>& initial_rotation_matrix);
         constexpr math::matrix<type, 4, 1> get_quaternion() const;
         constexpr bool is_unit() const;
+        constexpr so3 normalised() const;
         constexpr static const type unit_tolerance = type(1e-6);
         constexpr math::matrix<type, 3, 3> get_matrix() const;
         static constexpr so3 identity();
@@ -191,6 +192,7 @@ namespace math {
             this->rotation_quaternion[1] = (initial_rotation_matrix[2][1] - initial_rotation_matrix[1][2]) * inverse_two_square_root_trace_plus_one;
             this->rotation_quaternion[2] = (initial_rotation_matrix[0][2] - initial_rotation_matrix[2][0]) * inverse_two_square_root_trace_plus_one;
             this->rotation_quaternion[3] = (initial_rotation_matrix[1][0] - initial_rotation_matrix[0][1]) * inverse_two_square_root_trace_plus_one;
+            *this = this->normalised();
             return;
         }
         const size_t i = (initial_rotation_matrix[0][0] < initial_rotation_matrix[1][1]) ? (1 + (initial_rotation_matrix[1][1] < initial_rotation_matrix[2][2])) : (2 * (initial_rotation_matrix[0][0] < initial_rotation_matrix[2][2]));
@@ -202,6 +204,7 @@ namespace math {
         this->rotation_quaternion[1 + i] = 0.5 * square_root_trace_plus_one;
         this->rotation_quaternion[1 + j] = (initial_rotation_matrix[i][j] + initial_rotation_matrix[j][i]) * inverse_two_square_root_trace_plus_one;
         this->rotation_quaternion[1 + k] = (initial_rotation_matrix[i][k] + initial_rotation_matrix[k][i]) * inverse_two_square_root_trace_plus_one;
+        *this = this->normalised();
     }
 
     template <typename type>
@@ -213,6 +216,16 @@ namespace math {
     constexpr bool so3<type>::is_unit() const {
         const type length_squared = math::sqr(this->rotation_quaternion[0]) + math::sqr(this->rotation_quaternion[1]) + math::sqr(this->rotation_quaternion[2]) + math::sqr(this->rotation_quaternion[3]);
         return math::abs(length_squared - type(1)) <= so3<type>::unit_tolerance;
+    }
+
+    template <typename type>
+    constexpr so3<type> so3<type>::normalised() const {
+        const type length_squared = math::sqr(this->rotation_quaternion[0]) + math::sqr(this->rotation_quaternion[1]) + math::sqr(this->rotation_quaternion[2]) + math::sqr(this->rotation_quaternion[3]);
+        if (length_squared < 0.000000000001) {
+            return *this;
+        }
+        const type inverse_length = type(1) / math::sqrt(length_squared);
+        return { inverse_length * this->rotation_quaternion[0], inverse_length * this->rotation_quaternion[1], inverse_length * this->rotation_quaternion[2], inverse_length * this->rotation_quaternion[3] };
     }
 
     template <typename type>
