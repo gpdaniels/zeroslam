@@ -778,12 +778,14 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
     if ((data == nullptr) || (length <= 0)) {
         return zeroslam_return_failure_invalid_argument;
     }
+    std::vector<const zeroslam_system::camera_entry*> cameras(static_cast<size_t>(length), nullptr);
     for (int i = 0; i < length; ++i) {
         const zeroslam_sensor_data_struct& entry = data[i];
         if (entry.sensor_id == 0) {
             return zeroslam_return_failure_invalid_sensor_data;
         }
-        if (system->any_data && (entry.timestamp <= system->latest_timestamp)) {
+        const bool follows_previous = (i > 0) ? (entry.timestamp > data[i - 1].timestamp) : (!system->any_data || (entry.timestamp > system->latest_timestamp));
+        if (!follows_previous) {
             return zeroslam_return_failure_invalid_sensor_data;
         }
         const zeroslam_system::camera_entry* camera = nullptr;
@@ -800,6 +802,11 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
         if ((entry.measurement_data == nullptr) || (static_cast<size_t>(entry.measurement_length) != expected_length)) {
             return zeroslam_return_failure_invalid_sensor_data;
         }
+        cameras[static_cast<size_t>(i)] = camera;
+    }
+    for (int i = 0; i < length; ++i) {
+        const zeroslam_sensor_data_struct& entry = data[i];
+        const zeroslam_system::camera_entry* const camera = cameras[static_cast<size_t>(i)];
         const image::image frame_image(static_cast<size_t>(camera->parameters.height), static_cast<size_t>(camera->parameters.width), static_cast<unsigned char*>(entry.measurement_data));
         const double camera_parameters[sensor::model::parameter_count] = {
             camera->parameters.focal_x,
