@@ -39,6 +39,36 @@ static double point_line_distance(const double px, const double py, const double
     return std::abs((a * px) + (b * py) + c);
 }
 
+static void require_single_edge(const int length, const bool transposed) {
+    constexpr static const int edge = 65;
+    constexpr static const int depth = 128;
+    const int width = transposed ? length : depth;
+    const int height = transposed ? depth : length;
+    const int peak = ((length / 2) - 1) | 1;
+    std::vector<unsigned char> image(static_cast<size_t>(width) * static_cast<size_t>(height), 0);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const int across = transposed ? y : x;
+            const int along = transposed ? x : y;
+            if (across >= edge) {
+                image[(static_cast<size_t>(y) * static_cast<size_t>(width)) + static_cast<size_t>(x)] = static_cast<unsigned char>(180 - std::abs(along - peak));
+            }
+        }
+    }
+    std::vector<feature::detector::elsed::segment> segments(64);
+    const size_t count = feature::detector::elsed::detect(image.data(), width, height, width, feature::detector::elsed::options(), segments.data(), segments.size());
+    REQUIRE(count == 1);
+    const double across_1 = static_cast<double>(transposed ? segments[0].y1 : segments[0].x1);
+    const double across_2 = static_cast<double>(transposed ? segments[0].y2 : segments[0].x2);
+    const double along_1 = static_cast<double>(transposed ? segments[0].x1 : segments[0].y1);
+    const double along_2 = static_cast<double>(transposed ? segments[0].x2 : segments[0].y2);
+    REQUIRE(std::abs(across_1 - edge) < 0.25);
+    REQUIRE(std::abs(across_2 - edge) < 0.25);
+    REQUIRE(std::abs(std::fmin(along_1, along_2) - 1.5) < 0.25);
+    REQUIRE(std::abs(std::fmax(along_1, along_2) - (length - 1.5)) < 0.25);
+    REQUIRE(std::abs(static_cast<double>(segments[0].length) - (length - 3)) < 0.5);
+}
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
@@ -118,6 +148,11 @@ int main(int argc, char* argv[]) {
         }
         REQUIRE(diagonal_found);
     }
+
+    require_single_edge(128, false);
+    require_single_edge(128, true);
+    require_single_edge(23, false);
+    require_single_edge(23, true);
 
     return EXIT_SUCCESS;
 }

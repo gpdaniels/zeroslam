@@ -141,6 +141,20 @@ namespace feature::detector {
             int last_dx;
             int last_dy;
         };
+
+        class segment_state final {
+        public:
+            line_fit fit;
+            double magnitude_sum = 0.0;
+            double first_x = 0.0;
+            double first_y = 0.0;
+            double last_x = 0.0;
+            double last_y = 0.0;
+            int outliers = 0;
+            bool established = false;
+            size_t window_head = 0;
+            size_t window_count = 0;
+        };
     }
 
     size_t elsed::detect(
@@ -274,22 +288,22 @@ namespace feature::detector {
             }
         };
 
-        const auto emit_segment = [&](const line_fit& fit, const double first_x, const double first_y, const double last_x, const double last_y, const double magnitude_sum) {
+        const auto emit_segment = [&](const segment_state& segment) {
             if (emitted >= segment_buffer_size) {
                 return;
             }
-            if (fit.count < detection_options.minimum_fit_pixels) {
+            if (!segment.established || (segment.fit.count < detection_options.minimum_fit_pixels)) {
                 return;
             }
             double centroid_x = 0.0;
             double centroid_y = 0.0;
             double direction_x = 0.0;
             double direction_y = 0.0;
-            if (!fit.direction(centroid_x, centroid_y, direction_x, direction_y)) {
+            if (!segment.fit.direction(centroid_x, centroid_y, direction_x, direction_y)) {
                 return;
             }
-            const double first_projection = ((first_x - centroid_x) * direction_x) + ((first_y - centroid_y) * direction_y);
-            const double last_projection = ((last_x - centroid_x) * direction_x) + ((last_y - centroid_y) * direction_y);
+            const double first_projection = ((segment.first_x - centroid_x) * direction_x) + ((segment.first_y - centroid_y) * direction_y);
+            const double last_projection = ((segment.last_x - centroid_x) * direction_x) + ((segment.last_y - centroid_y) * direction_y);
             const double length = math::abs(last_projection - first_projection);
             if (length < static_cast<double>(detection_options.minimum_length)) {
                 return;
@@ -300,135 +314,150 @@ namespace feature::detector {
             result.x2 = static_cast<float>(centroid_x + (last_projection * direction_x) + 0.5);
             result.y2 = static_cast<float>(centroid_y + (last_projection * direction_y) + 0.5);
             result.length = static_cast<float>(length);
-            result.response = static_cast<float>(magnitude_sum / static_cast<double>(fit.count));
-            result.support = fit.count;
+            result.response = static_cast<float>(segment.magnitude_sum / static_cast<double>(segment.fit.count));
+            result.support = segment.fit.count;
             ++emitted;
         };
 
         std::vector<double> window_x(static_cast<size_t>(math::max(detection_options.minimum_fit_pixels, 2)));
         std::vector<double> window_y(window_x.size());
-        const auto walk = [&](const int start_x, const int start_y, const int initial_dx, const int initial_dy) {
-            draw_state state{ start_x, start_y, initial_dx, initial_dy };
-            line_fit fit;
-            double magnitude_sum = 0.0;
-            double first_x = static_cast<double>(start_x);
-            double first_y = static_cast<double>(start_y);
-            double last_x = first_x;
-            double last_y = first_y;
-            int outliers = 0;
-            bool have_pixel = false;
-            bool established = false;
-            size_t window_head = 0;
-            size_t window_count = 0;
+        std::vector<double> outlier_x(static_cast<size_t>(math::max(detection_options.maximum_outliers, 0)) + 1);
+        std::vector<double> outlier_y(outlier_x.size());
+        std::vector<double> outlier_magnitude(outlier_x.size());
 
-            const auto restart_fit = [&](const double x, const double y, const double pixel_magnitude) {
-                fit.clear();
-                magnitude_sum = pixel_magnitude;
-                fit.add(x, y);
-                first_x = x;
-                first_y = y;
-                last_x = x;
-                last_y = y;
-                outliers = 0;
-                established = false;
-                window_head = 0;
-                window_count = 1;
-                window_x[0] = x;
-                window_y[0] = y;
-            };
+        const auto restart_fit = [&](segment_state& segment, const double x, const double y, const double pixel_magnitude) {
+            segment.fit.clear();
+            segment.magnitude_sum = pixel_magnitude;
+            segment.fit.add(x, y);
+            segment.first_x = x;
+            segment.first_y = y;
+            segment.last_x = x;
+            segment.last_y = y;
+            segment.outliers = 0;
+            segment.established = false;
+            segment.window_head = 0;
+            segment.window_count = 1;
+            window_x[0] = x;
+            window_y[0] = y;
+        };
+
+        const auto grow_fit = [&](segment_state& segment, const double x, const double y, const double pixel_magnitude) {
+            segment.fit.add(x, y);
+            segment.magnitude_sum += pixel_magnitude;
+            segment.last_x = x;
+            segment.last_y = y;
+            if (segment.window_count < window_x.size()) {
+                const size_t slot = (segment.window_head + segment.window_count) % window_x.size();
+                window_x[slot] = x;
+                window_y[slot] = y;
+                ++segment.window_count;
+            }
+            if (static_cast<int>(segment.window_count) >= detection_options.minimum_fit_pixels) {
+                if (segment.fit.rms_error() <= static_cast<double>(detection_options.establishment_rms_threshold)) {
+                    segment.established = true;
+                }
+                else {
+                    const double oldest_x = window_x[segment.window_head];
+                    const double oldest_y = window_y[segment.window_head];
+                    segment.fit.remove(oldest_x, oldest_y);
+                    segment.magnitude_sum -= segment.magnitude_sum / static_cast<double>(segment.fit.count + 1);
+                    segment.window_head = (segment.window_head + 1) % window_x.size();
+                    --segment.window_count;
+                    segment.first_x = window_x[segment.window_head];
+                    segment.first_y = window_y[segment.window_head];
+                }
+            }
+        };
+
+        const auto reverse_for_extension = [&](segment_state& segment) {
+            std::swap(segment.first_x, segment.last_x);
+            std::swap(segment.first_y, segment.last_y);
+            segment.outliers = 0;
+            for (size_t i = 0; i < (segment.window_count / 2); ++i) {
+                const size_t front = (segment.window_head + i) % window_x.size();
+                const size_t back = (segment.window_head + segment.window_count - 1 - i) % window_x.size();
+                std::swap(window_x[front], window_x[back]);
+                std::swap(window_y[front], window_y[back]);
+            }
+        };
+
+        const auto jump_gap = [&](draw_state& state, const segment_state& segment) {
+            double centroid_x = 0.0;
+            double centroid_y = 0.0;
+            double direction_x = 0.0;
+            double direction_y = 0.0;
+            if (!segment.established || !segment.fit.direction(centroid_x, centroid_y, direction_x, direction_y)) {
+                return false;
+            }
+            const double forward = ((((segment.last_x - segment.first_x) * direction_x) + ((segment.last_y - segment.first_y) * direction_y)) >= 0.0) ? 1.0 : -1.0;
+            for (int jump = 2; jump <= detection_options.maximum_jump; ++jump) {
+                const int jump_x = static_cast<int>(segment.last_x + (forward * direction_x * static_cast<double>(jump)) + 0.5);
+                const int jump_y = static_cast<int>(segment.last_y + (forward * direction_y * static_cast<double>(jump)) + 0.5);
+                if (!in_bounds(jump_x, jump_y) || (used_at(jump_x, jump_y) != 0)) {
+                    return false;
+                }
+                if (magnitude_at(jump_x, jump_y) >= detection_options.gradient_threshold) {
+                    state.x = jump_x;
+                    state.y = jump_y;
+                    state.last_dx = (direction_x * forward > 0.25) ? 1 : ((direction_x * forward < -0.25) ? -1 : 0);
+                    state.last_dy = (direction_y * forward > 0.25) ? 1 : ((direction_y * forward < -0.25) ? -1 : 0);
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        const auto walk = [&](const int start_x, const int start_y, const int initial_dx, const int initial_dy, segment_state& anchor_segment, const bool extending) {
+            draw_state state{ start_x, start_y, initial_dx, initial_dy };
+            segment_state detached;
+            segment_state* active = &anchor_segment;
 
             for (int steps = 0; steps < (width * height); ++steps) {
-                if (!in_bounds(state.x, state.y)) {
-                    break;
-                }
-                if (magnitude_at(state.x, state.y) < detection_options.gradient_threshold) {
-                    break;
-                }
-                if (used_at(state.x, state.y) != 0) {
-                    break;
-                }
-                used_at(state.x, state.y) = 1;
-                double pixel_x = 0.0;
-                double pixel_y = 0.0;
-                subpixel(state.x, state.y, pixel_x, pixel_y);
-                const double pixel_magnitude = static_cast<double>(magnitude_at(state.x, state.y));
+                if ((steps > 0) || !extending) {
+                    if ((!in_bounds(state.x, state.y) || (magnitude_at(state.x, state.y) < detection_options.gradient_threshold)) && !jump_gap(state, *active)) {
+                        break;
+                    }
+                    if (used_at(state.x, state.y) != 0) {
+                        break;
+                    }
+                    used_at(state.x, state.y) = 1;
+                    double pixel_x = 0.0;
+                    double pixel_y = 0.0;
+                    subpixel(state.x, state.y, pixel_x, pixel_y);
+                    const double pixel_magnitude = static_cast<double>(magnitude_at(state.x, state.y));
 
-                if (!have_pixel) {
-                    have_pixel = true;
-                    restart_fit(pixel_x, pixel_y, pixel_magnitude);
-                }
-                else if (established) {
-                    double deviation = 0.0;
-                    if (fit.distance(pixel_x, pixel_y, deviation) && (deviation > static_cast<double>(detection_options.point_to_line_threshold))) {
-                        ++outliers;
-                        if (outliers > detection_options.maximum_outliers) {
-                            emit_segment(fit, first_x, first_y, last_x, last_y, magnitude_sum);
-                            double centroid_x = 0.0;
-                            double centroid_y = 0.0;
-                            double direction_x = 0.0;
-                            double direction_y = 0.0;
-                            bool resumed = false;
-                            if (fit.direction(centroid_x, centroid_y, direction_x, direction_y)) {
-                                const double forward = (((last_x - first_x) * direction_x) + ((last_y - first_y) * direction_y) >= 0.0) ? 1.0 : -1.0;
-                                for (int jump = 2; jump <= detection_options.maximum_jump; ++jump) {
-                                    const int jump_x = static_cast<int>(last_x + (forward * direction_x * static_cast<double>(jump)) + 0.5);
-                                    const int jump_y = static_cast<int>(last_y + (forward * direction_y * static_cast<double>(jump)) + 0.5);
-                                    if (!in_bounds(jump_x, jump_y) || (used_at(jump_x, jump_y) != 0)) {
-                                        break;
-                                    }
-                                    if (magnitude_at(jump_x, jump_y) >= detection_options.gradient_threshold) {
-                                        state.x = jump_x;
-                                        state.y = jump_y;
-                                        state.last_dx = (direction_x * forward > 0.25) ? 1 : ((direction_x * forward < -0.25) ? -1 : 0);
-                                        state.last_dy = (direction_y * forward > 0.25) ? 1 : ((direction_y * forward < -0.25) ? -1 : 0);
-                                        used_at(jump_x, jump_y) = 1;
-                                        double landing_x = 0.0;
-                                        double landing_y = 0.0;
-                                        subpixel(jump_x, jump_y, landing_x, landing_y);
-                                        restart_fit(landing_x, landing_y, static_cast<double>(magnitude_at(jump_x, jump_y)));
-                                        resumed = true;
-                                        break;
-                                    }
+                    if (active->fit.count == 0) {
+                        restart_fit(*active, pixel_x, pixel_y, pixel_magnitude);
+                    }
+                    else if (active->established) {
+                        double deviation = 0.0;
+                        if (active->fit.distance(pixel_x, pixel_y, deviation) && (deviation > static_cast<double>(detection_options.point_to_line_threshold))) {
+                            const size_t outlier_slot = math::min(static_cast<size_t>(active->outliers), outlier_x.size() - 1);
+                            outlier_x[outlier_slot] = pixel_x;
+                            outlier_y[outlier_slot] = pixel_y;
+                            outlier_magnitude[outlier_slot] = pixel_magnitude;
+                            ++active->outliers;
+                            if (active->outliers > detection_options.maximum_outliers) {
+                                if (extending || (active != &anchor_segment)) {
+                                    emit_segment(*active);
+                                }
+                                active = &detached;
+                                restart_fit(*active, outlier_x[0], outlier_y[0], outlier_magnitude[0]);
+                                for (size_t i = 1; i <= outlier_slot; ++i) {
+                                    grow_fit(*active, outlier_x[i], outlier_y[i], outlier_magnitude[i]);
                                 }
                             }
-                            if (!resumed) {
-                                return;
-                            }
+                        }
+                        else {
+                            active->fit.add(pixel_x, pixel_y);
+                            active->magnitude_sum += pixel_magnitude;
+                            active->last_x = pixel_x;
+                            active->last_y = pixel_y;
+                            active->outliers = 0;
                         }
                     }
                     else {
-                        fit.add(pixel_x, pixel_y);
-                        magnitude_sum += pixel_magnitude;
-                        last_x = pixel_x;
-                        last_y = pixel_y;
-                        outliers = 0;
-                    }
-                }
-                else {
-                    fit.add(pixel_x, pixel_y);
-                    magnitude_sum += pixel_magnitude;
-                    last_x = pixel_x;
-                    last_y = pixel_y;
-                    if (window_count < window_x.size()) {
-                        const size_t slot = (window_head + window_count) % window_x.size();
-                        window_x[slot] = pixel_x;
-                        window_y[slot] = pixel_y;
-                        ++window_count;
-                    }
-                    if (static_cast<int>(window_count) >= detection_options.minimum_fit_pixels) {
-                        if (fit.rms_error() <= static_cast<double>(detection_options.establishment_rms_threshold)) {
-                            established = true;
-                        }
-                        else {
-                            const double oldest_x = window_x[window_head];
-                            const double oldest_y = window_y[window_head];
-                            fit.remove(oldest_x, oldest_y);
-                            magnitude_sum -= magnitude_sum / static_cast<double>(fit.count + 1);
-                            window_head = (window_head + 1) % window_x.size();
-                            --window_count;
-                            first_x = window_x[window_head];
-                            first_y = window_y[window_head];
-                        }
+                        grow_fit(*active, pixel_x, pixel_y, pixel_magnitude);
                     }
                 }
 
@@ -489,8 +518,8 @@ namespace feature::detector {
                 state.x = next_x;
                 state.y = next_y;
             }
-            if (established) {
-                emit_segment(fit, first_x, first_y, last_x, last_y, magnitude_sum);
+            if (extending || (active != &anchor_segment)) {
+                emit_segment(*active);
             }
         };
 
@@ -501,16 +530,11 @@ namespace feature::detector {
             if (used_at(anchor.x, anchor.y) != 0) {
                 continue;
             }
-            if (vertical_at(anchor.x, anchor.y)) {
-                walk(anchor.x, anchor.y, 0, -1);
-                used_at(anchor.x, anchor.y) = 0;
-                walk(anchor.x, anchor.y, 0, 1);
-            }
-            else {
-                walk(anchor.x, anchor.y, -1, 0);
-                used_at(anchor.x, anchor.y) = 0;
-                walk(anchor.x, anchor.y, 1, 0);
-            }
+            const bool vertical_anchor = vertical_at(anchor.x, anchor.y);
+            segment_state anchor_segment;
+            walk(anchor.x, anchor.y, vertical_anchor ? 0 : -1, vertical_anchor ? -1 : 0, anchor_segment, false);
+            reverse_for_extension(anchor_segment);
+            walk(anchor.x, anchor.y, vertical_anchor ? 0 : 1, vertical_anchor ? 1 : 0, anchor_segment, true);
         }
         return emitted;
     }
