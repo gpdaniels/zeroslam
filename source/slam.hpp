@@ -278,10 +278,11 @@ private:
             if ((previous == previous_poses.end()) || (current == corrected.end()) || (landmark == this->reconstruction.landmarks.end())) {
                 continue;
             }
-            landmark->second.location = current->second.transformation() * (previous->second * landmark->second.location);
+            landmark->second.location = current->second * (previous->second * landmark->second.location);
             if (landmark->second.inverse_depth) {
                 landmark->second.anchor_rotation = current->second.transformation().rotation().get_matrix() * (previous->second.rotation().get_matrix() * landmark->second.anchor_rotation);
-                landmark->second.anchor_translation = current->second.transformation() * (previous->second * landmark->second.anchor_translation);
+                landmark->second.anchor_translation = current->second * (previous->second * landmark->second.anchor_translation);
+                landmark->second.inverse_parameters[2] /= current->second.scale();
                 landmark->second.update_location_from_inverse_depth();
             }
         }
@@ -295,8 +296,8 @@ private:
             if ((previous == previous_poses.end()) || (current == corrected.end()) || (landmark == this->reconstruction.line_landmarks.end())) {
                 continue;
             }
-            landmark->second.locations[0] = current->second.transformation() * (previous->second * landmark->second.locations[0]);
-            landmark->second.locations[1] = current->second.transformation() * (previous->second * landmark->second.locations[1]);
+            landmark->second.locations[0] = current->second * (previous->second * landmark->second.locations[0]);
+            landmark->second.locations[1] = current->second * (previous->second * landmark->second.locations[1]);
             geometry::plucker corrected_line;
             if (geometry::plucker::from_points(landmark->second.locations[0], landmark->second.locations[1], corrected_line)) {
                 landmark->second.plucker_line = corrected_line;
