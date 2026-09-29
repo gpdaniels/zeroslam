@@ -81,6 +81,7 @@ The scene frames:
 - The ground truth (`root -> ego` on `/tf`, `trajectory.txt` in the directory form) is the primary camera's camera-to-world pose in the TUM RGB-D trajectory format: the camera's position in the world and the rotation taking camera coordinates to world coordinates.
 
 Importers are responsible for re-expressing a dataset into this convention rather than leaving it to every consumer: EuRoC's ground truth is the pose of its imu body and is carried onto cam0 with the calibration's `T_BS`; TUM RGB-D's and ETH3D's are already the rgb camera's pose in a z-up motion capture world, and TUM's accelerometer rides a half turn about the optical axis.
+LaMAria's pseudo ground truth is the pose of its right imu (its documentation says the left camera, but the poses turn with the imu's gyroscope) and is carried onto cam0 with the calibration's `T_b_s`; its cameras are mounted on their side, so the importer turns every frame 90 degrees clockwise upright and the camera frames, intrinsics and extrinsics with it.
 
 The SLAM output (`trajectory.txt` from `zeroslam process`, `zeroslam_pose_struct` from the C API in `include/zeroslam/zeroslam.h`) uses the same TUM camera-to-world convention: `[timestamp] [x] [y] [z] [qx] [qy] [qz] [qw]` is the camera centre in the map's world and the camera-to-world rotation.
 The map's world frame is the first camera's frame: the first pose is the identity, so the world starts out with x right, y down and z along the first view. It is not gravity aligned and has no heading.
@@ -108,6 +109,7 @@ Image samplers (the KLT tracker, descriptors, `image::interpolation`) take index
 
 Published calibrations (TUM RGB-D, EuRoC, ETH3D, any ros `camera_info` or OpenCV calibration) put pixel centres at integer coordinates, so a centred 640 wide camera is published with `cx = 319.5`.
 A scene's `camera_info` (and the `[cx] [cy]` of the directory form) is in the pixel-centre frame: every importer adds `0.5` to a published `cx` and `cy` (and nothing to the focal lengths) when it writes a scene (`import::pixel_centre_principal_point` in `tools/common/import.hpp`), so scenes from different sources are consistent and nothing is shifted when one is read.
+The exception is a calibration produced by COLMAP (LaMAria's pinhole calibrations come out of its `image_undistorter`), which already puts the centre of pixel `(0, 0)` at `(0.5, 0.5)` and is used as it is.
 A caller of the C API likewise supplies `centre_x`/`centre_y` in the pixel-centre frame.
 Shifting every feature by `+0.5` and the principal point by `+0.5` together is an exact identity under `u = fx * X / Z + cx`, so the estimators see the same rays as before.
 
