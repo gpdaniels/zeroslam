@@ -774,12 +774,21 @@ namespace mapping {
                 return;
             }
 
-            std::unordered_map<int, mapping::frame> frames_before;
+            struct frame_pose {
+                math::matrix<double, 3, 3> rotation;
+                math::matrix<double, 3, 1> translation;
+            };
+
+            std::unordered_map<int, frame_pose> frames_before;
             std::unordered_map<int, mapping::point> landmarks_before;
             std::unordered_map<int, mapping::line> lines_before;
             for (const auto& [frame_id, vertex] : camera_vertexes) {
                 static_cast<void>(vertex);
-                frames_before[frame_id] = this->frames.at(frame_id);
+                const mapping::frame& frame = this->frames.at(frame_id);
+                frame_pose& pose_before = frames_before[frame_id];
+
+                pose_before.rotation = frame.rotation;
+                pose_before.translation = frame.translation;
             }
             for (const auto& [landmark_id, vertex] : landmark_vertexes) {
                 static_cast<void>(vertex);
@@ -915,14 +924,15 @@ namespace mapping {
                         if (active_frame_ids.count(obs.frame_id) == 0) {
                             continue;
                         }
-                        const std::unordered_map<int, mapping::frame>::const_iterator frame_before_it = frames_before.find(obs.frame_id);
+                        const std::unordered_map<int, frame_pose>::const_iterator frame_before_it = frames_before.find(obs.frame_id);
                         const std::unordered_map<int, mapping::frame>::const_iterator frame_it = this->frames.find(obs.frame_id);
                         if ((frame_before_it == frames_before.end()) || (frame_it == this->frames.end())) {
                             continue;
                         }
                         math::matrix<double, 2, 1> reprojected;
                         const double sigma_squared = frame_it->second.measurement_sigma * frame_it->second.measurement_sigma;
-                        inliers_before_by_frame[obs.frame_id] += map::project_landmark(frame_before_it->second, before_it->second, reprojected) && ((reprojected - obs.point).get_length_squared() <= map::inlier_bound_squared * sigma_squared);
+                        inliers_before_by_frame[obs.frame_id] += map::project_landmark(frame_before_it->second.rotation, frame_before_it->second.translation, frame_it->second.camera, before_it->second, reprojected) &&
+                                                                 ((reprojected - obs.point).get_length_squared() <= map::inlier_bound_squared * sigma_squared);
                         std::pair<size_t, size_t>& after = gross_after_by_frame[obs.frame_id];
                         ++after.second;
                         after.first += !map::project_landmark(frame_it->second, landmark_it->second, reprojected) || ((reprojected - obs.point).get_length_squared() > map::gross_error_squared * sigma_squared);
@@ -932,7 +942,12 @@ namespace mapping {
                     const size_t inliers_before = inliers_before_by_frame[frame_id];
                     if ((after.second >= map::frame_divergence_minimum_observations) && (inliers_before * 2 >= after.second) && (after.first * 2 > after.second)) {
                         core::logger::log(core::logger::level::warn, "Frame %d diverged in the adjustment: %zu of %zu observations beyond %.0f px (%zu within the bound before); its pose before the solve is kept.", frame_id, after.first, after.second, math::sqrt(map::gross_error_squared), inliers_before);
-                        this->frames.at(frame_id) = frames_before.at(frame_id);
+
+                        mapping::frame& frame = this->frames.at(frame_id);
+                        const frame_pose& pose_before = frames_before.at(frame_id);
+
+                        frame.rotation = pose_before.rotation;
+                        frame.translation = pose_before.translation;
                         this->corrected_frame_ids.push_back(frame_id);
                     }
                 }
@@ -958,8 +973,11 @@ namespace mapping {
                 }
                 if ((examined >= map::divergence_minimum_observations) && (gross * map::divergence_gross_fraction_denominator > examined)) {
                     core::logger::log(core::logger::level::warn, "Adjustment diverged: %zu of %zu observations beyond %.0f px; the state before it is kept.", gross, examined, math::sqrt(map::gross_error_squared));
-                    for (const auto& [frame_id, frame] : frames_before) {
-                        this->frames.at(frame_id) = frame;
+                    for (const auto& [frame_id, frame_before] : frames_before) {
+                        mapping::frame& frame = this->frames.at(frame_id);
+
+                        frame.rotation = frame_before.rotation;
+                        frame.translation = frame_before.translation;
                     }
                     for (const auto& [landmark_id, landmark] : landmarks_before) {
                         this->landmarks.at(landmark_id) = landmark;
@@ -988,16 +1006,20 @@ namespace mapping {
             }
         }
 
-        static bool project_landmark(const mapping::frame& frame, const mapping::point& landmark, math::matrix<double, 2, 1>& pixel) {
+        static bool project_landmark(const math::matrix<double, 3, 3>& rotation, const math::matrix<double, 3, 1>& translation, const sensor::model& camera, const mapping::point& landmark, math::matrix<double, 2, 1>& pixel) {
             math::matrix<double, 3, 1> mapped;
             if (landmark.inverse_depth) {
                 const math::matrix<double, 3, 1> bearing({ landmark.inverse_parameters[0], landmark.inverse_parameters[1], 1.0 });
-                mapped = (frame.rotation * (landmark.anchor_rotation * bearing)) + (((frame.rotation * landmark.anchor_translation) + frame.translation) * landmark.inverse_parameters[2]);
+                mapped = (rotation * (landmark.anchor_rotation * bearing)) + (((rotation * landmark.anchor_translation) + translation) * landmark.inverse_parameters[2]);
             }
             else {
-                mapped = (frame.rotation * landmark.location) + frame.translation;
+                mapped = (rotation * landmark.location) + translation;
             }
-            return (mapped[2] > 0.0) && frame.camera.project(mapped.data(), pixel.data());
+            return (mapped[2] > 0.0) && camera.project(mapped.data(), pixel.data());
+        }
+
+        static bool project_landmark(const mapping::frame& frame, const mapping::point& landmark, math::matrix<double, 2, 1>& pixel) {
+            return project_landmark(frame.rotation, frame.translation, frame.camera, landmark, pixel);
         }
 
         size_t remove_outlier_observations(const std::unordered_set<int>& landmark_ids, const std::unordered_set<int>& frame_ids) {
