@@ -103,7 +103,7 @@ namespace optimisation {
         this->edge_set.insert(stored);
         this->edges.push_back(stored);
         for (vertex* node : stored->get_vertices()) {
-            this->vertex_to_edge.insert({ node, stored });
+            this->vertex_to_edge[node].push_back(stored);
         }
         return stored;
     }
@@ -125,27 +125,24 @@ namespace optimisation {
         this->edges.erase(this->edges.begin() + found_index);
         this->edge_set.erase(factor);
         for (vertex* node : factor->get_vertices()) {
-            const std::pair<typename std::unordered_multimap<vertex*, edge*>::iterator, typename std::unordered_multimap<vertex*, edge*>::iterator> range = this->vertex_to_edge.equal_range(node);
-            for (typename std::unordered_multimap<vertex*, edge*>::iterator iterator = range.first; iterator != range.second;) {
-                if (iterator->second == factor) {
-                    iterator = this->vertex_to_edge.erase(iterator);
-                }
-                else {
-                    ++iterator;
-                }
-            }
+            std::vector<edge*>& range = this->vertex_to_edge[node];
+
+            range.erase(std::remove_if(range.begin(), range.end(), [&](edge* edge) {
+                            return edge == factor;
+                        }),
+                        range.end());
         }
         return true;
     }
 
     std::vector<edge*> factor_graph::get_connected_edges(vertex* node) const {
         std::vector<edge*> edges_connected;
-        const std::pair<typename std::unordered_multimap<vertex*, edge*>::const_iterator, typename std::unordered_multimap<vertex*, edge*>::const_iterator> range = this->vertex_to_edge.equal_range(node);
-        edges_connected.reserve(this->vertex_to_edge.count(node));
-        for (typename std::unordered_multimap<vertex*, edge*>::const_iterator iterator = range.first; iterator != range.second; ++iterator) {
-            edges_connected.push_back(iterator->second);
+        const auto& range = this->vertex_to_edge.find(node);
+        if (range == this->vertex_to_edge.end()) {
+            return edges_connected;
         }
-        return edges_connected;
+
+        return range->second;
     }
 
     int factor_graph::solve(int iterations, bool use_relative_convergence) {
