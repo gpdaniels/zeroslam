@@ -548,12 +548,14 @@ static void test_ratio_test() {
     }
 }
 
-static void test_model_selection_score() {
-    const float residuals[5] = { 0.0f, 0.4e-5f, 0.9e-5f, 1.0e-5f, 2.0e-5f };
-    REQUIRE(std::abs(slam::model_selection_score(residuals, 5, 1.0e-5f) - 1.7e-5) < 1.0e-9);
-    REQUIRE(slam::model_selection_score(residuals, 0, 1.0e-5f) == 0.0);
-    const float high[2] = { 5.0e-5f, 9.0e-5f };
-    REQUIRE(slam::model_selection_score(high, 2, 1.0e-5f) == 0.0);
+static void test_geometric_robust_information_criterion() {
+    // Scaled residuals are capped at 2 (r - d) with r = 4, a non-finite one counts as the cap, and the penalty is ln(4) d n + ln(4 n) k.
+    const float residuals[5] = { 0.0f, 1.0f, 2.0f, 10.0f, std::numeric_limits<float>::quiet_NaN() };
+    const double essential = slam::geometric_robust_information_criterion(residuals, 5, 1.0, 3, 5);
+    REQUIRE(std::abs(essential - ((0.0 + 1.0 + 2.0 + 2.0 + 2.0) + (std::log(4.0) * 3.0 * 5.0) + (std::log(20.0) * 5.0))) < 1.0e-9);
+    const double homography = slam::geometric_robust_information_criterion(residuals, 5, 0.5, 2, 8);
+    REQUIRE(std::abs(homography - ((0.0 + 0.5 + 1.0 + 4.0 + 4.0) + (std::log(4.0) * 2.0 * 5.0) + (std::log(20.0) * 8.0))) < 1.0e-9);
+    REQUIRE(std::abs(slam::geometric_robust_information_criterion(residuals, 0, 1.0, 3, 5)) < 1.0e-12);
 }
 
 static void test_parallax_angle() {
@@ -597,27 +599,44 @@ static void generate_init_correspondences(bool planar, std::vector<estimation::c
 }
 
 static void test_model_selection() {
-    constexpr static const auto compute_ratio_homography = [](bool planar) -> double {
+    {
         std::vector<estimation::correspondence_2d_2d<double>> correspondences;
-        generate_init_correspondences(planar, correspondences);
-        const size_t count = correspondences.size();
-        std::vector<float> essential_residuals(count);
-        std::vector<size_t> essential_inliers(count);
-        size_t essential_inlier_count = count;
-        estimation::robust::estimate::essential<double>::model model_essential;
-        const bool essential_ok = estimation::robust::solver::essential<double>::solve(correspondences.data(), count, essential_residuals.data(), essential_inliers.data(), essential_inlier_count, model_essential);
-        std::vector<float> homography_residuals(count);
-        std::vector<size_t> homography_inliers(count);
-        size_t homography_inlier_count = count;
-        estimation::robust::estimate::homography<double>::model model_homography;
-        const bool homography_ok = estimation::robust::solver::homography<double>::solve(correspondences.data(), count, homography_residuals.data(), homography_inliers.data(), homography_inlier_count, model_homography);
-        const double score_essential = essential_ok ? slam::model_selection_score(essential_residuals.data(), count, 1.0e-5f) : 0.0;
-        const double score_homography = homography_ok ? slam::model_selection_score(homography_residuals.data(), count, 1.0e-5f) : 0.0;
-        const double score_total = score_essential + score_homography;
-        return (score_total > 0.0) ? (score_homography / score_total) : 0.0;
-    };
-    REQUIRE(compute_ratio_homography(false) <= 0.45);
-    REQUIRE(compute_ratio_homography(true) > 0.45);
+        generate_init_correspondences(false, correspondences);
+        const slam::two_view_models general = slam::fit_two_view_models(correspondences.data(), correspondences.size(), slam::two_view_noise_pixels / 525.0);
+        REQUIRE(general.essential_ok);
+        REQUIRE(!general.use_homography);
+        generate_init_correspondences(true, correspondences);
+        const slam::two_view_models planar = slam::fit_two_view_models(correspondences.data(), correspondences.size(), slam::two_view_noise_pixels / 525.0);
+        REQUIRE(planar.homography_ok);
+        REQUIRE(planar.use_homography);
+    }
+    // With noise in both images, a plane still selects the homography and a scene with depth the essential matrix. A plane's correspondences fit an
+    // essential matrix nearly as well as a homography, the epipolar geometry of a plane being degenerate, so at a whole pixel of noise the two
+    // information criteria land within a percent of each other and the choice falls to which fit RANSAC happened to find: a tenth of a pixel leaves
+    // the better model ahead by a quarter of the score on every seed tried, where a pixel leaves it a coin toss.
+    const double focal = 525.0;
+    for (const double noise_pixels : { 0.1, 0.2 }) {
+        for (unsigned long long seed = 1; seed <= 3; ++seed) {
+            for (const bool planar : { false, true }) {
+                core::random_pcg rng(seed);
+                const auto gaussian = [&rng]() {
+                    const double u1 = rng.get_random(1.0e-12, 1.0);
+                    const double u2 = rng.get_random(0.0, 1.0);
+                    return std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * 3.14159265358979323846 * u2);
+                };
+                std::vector<estimation::correspondence_2d_2d<double>> correspondences;
+                for (int i = 0; i < 200; ++i) {
+                    const double x = rng.get_random(-3.0, 3.0);
+                    const double y = rng.get_random(-2.0, 2.0);
+                    const double z = planar ? 8.0 : rng.get_random(4.0, 14.0);
+                    const double noise = noise_pixels / focal;
+                    correspondences.push_back({ { { (x / z) + (noise * gaussian()), (y / z) + (noise * gaussian()) } }, { { ((x + 0.5) / z) + (noise * gaussian()), (y / z) + (noise * gaussian()) } } });
+                }
+                const slam::two_view_models fitted = slam::fit_two_view_models(correspondences.data(), correspondences.size(), slam::two_view_noise_pixels / focal);
+                REQUIRE(fitted.use_homography == planar);
+            }
+        }
+    }
 }
 
 static void test_predict_constant_velocity() {
@@ -685,6 +704,46 @@ static void test_predict_constant_velocity() {
             rotation_predicted[0][1] * (rotation_predicted[1][0] * rotation_predicted[2][2] - rotation_predicted[1][2] * rotation_predicted[2][0]) +
             rotation_predicted[0][2] * (rotation_predicted[1][0] * rotation_predicted[2][1] - rotation_predicted[1][1] * rotation_predicted[2][0]);
         REQUIRE(std::abs(determinant - 1.0) < 1.0e-12);
+    }
+
+    // A motion measured over several frames is scaled to the frames predicted: a yaw of 0.2 over 4 frames, extrapolated 1 frame, turns by 0.05.
+    {
+        const math::matrix<double, 3, 1> step = { { 0.4, 0.0, -0.2 } };
+        const math::matrix<double, 3, 1> zero = { { 0.0, 0.0, 0.0 } };
+        math::matrix<double, 3, 3> rotation_predicted;
+        math::matrix<double, 3, 1> translation_predicted;
+        slam::predict_constant_velocity(identity, zero, yaw(0.2), zero, 4, 1, rotation_predicted, translation_predicted);
+        const math::matrix<double, 3, 3> rotation_expected = yaw(0.25);
+        for (size_t i = 0; i < 3; ++i) {
+            for (size_t j = 0; j < 3; ++j) {
+                REQUIRE(std::abs(rotation_predicted[i][j] - rotation_expected[i][j]) < 1.0e-12);
+            }
+            REQUIRE(std::abs(translation_predicted[i]) < 1.0e-12);
+        }
+        // A pure translation of 0.4 over 2 frames, extrapolated 3 frames, moves 0.6 further.
+        slam::predict_constant_velocity(identity, zero, identity, step, 2, 3, rotation_predicted, translation_predicted);
+        for (size_t i = 0; i < 3; ++i) {
+            REQUIRE(std::abs(translation_predicted[i] - (step[i] * 2.5)) < 1.0e-12);
+        }
+        // Equal gaps are the plain constant velocity model, and a zero gap ahead keeps the last pose.
+        math::matrix<double, 3, 3> rotation_plain;
+        math::matrix<double, 3, 1> translation_plain;
+        slam::predict_constant_velocity(yaw(0.1), step, yaw(0.3), zero, rotation_plain, translation_plain);
+        slam::predict_constant_velocity(yaw(0.1), step, yaw(0.3), zero, 5, 5, rotation_predicted, translation_predicted);
+        for (size_t i = 0; i < 3; ++i) {
+            for (size_t j = 0; j < 3; ++j) {
+                REQUIRE(rotation_predicted[i][j] == rotation_plain[i][j]);
+            }
+            REQUIRE(translation_predicted[i] == translation_plain[i]);
+        }
+        slam::predict_constant_velocity(yaw(0.1), step, yaw(0.3), zero, 5, 0, rotation_predicted, translation_predicted);
+        const math::matrix<double, 3, 3> rotation_last = yaw(0.3);
+        for (size_t i = 0; i < 3; ++i) {
+            for (size_t j = 0; j < 3; ++j) {
+                REQUIRE(std::abs(rotation_predicted[i][j] - rotation_last[i][j]) < 1.0e-12);
+            }
+            REQUIRE(std::abs(translation_predicted[i]) < 1.0e-12);
+        }
     }
 }
 
@@ -964,7 +1023,9 @@ static void test_map_reacquisition(const int width, const int height, const math
     slam system_b;
     run(system_b);
 
-    REQUIRE(system_a.reacquired_by_epipolar > 0);
+    // Landmarks whose tracks were lost at the end of a sweep are linked again on the way back, by projection or along epipolar lines;
+    // in this scene the projection finds nearly all of them first, so the epipolar count alone depends on the detections.
+    REQUIRE((system_a.matched_by_projection + system_a.reacquired_by_epipolar) > 0);
 
     for (const auto& [landmark_id, landmark_observations] : system_a.reconstruction.observations) {
         REQUIRE(system_a.reconstruction.landmarks.count(landmark_id) != 0);
@@ -991,6 +1052,7 @@ static void test_map_reacquisition(const int width, const int height, const math
     }
 
     REQUIRE(system_a.reacquired_by_epipolar == system_b.reacquired_by_epipolar);
+    REQUIRE(system_a.matched_by_projection == system_b.matched_by_projection);
     REQUIRE(system_a.reconstruction.frames.size() == system_b.reconstruction.frames.size());
     REQUIRE(system_a.reconstruction.landmarks.size() == system_b.reconstruction.landmarks.size());
     for (const auto& [frame_id, frame_record] : system_a.reconstruction.frames) {
@@ -1017,7 +1079,7 @@ int main(int argc, char* argv[]) {
     static_cast<void>(argv);
 
     test_ratio_test();
-    test_model_selection_score();
+    test_geometric_robust_information_criterion();
     test_parallax_angle();
     test_model_selection();
     test_predict_constant_velocity();

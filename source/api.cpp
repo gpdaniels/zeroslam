@@ -21,6 +21,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "api.hpp"
 
 #include "core/logger.hpp"
+#include "core/thread_pool.hpp"
 #include "feature/refiner/structure_tensor.hpp"
 #include "feature/score/structure_tensor.hpp"
 #include "image/image.hpp"
@@ -46,6 +47,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 struct zeroslam_system final {
+    // Declared first so it is released last: the final destroy joins the pool's workers here, outside any loader lock.
+    core::thread_pool::reference pool_reference;
     slam slam_instance;
 
     struct camera_entry final {
@@ -567,7 +570,7 @@ namespace {
                 if (token_equals(value, value_length, "off")) {
                     frontend.anchor_refresh_error = 0.0f;
                 }
-                else if (!parse_configuration_decimal(value, value_length, 255.0f, frontend.anchor_refresh_error)) {
+                else if (!parse_configuration_decimal(value, value_length, 1.0f, frontend.anchor_refresh_error)) {
                     return false;
                 }
             }

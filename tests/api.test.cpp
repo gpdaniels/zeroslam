@@ -179,7 +179,7 @@ int main(int argc, char* argv[]) {
         REQUIRE(zeroslam_set_configuration(system, outliers, static_cast<int>(std::strlen(outliers))) == zeroslam_return_success);
         const char* const bad_outliers = "outliers=many\n";
         REQUIRE(zeroslam_set_configuration(system, bad_outliers, static_cast<int>(std::strlen(bad_outliers))) == zeroslam_return_failure_invalid_configuration);
-        const char* const anchor = "anchor=affine_illumination\nanchor_refresh=30\n";
+        const char* const anchor = "anchor=affine_illumination\nanchor_refresh=0.75\n";
         REQUIRE(zeroslam_set_configuration(system, anchor, static_cast<int>(std::strlen(anchor))) == zeroslam_return_success);
         const char* const bad_anchor = "anchor=homography\n";
         REQUIRE(zeroslam_set_configuration(system, bad_anchor, static_cast<int>(std::strlen(bad_anchor))) == zeroslam_return_failure_invalid_configuration);
@@ -195,7 +195,7 @@ int main(int argc, char* argv[]) {
         REQUIRE(std::strstr(buffer.data(), "collisions=3.5\n") != nullptr);
         REQUIRE(std::strstr(buffer.data(), "outliers=3\n") != nullptr);
         REQUIRE(std::strstr(buffer.data(), "anchor=affine_illumination\n") != nullptr);
-        REQUIRE(std::strstr(buffer.data(), "anchor_refresh=30\n") != nullptr);
+        REQUIRE(std::strstr(buffer.data(), "anchor_refresh=0.75\n") != nullptr);
         const char* const wavelet = "flow=wavelet\nwavelet_window=3\nwavelet_levels=5\nwavelet_robust=on\nwavelet_undecimated=on\nwavelet_seed=klt_fallback\nline_pose=on\nline_angle=25\nsolver=square_root\nsolver_precision=single\nglobal_adjustment=10\n";
         REQUIRE(zeroslam_set_configuration(system, wavelet, static_cast<int>(std::strlen(wavelet))) == zeroslam_return_success);
         REQUIRE(zeroslam_get_configuration(system, nullptr, &length) == zeroslam_return_failure_insufficient_data_length);

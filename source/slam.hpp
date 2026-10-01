@@ -138,6 +138,7 @@ private:
     static constexpr double relocalise_distance_spacings = 4.0;
     static constexpr int relocalisation_probation_frames = 5;
     int relocalisation_probation_ = 0;
+    int probation_origin_id_ = -1;
     std::vector<int> probation_frame_ids_;
     std::vector<std::pair<int, int>> probation_track_links_;
     static constexpr size_t blur_history_frames = 30;
@@ -528,6 +529,11 @@ private:
         pose_vertex.set_parameters(&pose_parameters[0], 7);
         optimisation::vertex* const pose_node = ba.add_vertex(static_cast<optimisation::vertex&&>(pose_vertex));
         const sensor::camera::model<double> camera_model(frame_current.camera);
+        // A position measured on pyramid level L is 2^L times coarser than one refined at level 0.
+        const auto octave_scale = [](const pose_correspondence& match) {
+            const int level = (match.source != nullptr) ? math::max(0, math::min(match.source->measurement_octave, 16)) : 0;
+            return static_cast<double>(1u << static_cast<unsigned int>(level));
+        };
         std::vector<optimisation::edge*> weighted_edges(correspondences.size(), nullptr);
         for (size_t c = 0; c < correspondences.size(); ++c) {
             const pose_correspondence& match = correspondences[c];
@@ -543,12 +549,16 @@ private:
                 factor.add_vertex(pose_node);
                 factor.add_vertex(point_node);
                 factor.compute_jacobians();
-                factor.set_information(math::matrix<double, 0, 0>(2, 2, match.landmark->observation_information(factor.get_jacobians()[1], frame_current.measurement_sigma).data()));
+                factor.set_information(math::matrix<double, 0, 0>(2, 2, match.landmark->observation_information(factor.get_jacobians()[1], frame_current.measurement_sigma * octave_scale(match)).data()));
                 weighted_edges[c] = ba.add_edge(static_cast<optimisation::edge&&>(factor));
                 continue;
             }
             optimisation::edge factor{ optimisation::edges::reprojection(camera_model) };
             factor.set_observation(math::matrix<double, 0, 0>(2, 1, &match.pixel[0]));
+            const double scale = octave_scale(match);
+            if (scale != 1.0) {
+                factor.set_information(math::matrix<double, 0, 0>::identity(2, 2) * (1.0 / (scale * scale)));
+            }
             factor.add_vertex(pose_node);
             factor.add_vertex(point_node);
             factor.set_loss(lossfunction);
@@ -594,7 +604,7 @@ private:
             if (weighted_edges[c] != nullptr) {
                 optimisation::edge& factor = *weighted_edges[c];
                 factor.compute_jacobians();
-                factor.set_information(math::matrix<double, 0, 0>(2, 2, match.landmark->observation_information(factor.get_jacobians()[1], frame_current.measurement_sigma).data()));
+                factor.set_information(math::matrix<double, 0, 0>(2, 2, match.landmark->observation_information(factor.get_jacobians()[1], frame_current.measurement_sigma * octave_scale(match)).data()));
                 factor.compute_residual();
                 if (factor.chi2() <= 5.991) {
                     agreed[c] = static_cast<unsigned char>(1);
@@ -609,19 +619,20 @@ private:
             }
             const double dx = projected[0] - match.pixel[0];
             const double dy = projected[1] - match.pixel[1];
-            if (((dx * dx) + (dy * dy)) <= 5.991 * frame_current.measurement_sigma * frame_current.measurement_sigma) {
+            const double sigma = frame_current.measurement_sigma * octave_scale(match);
+            if (((dx * dx) + (dy * dy)) <= 5.991 * sigma * sigma) {
                 agreed[c] = static_cast<unsigned char>(1);
                 inliers += 1;
             }
         }
         size_t line_inliers = 0;
         if (!line_correspondences.empty()) {
-            const double focal = intrinsics[0];
             for (const line_correspondence& match : line_correspondences) {
                 const geometry::plucker line_camera = match.line.transformed(rotation, translation);
                 const math::matrix<double, 3, 1>& image_line = line_camera.moment;
-                const double norm = math::sqrt((image_line[0] * image_line[0]) + (image_line[1] * image_line[1]));
-                if (norm < 1.0e-9) {
+                // The distance in pixels from the normalised line, which is only a multiple of the normalised distance when fx equals fy.
+                const double norm = math::sqrt(((image_line[0] / intrinsics[0]) * (image_line[0] / intrinsics[0])) + ((image_line[1] / intrinsics[1]) * (image_line[1] / intrinsics[1])));
+                if (norm < 1.0e-12) {
                     continue;
                 }
                 bool agrees = true;
@@ -631,7 +642,7 @@ private:
                         agrees = false;
                         break;
                     }
-                    const double distance = focal * ((image_line[0] * (ray[0] / ray[2])) + (image_line[1] * (ray[1] / ray[2])) + image_line[2]) / norm;
+                    const double distance = ((image_line[0] * (ray[0] / ray[2])) + (image_line[1] * (ray[1] / ray[2])) + image_line[2]) / norm;
                     if ((distance * distance) > 5.991 * frame_current.measurement_sigma * frame_current.measurement_sigma) {
                         agrees = false;
                         break;
@@ -702,7 +713,7 @@ private:
         std::vector<float> pnp_residuals(pnp_correspondencies.size());
         std::vector<size_t> pnp_inliers(pnp_correspondencies.size());
         size_t inliers_size = 0;
-        if (!estimation::robust::solver::p3p<double>::solve(pnp_correspondencies.data(), pnp_correspondencies.size(), pnp_residuals.data(), pnp_inliers.data(), inliers_size, model) || (inliers_size < slam::pose_inliers_minimum)) {
+        if (!estimation::robust::solver::p3p<double>::solve(pnp_correspondencies.data(), pnp_correspondencies.size(), pnp_residuals.data(), pnp_inliers.data(), inliers_size, model, slam::pose_residual_threshold(frame_current)) || (inliers_size < slam::pose_inliers_minimum)) {
             return false;
         }
         frame_current.rotation = math::matrix<double, 3, 3>({ { model.rotation[0][0], model.rotation[0][1], model.rotation[0][2] },
@@ -802,7 +813,7 @@ private:
             std::vector<float> residuals(correspondences.size());
             std::vector<size_t> inliers(correspondences.size());
             size_t inliers_size = 0;
-            if (!estimation::robust::solver::p3p<double>::solve(correspondences.data(), correspondences.size(), residuals.data(), inliers.data(), inliers_size, model) || (inliers_size < slam::relocalise_inliers_minimum)) {
+            if (!estimation::robust::solver::p3p<double>::solve(correspondences.data(), correspondences.size(), residuals.data(), inliers.data(), inliers_size, model, slam::pose_residual_threshold(frame_current)) || (inliers_size < slam::relocalise_inliers_minimum)) {
                 core::logger::log(core::logger::level::debug, "Relocalisation of frame %d against keyframe %d: %zu inliers of %zu pairs, rejected.", frame_current.id, keyframe_id, inliers_size, correspondences.size());
                 continue;
             }
@@ -891,6 +902,12 @@ private:
         return index;
     }
 
+    // A submap joined to the map by a loop belongs to it; any other submap stands apart with its own scale.
+    size_t map_component(const int frame_id) const {
+        const size_t index = this->submap_of(frame_id);
+        return ((index == 0) || this->submaps_[index - 1].joined) ? 0 : index;
+    }
+
     int submap_start_of(const int frame_id) const {
         const size_t index = this->submap_of(frame_id);
         return (index == 0) ? 0 : this->submaps_[index - 1].start_id;
@@ -967,6 +984,7 @@ private:
 
     std::unordered_set<int> keyframe_ids_;
     size_t keyframes_inserted_ = 0;
+    size_t keyframes_since_global_adjustment_ = 0;
     int last_keyframe_id_ = 0;
 
     struct anchored_observation final {
@@ -1101,7 +1119,10 @@ private:
     }
 
     void reanchor_corrected() {
-        for (const int keyframe_id : this->reconstruction.corrected_frame_ids) {
+        std::vector<int>& corrected = this->reconstruction.corrected_frame_ids;
+        std::sort(corrected.begin(), corrected.end());
+        corrected.erase(std::unique(corrected.begin(), corrected.end()), corrected.end());
+        for (const int keyframe_id : corrected) {
             const std::unordered_map<int, mapping::frame>::const_iterator keyframe_it = this->reconstruction.frames.find(keyframe_id);
             if (keyframe_it == this->reconstruction.frames.end()) {
                 continue;
@@ -1119,6 +1140,7 @@ private:
                 anchor.frame_from_keyframe = frame_pose * keyframe_pose.inverse();
             }
         }
+        corrected.clear();
     }
 
     static constexpr int keyframe_interval = 5;
@@ -1180,6 +1202,7 @@ private:
     }
 
     static constexpr double reacquire_epipolar_tolerance = 3.0;
+    static constexpr double reacquire_depth_factor = 2.0;
 
     bool holds_loop(const int frame_id) const {
         for (const verified_loop& loop : this->verified_loops) {
@@ -1464,7 +1487,7 @@ private:
                 continue;
             }
             const mapping::point& landmark = landmark_it->second;
-            if (linked_landmark_ids.count(landmark_id) != 0) {
+            if ((linked_landmark_ids.count(landmark_id) != 0) || landmark.descriptor_history.empty()) {
                 continue;
             }
             math::matrix<double, 2, 1> projected;
@@ -1508,7 +1531,7 @@ private:
                     return active[index]->descriptor;
                 },
                 [&](const size_t index) {
-                    return (claimed[index] != 0) || (active[index]->landmark_id >= 0);
+                    return (claimed[index] != 0) || (active[index]->landmark_id >= 0) || !active[index]->descriptor_valid;
                 },
                 best,
                 second
@@ -1601,8 +1624,7 @@ private:
 
         std::vector<int> orphan_ids;
         for (const auto& [landmark_id, landmark_record] : this->reconstruction.landmarks) {
-            static_cast<void>(landmark_record);
-            if (linked_landmark_ids.count(landmark_id) != 0) {
+            if ((linked_landmark_ids.count(landmark_id) != 0) || landmark_record.descriptor_history.empty()) {
                 continue;
             }
             const auto observations_it = this->reconstruction.observations.find(landmark_id);
@@ -1630,9 +1652,9 @@ private:
                 if (this->reconstruction.frames.count(history_obs.frame_id) == 0) {
                     continue;
                 }
-                this->reconstruction.add_observation(history_obs.frame_id, landmark_record, static_cast<double>(history_obs.x), static_cast<double>(history_obs.y), t->octave);
+                this->reconstruction.add_observation(history_obs.frame_id, landmark_record, static_cast<double>(history_obs.x), static_cast<double>(history_obs.y), t->octave, history_obs.measurement_octave);
             }
-            this->reconstruction.add_observation(frame_current.id, landmark_record, static_cast<double>(t->x), static_cast<double>(t->y), t->octave);
+            this->reconstruction.add_observation(frame_current.id, landmark_record, static_cast<double>(t->x), static_cast<double>(t->y), t->octave, t->measurement_octave);
             t->landmark_id = landmark_record.id;
         };
         size_t reacquired_epipolar_now = 0;
@@ -1661,7 +1683,7 @@ private:
         std::vector<size_t> rhs_track_indices;
         for (size_t track_index = 0; track_index < active.size(); ++track_index) {
             const feature::tracker::tracker::track* const t = active[track_index];
-            if ((t->landmark_id >= 0) || (claimed[track_index] != 0)) {
+            if ((t->landmark_id >= 0) || (claimed[track_index] != 0) || !t->descriptor_valid) {
                 continue;
             }
             float virtual_x = 0.0f;
@@ -1697,6 +1719,9 @@ private:
             if (source_frame_id < 0) {
                 continue;
             }
+            if (this->map_component(source_frame_id) != this->map_component(frame_current.id)) {
+                continue;
+            }
             orphan_by_source.push_back({ source_frame_id, orphan_id });
         }
         std::sort(orphan_by_source.begin(), orphan_by_source.end());
@@ -1721,6 +1746,7 @@ private:
             std::vector<feature::point> lhs_points;
             std::vector<feature::descriptor::binary<256>> lhs_descriptors;
             std::vector<int> lhs_landmark_ids;
+            std::vector<math::matrix<double, 3, 1>> lhs_rays;
             for (size_t group_index = group_begin; group_index < group_end; ++group_index) {
                 const int orphan_id = orphan_by_source[group_index].second;
                 const std::vector<mapping::map::observation>& orphan_observations = this->reconstruction.observations.at(orphan_id);
@@ -1740,6 +1766,12 @@ private:
                 if (!undistort(frame_source.camera, last_observation.point[0], last_observation.point[1], virtual_x, virtual_y)) {
                     continue;
                 }
+                const double source_pixel[2] = { last_observation.point[0], last_observation.point[1] };
+                math::matrix<double, 3, 1> source_ray;
+                if (!frame_source.camera.unproject(&source_pixel[0], source_ray.data()) || !(source_ray[2] > 1.0e-12)) {
+                    continue;
+                }
+                lhs_rays.push_back(source_ray * (1.0 / source_ray[2]));
                 lhs_points.push_back(feature::point{ virtual_x, virtual_y, 0.0f, 0.0f, 0 });
                 feature::descriptor::binary<256> landmark_descriptor;
                 for (size_t descriptor_byte = 0; descriptor_byte < 32; ++descriptor_byte) {
@@ -1750,7 +1782,7 @@ private:
             }
 
             if (!lhs_points.empty()) {
-                std::vector<match::pair> matches(lhs_points.size());
+                std::vector<match::pair> matches(2 * lhs_points.size());
                 const size_t match_count = match::matcher::epipolar::find_matches(
                     lhs_points.data(),
                     lhs_descriptors.data(),
@@ -1762,12 +1794,49 @@ private:
                     static_cast<float>(reacquire_epipolar_tolerance),
                     nullptr,
                     static_cast<float>(this->hamming_bound(slam::reacquire_hamming_maximum)) + 0.5f,
-                    1,
+                    2,
                     matches.data(),
                     matches.size()
                 );
+                // Where along the epipolar line the landmark's depth puts it, within a factor of the depth either way.
+                const auto within_depth_bound = [&](const size_t lhs_index, const mapping::point& landmark_record, const feature::point& candidate) {
+                    if (landmark_record.at_infinity() || (landmark_record.uncertainty == mapping::point::uncertainty_kind::unbounded)) {
+                        return true;
+                    }
+                    const double depth = ((frame_source.rotation * landmark_record.location) + frame_source.translation)[2];
+                    if (!(depth > 0.0)) {
+                        return false;
+                    }
+                    double segment[2][2] = {};
+                    const double depths[2] = { depth / slam::reacquire_depth_factor, depth * slam::reacquire_depth_factor };
+                    for (int end = 0; end < 2; ++end) {
+                        const math::matrix<double, 3, 1> in_current = (relative_rotation * (lhs_rays[lhs_index] * depths[end])) + relative_translation;
+                        if (!(in_current[2] > 1.0e-12)) {
+                            return true;
+                        }
+                        segment[end][0] = (focal_x * (in_current[0] / in_current[2])) + centre_x;
+                        segment[end][1] = (focal_y * (in_current[1] / in_current[2])) + centre_y;
+                    }
+                    const double direction_x = segment[1][0] - segment[0][0];
+                    const double direction_y = segment[1][1] - segment[0][1];
+                    const double length_squared = (direction_x * direction_x) + (direction_y * direction_y);
+                    const double offset_x = static_cast<double>(candidate.x) - segment[0][0];
+                    const double offset_y = static_cast<double>(candidate.y) - segment[0][1];
+                    const double along = (length_squared > 1.0e-24) ? math::max(0.0, math::min(1.0, ((offset_x * direction_x) + (offset_y * direction_y)) / length_squared)) : 0.0;
+                    const double distance_x = offset_x - (along * direction_x);
+                    const double distance_y = offset_y - (along * direction_y);
+                    return ((distance_x * distance_x) + (distance_y * distance_y)) <= (reacquire_epipolar_tolerance * reacquire_epipolar_tolerance);
+                };
                 for (size_t match_index = 0; match_index < match_count; ++match_index) {
-                    const size_t track_index = rhs_track_indices[matches[match_index].rhs_index];
+                    const match::pair& best = matches[match_index];
+                    const bool has_second = (match_index + 1 < match_count) && (matches[match_index + 1].lhs_index == best.lhs_index);
+                    if (has_second) {
+                        ++match_index;
+                        if (!(best.score < slam::local_map_match_ratio * matches[match_index].score)) {
+                            continue;
+                        }
+                    }
+                    const size_t track_index = rhs_track_indices[best.rhs_index];
                     if (claimed[track_index] != 0) {
                         continue;
                     }
@@ -1775,8 +1844,12 @@ private:
                     if (t->landmark_id >= 0) {
                         continue;
                     }
-                    const int orphan_id = lhs_landmark_ids[matches[match_index].lhs_index];
-                    reattach(this->reconstruction.landmarks.at(orphan_id), t);
+                    const int orphan_id = lhs_landmark_ids[best.lhs_index];
+                    mapping::point& orphan = this->reconstruction.landmarks.at(orphan_id);
+                    if (!within_depth_bound(best.lhs_index, orphan, rhs_points[best.rhs_index])) {
+                        continue;
+                    }
+                    reattach(orphan, t);
                     claimed[track_index] = static_cast<unsigned char>(1);
                     ++reacquired_epipolar_now;
                 }
@@ -1790,14 +1863,134 @@ private:
     }
 
 public:
-    static double model_selection_score(const float* const residuals, const size_t count, const float threshold) {
+    // The pixel noise per coordinate that the two-view thresholds assume for a sharp frame (measurement_sigma 1), and the
+    // perspective solve's angular tolerance in pixels. On TUM's 525 px focal length they give the former fixed
+    // thresholds: 3.84 (0.85 / 525)^2 = 1e-5 for the essential matrix, and 1.3125 / 525 = 2.5e-3 rad for P3P.
+    static constexpr double two_view_noise_pixels = 0.85;
+    static constexpr double pose_tolerance_pixels = 1.3125;
+
+    static double focal_length(const sensor::model& camera) {
+        double parameters[sensor::model::parameter_count];
+        camera.get_parameters(&parameters[0], sensor::model::parameter_count);
+        return 0.5 * (parameters[0] + parameters[1]);
+    }
+
+    static float pose_residual_threshold(const mapping::frame& frame) {
+        const double angle = slam::pose_tolerance_pixels * frame.measurement_sigma / slam::focal_length(frame.camera);
+        return static_cast<float>(1.0 - math::cos(angle));
+    }
+
+    // Torr's geometric robust information criterion for a two-view relation of dimension d with k parameters. Each
+    // residual is scaled to a squared distance in units of the noise variance and capped where the correspondence stops
+    // being evidence for the relation; the relation with the lower score explains the correspondences better.
+    static double geometric_robust_information_criterion(const float* const residuals, const size_t count, const double residual_scale, const int dimension, const int parameters) {
+        if (count == 0) {
+            return 0.0;
+        }
+        const double data_dimension = 4.0;
+        const double cap = 2.0 * (data_dimension - static_cast<double>(dimension));
         double score = 0.0;
         for (size_t i = 0; i < count; ++i) {
-            if (residuals[i] < threshold) {
-                score += static_cast<double>(threshold) - static_cast<double>(residuals[i]);
+            const double scaled = static_cast<double>(residuals[i]) * residual_scale;
+            score += (scaled < cap) ? scaled : cap;
+        }
+        return score + (math::log(data_dimension) * static_cast<double>(dimension) * static_cast<double>(count)) + (math::log(data_dimension * static_cast<double>(count)) * static_cast<double>(parameters));
+    }
+
+    class two_view_models final {
+    public:
+        bool essential_ok = false;
+        bool homography_ok = false;
+        bool use_homography = false;
+        estimation::robust::estimate::essential<double>::model essential{};
+        estimation::robust::estimate::homography<double>::model homography{};
+        std::vector<float> essential_residuals;
+        std::vector<size_t> essential_inliers;
+        size_t essential_inliers_size = 0;
+        std::vector<float> homography_residuals;
+        std::vector<size_t> homography_inliers;
+        size_t homography_inliers_size = 0;
+        float essential_threshold = 0.0f;
+        double noise_normalised = 0.0;
+        double essential_score = 0.0;
+        double homography_score = 0.0;
+    };
+
+    // The noise the model choice may assume, as fractions of the nominal noise: a floor so noise-free data still has a scale.
+    static constexpr double two_view_noise_floor_fraction = 0.1 / 0.85;
+    static constexpr double two_view_noise_ceiling_fraction = 2.0;
+
+    // The chi-squared distribution function with one degree of freedom, erf(sqrt(x / 2)), by Abramowitz and Stegun 7.1.26 (error below 1.5e-7).
+    static double chi_squared_1_cdf(const double x) {
+        if (!(x > 0.0)) {
+            return 0.0;
+        }
+        const double z = math::sqrt(0.5 * x);
+        const double t = 1.0 / (1.0 + (0.3275911 * z));
+        const double polynomial = t * (0.254829592 + (t * (-0.284496736 + (t * (1.421413741 + (t * (-1.453152027 + (t * 1.061405429))))))));
+        return 1.0 - (polynomial * math::exp(-(z * z)));
+    }
+
+    // Fits both relations to correspondences in normalised coordinates, with the RANSAC thresholds at the 95% points of
+    // the residuals for noise_normalised per coordinate in each image: the essential residual is the squared Sampson
+    // distance, sigma^2 chi2(1) at the true model, and the homography's the four-term symmetric transfer error, about
+    // 4 sigma^2 chi2(2). The choice is by the information criterion (E: d 3, k 5; H: d 2, k 8), with sigma estimated as
+    // Torr recommends from the more general model's residuals, since the choice is sensitive to it and the nominal noise
+    // is only a bound.
+    static two_view_models fit_two_view_models(const estimation::correspondence_2d_2d<double>* const correspondences, const size_t count, const double noise_normalised) {
+        two_view_models fitted;
+        const double variance = noise_normalised * noise_normalised;
+        fitted.essential_threshold = static_cast<float>(3.84 * variance);
+        const float homography_threshold = static_cast<float>(23.97 * variance);
+        fitted.essential_residuals.resize(count);
+        fitted.essential_inliers.resize(count);
+        fitted.essential_inliers_size = count;
+        fitted.essential_ok = estimation::robust::solver::essential<double>::solve(correspondences, count, fitted.essential_residuals.data(), fitted.essential_inliers.data(), fitted.essential_inliers_size, fitted.essential, fitted.essential_threshold);
+        fitted.homography_residuals.resize(count);
+        fitted.homography_inliers.resize(count);
+        fitted.homography_inliers_size = count;
+        fitted.homography_ok = estimation::robust::solver::homography<double>::solve(correspondences, count, fitted.homography_residuals.data(), fitted.homography_inliers.data(), fitted.homography_inliers_size, fitted.homography, homography_threshold);
+        // The inliers' residuals are s chi2(1) cut off at the threshold t, so their median m satisfies F(m / s) = F(t / s) / 2. The
+        // difference falls from 1/2 as s grows and turns negative for m < t / 4, so the root is bracketed and found by bisection.
+        double noise_variance = variance;
+        if (fitted.essential_ok && (fitted.essential_inliers_size > 0)) {
+            std::vector<float> inlier_residuals(fitted.essential_inliers_size);
+            for (size_t i = 0; i < fitted.essential_inliers_size; ++i) {
+                inlier_residuals[i] = fitted.essential_residuals[fitted.essential_inliers[i]];
+            }
+            const size_t middle = inlier_residuals.size() / 2;
+            std::nth_element(inlier_residuals.begin(), inlier_residuals.begin() + static_cast<std::ptrdiff_t>(middle), inlier_residuals.end());
+            const double median = static_cast<double>(inlier_residuals[middle]);
+            const double threshold = static_cast<double>(fitted.essential_threshold);
+            const auto difference = [median, threshold](const double candidate) {
+                return slam::chi_squared_1_cdf(median / candidate) - (0.5 * slam::chi_squared_1_cdf(threshold / candidate));
+            };
+            double low = variance * slam::two_view_noise_floor_fraction * slam::two_view_noise_floor_fraction;
+            double high = variance * slam::two_view_noise_ceiling_fraction * slam::two_view_noise_ceiling_fraction;
+            if (!(difference(high) < 0.0)) {
+                noise_variance = high;
+            }
+            else if (!(difference(low) > 0.0)) {
+                noise_variance = low;
+            }
+            else {
+                for (int iteration = 0; iteration < 60; ++iteration) {
+                    const double middle_variance = math::sqrt(low * high);
+                    if (difference(middle_variance) > 0.0) {
+                        low = middle_variance;
+                    }
+                    else {
+                        high = middle_variance;
+                    }
+                }
+                noise_variance = math::sqrt(low * high);
             }
         }
-        return score;
+        fitted.noise_normalised = math::sqrt(noise_variance);
+        fitted.essential_score = fitted.essential_ok ? slam::geometric_robust_information_criterion(fitted.essential_residuals.data(), count, 1.0 / noise_variance, 3, 5) : math::inf<double>();
+        fitted.homography_score = fitted.homography_ok ? slam::geometric_robust_information_criterion(fitted.homography_residuals.data(), count, 1.0 / (4.0 * noise_variance), 2, 8) : math::inf<double>();
+        fitted.use_homography = fitted.homography_ok && (!fitted.essential_ok || (fitted.homography_score < fitted.essential_score));
+        return fitted;
     }
 
     static double parallax_angle(
@@ -1831,9 +2024,28 @@ public:
         math::matrix<double, 3, 3>& rotation_predicted,
         math::matrix<double, 3, 1>& translation_predicted
     ) {
+        slam::predict_constant_velocity(rotation_previous, translation_previous, rotation_last, translation_last, 1, 1, rotation_predicted, translation_predicted);
+    }
+
+    // The motion from previous to last took frames_between frames; extrapolate it frames_ahead frames past last.
+    static void predict_constant_velocity(
+        const math::matrix<double, 3, 3>& rotation_previous,
+        const math::matrix<double, 3, 1>& translation_previous,
+        const math::matrix<double, 3, 3>& rotation_last,
+        const math::matrix<double, 3, 1>& translation_last,
+        const int frames_between,
+        const int frames_ahead,
+        math::matrix<double, 3, 3>& rotation_predicted,
+        math::matrix<double, 3, 1>& translation_predicted
+    ) {
         const math::se3<double> pose_previous(rotation_previous, translation_previous);
         const math::se3<double> pose_last(rotation_last, translation_last);
-        const math::se3<double> pose_predicted = pose_last * pose_previous.inverse() * pose_last;
+        const math::se3<double> motion = pose_last * pose_previous.inverse();
+        math::se3<double> pose_predicted = motion * pose_last;
+        if ((frames_between > 0) && (frames_ahead >= 0) && (frames_between != frames_ahead)) {
+            const math::matrix<double, 6, 1> tangent = motion.log() * (static_cast<double>(frames_ahead) / static_cast<double>(frames_between));
+            pose_predicted = math::se3<double>::exp(tangent) * pose_last;
+        }
         rotation_predicted = pose_predicted.rotation().get_matrix();
         translation_predicted = pose_predicted.translation();
     }
@@ -1911,15 +2123,17 @@ public:
             core::logger::log(core::logger::level::info, "Detected Features: %sfeatures (at each pyramid level), %zu consumed.", counts, frame.keypoints.size());
         }
 
-        // Add the frame to the reconstruction.
-        this->reconstruction.add_frame(frame);
+        // Move the frame into the reconstruction, pyramids and all, and work on the stored copy from here.
+        const int frame_id = frame.id;
+        this->reconstruction.add_frame(static_cast<mapping::frame&&>(frame));
+        mapping::frame& frame_added = this->reconstruction.frames.at(frame_id);
 
         this->loop_closure_.set_hamming_scale(this->frontend.descriptor_distance_scale());
         this->reconstruction.line_ray_angle_degrees = this->frontend.line_angle;
         this->reconstruction.solver_strategy = this->frontend.solver;
         this->reconstruction.solver_precision = this->frontend.solver_precision;
         if (this->frontend.tracker == mapping::frame::settings::tracker_kind::extrema) {
-            this->extrema_tracker_.update(frame.id, image_grey);
+            this->extrema_tracker_.update(frame_id, image_grey);
             if (core::logger::enabled(core::logger::level::info)) {
                 const feature::tracker::extrema::diagnostics& diagnostics = this->extrema_tracker_.get_diagnostics();
                 core::logger::log(core::logger::level::info, "Extrema: %zu detected, %zu flow matches%s, %zu tracked, %zu lost, %zu spawned.", diagnostics.detected_extrema, diagnostics.flow_matches, diagnostics.flow_fallback ? " (fallback flow)" : "", diagnostics.tracked, diagnostics.lost, diagnostics.spawned);
@@ -1950,7 +2164,7 @@ public:
                     this->tracker_.set_options(options);
                 }
             }
-            this->tracker_.update(frame.id, frame.image_pyramid, frame.keypoints, frame.descriptors);
+            this->tracker_.update(frame_id, frame_added.image_pyramid, frame_added.keypoints, frame_added.descriptors);
         }
 
         core::logger::log(core::logger::level::info, "Tracked: %zu active tracks.", this->active_point_tracks().size());
@@ -1967,16 +2181,16 @@ public:
                 });
                 segments.resize(slam::line_segments_maximum);
             }
-            this->line_tracker_.update(frame.id, segments);
+            this->line_tracker_.update(frame_id, segments);
             core::logger::log(core::logger::level::info, "Detected Lines: %zu segments, %zu line tracks.", segment_count, this->line_tracker_.active_tracks().size());
         }
 
         // Nothing to do for the first frame.
-        if (frame.id == 0) {
+        if (frame_id == 0) {
             return;
         }
 
-        mapping::frame& frame_current = this->reconstruction.frames.at(frame.id);
+        mapping::frame& frame_current = frame_added;
 
         const auto reset_dangling = [this]() {
             const std::vector<feature::tracker::tracker::track*> active = this->active_point_tracks();
@@ -1997,6 +2211,11 @@ public:
         bool posed_from_tracks = false;
         bool relocalised = false;
         bool initialise = (this->state_ != tracking_state::tracking) && this->reconstruction.landmarks.empty();
+        if (initialise && !this->keyframe_ids_.empty() && !this->reinitialising_) {
+            // Every landmark of the map is gone: start a new submap here rather than initialising against an old keyframe as the anchor.
+            this->begin_submap(frame_current);
+            return;
+        }
         if ((this->state_ != tracking_state::tracking) && !this->reconstruction.landmarks.empty()) {
             size_t correspondences = 0;
             posed_from_tracks = this->pose_from_tracks(frame_current, correspondences);
@@ -2027,6 +2246,7 @@ public:
             this->state_ = tracking_state::tracking;
             this->blind_frames_ = 0;
             this->relocalisation_probation_ = slam::relocalisation_probation_frames;
+            this->probation_origin_id_ = this->last_tracked_frame_id_;
             this->probation_frame_ids_.clear();
             this->probation_frame_ids_.push_back(frame_current.id);
             this->previous_tracked_frame_id_ = -1;
@@ -2072,7 +2292,9 @@ public:
                 const mapping::frame& anchor_previous = this->reconstruction.frames.at(this->init_anchor_frame_id_);
                 frame_current.rotation = anchor_previous.rotation;
                 frame_current.translation = anchor_previous.translation;
-                this->reconstruction.frames.erase(this->init_anchor_frame_id_);
+                if (this->keyframe_ids_.count(this->init_anchor_frame_id_) == 0) {
+                    this->reconstruction.frames.erase(this->init_anchor_frame_id_);
+                }
                 this->init_anchor_frame_id_ = frame_current.id;
                 if (this->keyframe_ids_.empty()) {
                     this->reconstruction.gauge_frame_id = frame_current.id;
@@ -2082,37 +2304,22 @@ public:
                 return;
             }
 
-            const float essential_inlier_threshold = 1.0e-5f;
+            const double noise_sigma = math::sqrt(0.5 * ((frame_current.measurement_sigma * frame_current.measurement_sigma) + (frame_anchor.measurement_sigma * frame_anchor.measurement_sigma)));
+            const double noise_normalised = slam::two_view_noise_pixels * noise_sigma / slam::focal_length(frame_current.camera);
+            const two_view_models fitted = slam::fit_two_view_models(init_correspondences.data(), correspondence_count, noise_normalised);
+            const float essential_inlier_threshold = fitted.essential_threshold;
 
-            const float model_selection_threshold = 1.0e-5f;
-
-            estimation::robust::estimate::essential<double>::model model_essential{};
-            std::vector<float> essential_residuals(correspondence_count);
-            std::vector<size_t> essential_inlier_indices(correspondence_count);
-            size_t essential_inliers = correspondence_count;
-            const bool essential_ok = estimation::robust::solver::essential<double>::solve(init_correspondences.data(), correspondence_count, essential_residuals.data(), essential_inlier_indices.data(), essential_inliers, model_essential);
-
-            estimation::robust::estimate::homography<double>::model model_homography{};
-            std::vector<float> homography_residuals(correspondence_count);
-            std::vector<size_t> homography_inlier_indices(correspondence_count);
-            size_t homography_inliers = correspondence_count;
-            const bool homography_ok = estimation::robust::solver::homography<double>::solve(init_correspondences.data(), correspondence_count, homography_residuals.data(), homography_inlier_indices.data(), homography_inliers, model_homography);
-
-            if (!essential_ok && !homography_ok) {
+            if (!fitted.essential_ok && !fitted.homography_ok) {
                 core::logger::log(core::logger::level::info, "Init REJECTED (frame %d vs anchor %d): neither an essential matrix nor a homography could be estimated.", frame_current.id, frame_anchor.id);
                 this->reconstruction.frames.erase(frame_current.id);
                 return;
             }
 
-            const double score_essential = essential_ok ? model_selection_score(essential_residuals.data(), correspondence_count, model_selection_threshold) : 0.0;
-            const double score_homography = homography_ok ? model_selection_score(homography_residuals.data(), correspondence_count, model_selection_threshold) : 0.0;
-            const double score_total = score_essential + score_homography;
-            const double ratio_homography = (score_total > 0.0) ? (score_homography / score_total) : 0.0;
-            const bool use_homography = homography_ok && (!essential_ok || (ratio_homography > 0.45));
-            core::logger::log(core::logger::level::debug, "Init model selection: E score %.6g (%zu inliers), H score %.6g (%zu inliers), R_H = %.4f -> selected %s.", score_essential, essential_inliers, score_homography, homography_inliers, ratio_homography, use_homography ? "HOMOGRAPHY" : "ESSENTIAL");
+            const bool use_homography = fitted.use_homography;
+            core::logger::log(core::logger::level::debug, "Init model selection: E GRIC %.1f (%zu inliers), H GRIC %.1f (%zu inliers), noise %.2f px -> selected %s.", fitted.essential_score, fitted.essential_inliers_size, fitted.homography_score, fitted.homography_inliers_size, fitted.noise_normalised * slam::focal_length(frame_current.camera), use_homography ? "HOMOGRAPHY" : "ESSENTIAL");
 
-            const size_t* const chosen_inlier_indices = use_homography ? homography_inlier_indices.data() : essential_inlier_indices.data();
-            const size_t inliers = use_homography ? homography_inliers : essential_inliers;
+            const size_t* const chosen_inlier_indices = use_homography ? fitted.homography_inliers.data() : fitted.essential_inliers.data();
+            const size_t inliers = use_homography ? fitted.homography_inliers_size : fitted.essential_inliers_size;
             std::vector<math::matrix<double, 2, 1>> match_point_current_inlier;
             std::vector<math::matrix<double, 2, 1>> match_point_previous_inlier;
             match_point_current_inlier.reserve(inliers);
@@ -2128,10 +2335,10 @@ public:
             size_t recover_pose_support = 0;
             bool recover_ok;
             if (use_homography) {
-                recover_ok = estimation::pose::homography<double>::recover(&model_homography.homography[0][0], match_point_current_inlier.data()->data(), match_point_previous_inlier.data()->data(), inliers, rotation.data(), translation.data(), match_point_triangulated_inlier.data()->data(), &recover_pose_support);
+                recover_ok = estimation::pose::homography<double>::recover(&fitted.homography.homography[0][0], match_point_current_inlier.data()->data(), match_point_previous_inlier.data()->data(), inliers, rotation.data(), translation.data(), match_point_triangulated_inlier.data()->data(), &recover_pose_support);
             }
             else {
-                recover_ok = estimation::pose::essential<double>::recover(&model_essential.essential[0][0], match_point_current_inlier.data()->data(), match_point_previous_inlier.data()->data(), inliers, rotation.data(), translation.data(), match_point_triangulated_inlier.data()->data(), &recover_pose_support);
+                recover_ok = estimation::pose::essential<double>::recover(&fitted.essential.essential[0][0], match_point_current_inlier.data()->data(), match_point_previous_inlier.data()->data(), inliers, rotation.data(), translation.data(), match_point_triangulated_inlier.data()->data(), &recover_pose_support);
             }
             core::logger::log(core::logger::level::debug, "Support: %zu of %zu inliers support the recovered pose.", recover_pose_support, inliers);
 
@@ -2197,6 +2404,7 @@ public:
             this->keyframe_ids_.insert(this->init_anchor_frame_id_);
             this->keyframe_ids_.insert(frame_current.id);
             this->keyframes_inserted_ += 2;
+            this->keyframes_since_global_adjustment_ += 2;
             this->last_keyframe_id_ = frame_current.id;
             is_keyframe = true;
             if (this->reinitialising_) {
@@ -2248,6 +2456,11 @@ public:
                     this->probation_track_links_.clear();
                     this->relocalisation_probation_ = 0;
                     this->reconstruction.frames.erase(frame_current.id);
+                    // The probation frames are gone, so the last tracked frame is the one before the relocalisation again.
+                    if (this->reconstruction.frames.count(this->probation_origin_id_) != 0) {
+                        this->last_tracked_frame_id_ = this->probation_origin_id_;
+                    }
+                    this->previous_tracked_frame_id_ = -1;
                     this->state_ = tracking_state::initialising;
                     return;
                 }
@@ -2290,6 +2503,8 @@ public:
                         frame_previous.translation,
                         frame_last.rotation,
                         frame_last.translation,
+                        last_id - previous_id,
+                        frame_current.id - last_id,
                         frame_current.rotation,
                         frame_current.translation
                     );
@@ -2365,6 +2580,7 @@ public:
 
         this->keyframe_ids_.insert(frame_current.id);
         ++this->keyframes_inserted_;
+        ++this->keyframes_since_global_adjustment_;
         this->last_keyframe_id_ = frame_current.id;
 
         {
@@ -2377,8 +2593,10 @@ public:
                     continue;
                 }
                 mapping::point& landmark = this->reconstruction.landmarks.at(t->landmark_id);
-                this->reconstruction.add_observation(frame_current.id, landmark, static_cast<double>(t->x), static_cast<double>(t->y), t->octave);
-                this->add_landmark_descriptors(landmark, frame_current, t->x, t->y, t->octave, t->descriptor);
+                this->reconstruction.add_observation(frame_current.id, landmark, static_cast<double>(t->x), static_cast<double>(t->y), t->octave, t->measurement_octave);
+                if (t->descriptor_valid) {
+                    this->add_landmark_descriptors(landmark, frame_current, t->x, t->y, t->octave, t->descriptor);
+                }
             }
             for (feature::tracker::line::track* const t : this->line_tracker_.active_tracks()) {
                 if ((t->landmark_id < 0) || (this->reconstruction.line_landmarks.count(t->landmark_id) == 0)) {
@@ -2449,12 +2667,14 @@ public:
                     }
                     mapping::point landmark(this->reconstruction.allocate_landmark_id(), math::matrix<double, 3, 1>::zero(), math::matrix<double, 3, 1>{ { 0.5, 0.5, 0.5 } });
                     landmark.anchor_at_infinity(frame_ref.rotation, frame_ref.translation, ray_ref);
-                    landmark.add_descriptor(&t->descriptor.data[0]);
+                    if (t->descriptor_valid) {
+                        landmark.add_descriptor(&t->descriptor.data[0]);
+                    }
                     this->reconstruction.add_landmark(landmark);
                     t->landmark_id = landmark.id;
                     for (const feature::tracker::tracker::observation& obs : t->history) {
                         if (this->keyframe_ids_.count(obs.frame_id) != 0) {
-                            this->reconstruction.add_observation(obs.frame_id, landmark, static_cast<double>(obs.x), static_cast<double>(obs.y), t->octave);
+                            this->reconstruction.add_observation(obs.frame_id, landmark, static_cast<double>(obs.x), static_cast<double>(obs.y), t->octave, obs.measurement_octave);
                         }
                     }
                     ++new_landmarks;
@@ -2511,13 +2731,15 @@ public:
                 if (this->frontend.inverse_depth && !landmark.anchor(frame_ref.rotation, frame_ref.translation)) {
                     continue;
                 }
-                this->add_landmark_descriptors(landmark, frame_current, t->x, t->y, t->octave, t->descriptor);
+                if (t->descriptor_valid) {
+                    this->add_landmark_descriptors(landmark, frame_current, t->x, t->y, t->octave, t->descriptor);
+                }
                 this->reconstruction.add_landmark(landmark);
                 t->landmark_id = landmark.id;
                 new_landmark_depths.push_back(mapped_cur[2]);
                 for (const feature::tracker::tracker::observation& obs : t->history) {
                     if (this->keyframe_ids_.count(obs.frame_id) != 0) {
-                        this->reconstruction.add_observation(obs.frame_id, landmark, static_cast<double>(obs.x), static_cast<double>(obs.y), t->octave);
+                        this->reconstruction.add_observation(obs.frame_id, landmark, static_cast<double>(obs.x), static_cast<double>(obs.y), t->octave, obs.measurement_octave);
                     }
                 }
                 mapping::point& created = this->reconstruction.landmarks.at(landmark.id);
@@ -2558,9 +2780,10 @@ public:
             broad_ba_window = math::max(broad_ba_window, 10);
         }
         this->reconstruction.optimise(broad_ba_window, false, 50, true);
-        const bool globally_adjusted = (this->frontend.global_adjustment_keyframes > 0) && ((this->keyframes_inserted_ % static_cast<size_t>(this->frontend.global_adjustment_keyframes)) == 0);
+        const bool globally_adjusted = (this->frontend.global_adjustment_keyframes > 0) && (this->keyframes_since_global_adjustment_ >= static_cast<size_t>(this->frontend.global_adjustment_keyframes));
         if (globally_adjusted) {
             this->reconstruction.optimise(0, false, 20, true);
+            this->keyframes_since_global_adjustment_ = 0;
         }
         this->reanchor_corrected();
         this->reconstruction.cull();
@@ -2580,7 +2803,7 @@ public:
                 if (landmark_it == this->reconstruction.landmarks.end()) {
                     continue;
                 }
-                if (landmark_it->second.at_infinity()) {
+                if (landmark_it->second.at_infinity() || landmark_it->second.descriptor_history.empty()) {
                     continue;
                 }
                 mapping::loop_closure::record record;
@@ -2593,16 +2816,16 @@ public:
                 record.pixel_y = t->y;
                 records.push_back(record);
             }
-            this->covisibility_.clear();
+            this->covisibility_.begin_update();
             std::vector<int> observing_frames;
             for (const auto& [landmark_id, landmark_observations] : this->reconstruction.observations) {
-                static_cast<void>(landmark_id);
                 observing_frames.clear();
                 for (const mapping::map::observation& observation : landmark_observations) {
                     observing_frames.push_back(observation.frame_id);
                 }
-                this->covisibility_.add(observing_frames.data(), observing_frames.size());
+                this->covisibility_.update(landmark_id, observing_frames.data(), observing_frames.size());
             }
+            this->covisibility_.end_update();
             this->rebuild_local_map(frame_current.id);
             const math::se3<double> pose(frame_current.rotation, frame_current.translation);
             const mapping::loop_closure::result loop = this->loop_closure_.detect(frame_current.id, pose, frame_current.camera, this->covisibility_, records.data(), records.size(), this->submap_start_of(frame_current.id));
@@ -2650,6 +2873,18 @@ public:
         this->update_anchored_frames();
         if (globally_adjusted) {
             this->refit_anchored_frames();
+        }
+
+        // Only a track's keyframe observations and those since the last keyframe are ever read back, so keep nothing else.
+        for (feature::tracker::tracker::track* const t : this->all_point_tracks()) {
+            size_t keep = 0;
+            for (size_t h = 0; h < t->history.size(); ++h) {
+                if ((t->history[h].frame_id >= this->last_keyframe_id_) || (this->keyframe_ids_.count(t->history[h].frame_id) != 0)) {
+                    t->history[keep] = t->history[h];
+                    ++keep;
+                }
+            }
+            t->history.resize(keep);
         }
 
         this->previous_tracked_frame_id_ = this->last_tracked_frame_id_;
