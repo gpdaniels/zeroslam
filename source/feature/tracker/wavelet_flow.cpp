@@ -121,7 +121,7 @@ namespace feature::tracker {
         }
     }
 
-    bool wavelet_flow::solve_level(const window& shape, const image::quaternion_wavelet::level& current, const options& settings, double& displacement_x, double& displacement_y, double& error) {
+    bool wavelet_flow::solve_level(const window& shape, const image::quaternion_wavelet::level& current, const options& settings, double& displacement_x, double& displacement_y, double& error, const bool evaluate_only) {
         const double turn = 2.0 * math::pi<double>();
         const double spacing = shape.spacing;
         const int radius = shape.radius;
@@ -236,6 +236,16 @@ namespace feature::tracker {
         double step_x = 0.0;
         double step_y = 0.0;
         double rms = 0.0;
+        if (evaluate_only) {
+            const int offset_x = static_cast<int>(math::round(displacement_x / spacing));
+            const int offset_y = static_cast<int>(math::round(displacement_y / spacing));
+            if (!measure_window(offset_x, offset_y)) {
+                return false;
+            }
+            static_cast<void>(solve(offset_x, offset_y, 0.0, step_x, step_y, rms));
+            error = rms;
+            return true;
+        }
         for (int iteration = 0; iteration < math::max(1, settings.iterations); ++iteration) {
             const int offset_x = static_cast<int>(math::round(displacement_x / spacing));
             const int offset_y = static_cast<int>(math::round(displacement_y / spacing));
@@ -297,6 +307,28 @@ namespace feature::tracker {
         return true;
     }
 
+    bool wavelet_flow::bounded_level(const window& shape, const image::quaternion_wavelet::level& current, const options& settings, const bool bounded, const double bound, double& displacement_x, double& displacement_y, double& error) {
+        // A finer level refines what the coarser ones found: a step beyond the coarser node spacing is rejected and the
+        // level only reports the error of the kept displacement.
+        const double entry_x = displacement_x;
+        const double entry_y = displacement_y;
+        if (!wavelet_flow::solve_level(shape, current, settings, displacement_x, displacement_y, error)) {
+            return false;
+        }
+        const double moved_x = displacement_x - entry_x;
+        const double moved_y = displacement_y - entry_y;
+        if (!bounded || !(((moved_x * moved_x) + (moved_y * moved_y)) > (bound * bound))) {
+            return true;
+        }
+        displacement_x = entry_x;
+        displacement_y = entry_y;
+        double entry_error = error;
+        if (wavelet_flow::solve_level(shape, current, settings, displacement_x, displacement_y, entry_error, true)) {
+            error = entry_error;
+        }
+        return true;
+    }
+
     bool wavelet_flow::track_single(
         const image::quaternion_wavelet& previous,
         const image::quaternion_wavelet& next,
@@ -322,6 +354,7 @@ namespace feature::tracker {
         double displacement_x = static_cast<double>(guess_x);
         double displacement_y = static_cast<double>(guess_y);
         bool solved = false;
+        double coarser_spacing = 0.0;
         double error = static_cast<double>(settings.max_error) + 1.0;
         float pairs[image::quaternion_wavelet::band_count * wavelet_flow::maximum_window_area * 4];
         float frequencies[image::quaternion_wavelet::band_count * wavelet_flow::maximum_window_area * 4];
@@ -342,8 +375,9 @@ namespace feature::tracker {
                 shape.gate_spacing = static_cast<double>(1 << level);
                 shape.node_x = static_cast<int>(math::floor(static_cast<double>(seed_x) / template_level.spacing));
                 shape.node_y = static_cast<int>(math::floor(static_cast<double>(seed_y) / template_level.spacing));
-                const bool last_pass = (level == finest) && (pass == passes - 1);
-                const bool measure_frequency = settings.measured_frequency && last_pass && (shape.stride == 1);
+                // Each level's band carries the image's own local frequencies, which for real (1/f, blurred) images lie
+                // below the band centre, so every level measures them rather than assuming the centre.
+                const bool measure_frequency = settings.measured_frequency && (shape.stride == 1);
                 const int dense_factor = static_cast<int>(math::round(static_cast<double>(1 << level) / shape.spacing));
                 shape.radius = wavelet_flow::fitted_radius(template_level, shape.node_x, shape.node_y, math::min(half_window * dense_factor, wavelet_flow::maximum_half_window), measure_frequency ? 1 : 0, shape.stride);
                 if (shape.radius < 1) {
@@ -358,8 +392,9 @@ namespace feature::tracker {
                 shape.pairs = &pairs[0];
                 shape.frequencies = measure_frequency ? &frequencies[0] : nullptr;
                 wavelet_flow::sample_window(template_level, shape, &pairs[0], measure_frequency ? &frequencies[0] : nullptr);
-                if (wavelet_flow::solve_level(shape, current_level, settings, displacement_x, displacement_y, error)) {
+                if (wavelet_flow::bounded_level(shape, current_level, settings, solved, coarser_spacing, displacement_x, displacement_y, error)) {
                     solved = true;
+                    coarser_spacing = shape.spacing;
                 }
             }
         }
@@ -381,25 +416,43 @@ namespace feature::tracker {
         result* const results_out,
         const options& settings,
         const float* const guess_x,
-        const float* const guess_y
+        const float* const guess_y,
+        const image::pyramid* const pyramid_previous,
+        const image::pyramid* const pyramid_next
     ) {
+        const bool refining = (pyramid_previous != nullptr) && (pyramid_next != nullptr) && (settings.refine_levels > 0);
+        const patch_flow::options patch_options = wavelet_flow::refine_options(settings);
         core::thread_pool::instance().parallel_for(count, 16, [&](const size_t point) {
             const float seed_x = core::to_pixel_index_position(points_x[point]);
             const float seed_y = core::to_pixel_index_position(points_y[point]);
             const bool has_guess = (guess_x != nullptr) && (guess_y != nullptr) && ((guess_x[point] != 0.0f) || (guess_y[point] != 0.0f));
             const float first_x = (settings.guess_first && has_guess) ? guess_x[point] : 0.0f;
             const float first_y = (settings.guess_first && has_guess) ? guess_y[point] : 0.0f;
+            patch_flow::anchor forward_patch;
+            if (refining && !patch_flow::build_anchor(*pyramid_previous, points_x[point], points_y[point], patch_options, forward_patch)) {
+                results_out[point].x = points_x[point];
+                results_out[point].y = points_y[point];
+                results_out[point].error = settings.max_error + 1.0f;
+                results_out[point].tracked = false;
+                return;
+            }
+            const auto attempt = [&](const float start_x, const float start_y, float& reached_x, float& reached_y, float& reached_error) {
+                if (!wavelet_flow::track_single(previous, next, seed_x, seed_y, settings, start_x, start_y, reached_x, reached_y, reached_error)) {
+                    return false;
+                }
+                return !refining || wavelet_flow::refine(forward_patch, *pyramid_next, settings, reached_x, reached_y, reached_x, reached_y);
+            };
             float forward_x = seed_x;
             float forward_y = seed_y;
             float forward_error = settings.max_error + 1.0f;
-            bool forward_ok = wavelet_flow::track_single(previous, next, seed_x, seed_y, settings, first_x, first_y, forward_x, forward_y, forward_error);
+            bool forward_ok = attempt(first_x, first_y, forward_x, forward_y, forward_error);
             if (!forward_ok && has_guess) {
                 const float second_x = settings.guess_first ? 0.0f : guess_x[point];
                 const float second_y = settings.guess_first ? 0.0f : guess_y[point];
                 float retry_x = seed_x;
                 float retry_y = seed_y;
                 float retry_error = settings.max_error + 1.0f;
-                if (wavelet_flow::track_single(previous, next, seed_x, seed_y, settings, second_x, second_y, retry_x, retry_y, retry_error)) {
+                if (attempt(second_x, second_y, retry_x, retry_y, retry_error)) {
                     forward_x = retry_x;
                     forward_y = retry_y;
                     forward_error = retry_error;
@@ -417,7 +470,11 @@ namespace feature::tracker {
                 float backward_x = forward_x;
                 float backward_y = forward_y;
                 float backward_error = settings.max_error + 1.0f;
-                const bool backward_ok = wavelet_flow::track_single(next, previous, forward_x, forward_y, settings, seed_x - forward_x, seed_y - forward_y, backward_x, backward_y, backward_error);
+                bool backward_ok = wavelet_flow::track_single(next, previous, forward_x, forward_y, settings, seed_x - forward_x, seed_y - forward_y, backward_x, backward_y, backward_error);
+                if (backward_ok && refining) {
+                    patch_flow::anchor backward_patch;
+                    backward_ok = patch_flow::build_anchor(*pyramid_next, core::to_pixel_centre(forward_x), core::to_pixel_centre(forward_y), patch_options, backward_patch) && wavelet_flow::refine(backward_patch, *pyramid_previous, settings, backward_x, backward_y, backward_x, backward_y);
+                }
                 if (!backward_ok) {
                     return;
                 }
@@ -431,8 +488,9 @@ namespace feature::tracker {
         });
     }
 
-    bool wavelet_flow::build_anchor(const image::quaternion_wavelet& transform, const float x, const float y, const options& settings, anchor& out) {
+    bool wavelet_flow::build_anchor(const image::quaternion_wavelet& transform, const float x, const float y, const options& settings, anchor& out, const image::pyramid* const pyramid) {
         out.levels.clear();
+        out.refine = patch_flow::anchor();
         out.centre_x = core::to_pixel_index_position(x);
         out.centre_y = core::to_pixel_index_position(y);
         const int half_window = math::max(1, math::min(settings.half_window, wavelet_flow::maximum_half_window));
@@ -452,8 +510,7 @@ namespace feature::tracker {
                 stored.spacing = data.spacing * static_cast<double>(stored.stride);
                 stored.node_x = static_cast<int>(math::floor(static_cast<double>(out.centre_x) / data.spacing));
                 stored.node_y = static_cast<int>(math::floor(static_cast<double>(out.centre_y) / data.spacing));
-                const bool last_pass = (level == finest) && (pass == passes - 1);
-                const bool measure_frequency = settings.measured_frequency && last_pass && (stored.stride == 1);
+                const bool measure_frequency = settings.measured_frequency && (stored.stride == 1);
                 const int dense_factor = static_cast<int>(math::round(static_cast<double>(1 << level) / stored.spacing));
                 stored.radius = wavelet_flow::fitted_radius(data, stored.node_x, stored.node_y, math::min(half_window * dense_factor, wavelet_flow::maximum_half_window), measure_frequency ? 1 : 0, stored.stride);
                 if (stored.radius < 1) {
@@ -484,14 +541,18 @@ namespace feature::tracker {
                 out.levels.push_back(static_cast<anchor::level&&>(stored));
             }
         }
+        if ((pyramid != nullptr) && !out.levels.empty() && (settings.refine_levels > 0) && !patch_flow::build_anchor(*pyramid, x, y, wavelet_flow::refine_options(settings), out.refine)) {
+            out.levels.clear();
+        }
         return !out.levels.empty();
     }
 
-    bool wavelet_flow::align(const image::quaternion_wavelet& transform, const anchor& anchored, const options& settings, float& displacement_x, float& displacement_y, result& out) {
+    bool wavelet_flow::align(const image::quaternion_wavelet& transform, const anchor& anchored, const options& settings, float& displacement_x, float& displacement_y, result& out, const image::pyramid* const pyramid) {
         double running_x = static_cast<double>(displacement_x);
         double running_y = static_cast<double>(displacement_y);
         double error = static_cast<double>(settings.max_error) + 1.0;
         bool solved = false;
+        double coarser_spacing = 0.0;
         for (size_t entry = 0; entry < anchored.levels.size(); ++entry) {
             const anchor::level& stored = anchored.levels[entry];
             if ((stored.index < 1) || (static_cast<size_t>(stored.index) > transform.size())) {
@@ -512,20 +573,69 @@ namespace feature::tracker {
             shape.centre_y = &stored.centre_y[0];
             shape.pairs = stored.pairs.data();
             shape.frequencies = stored.frequencies.empty() ? nullptr : stored.frequencies.data();
-            if (wavelet_flow::solve_level(shape, current, settings, running_x, running_y, error)) {
+            if (wavelet_flow::bounded_level(shape, current, settings, solved, coarser_spacing, running_x, running_y, error)) {
                 solved = true;
+                coarser_spacing = shape.spacing;
             }
         }
         out.x = core::to_pixel_centre(anchored.centre_x + static_cast<float>(running_x));
         out.y = core::to_pixel_centre(anchored.centre_y + static_cast<float>(running_y));
         out.error = static_cast<float>(error);
         out.tracked = false;
-        if (!solved) {
+        if (!solved || !(out.error <= settings.max_error)) {
             return false;
         }
+        if ((pyramid != nullptr) && (settings.refine_levels > 0)) {
+            if (anchored.refine.levels < 1) {
+                return false;
+            }
+            float refined_x = 0.0f;
+            float refined_y = 0.0f;
+            if (!wavelet_flow::refine(anchored.refine, *pyramid, settings, anchored.centre_x + static_cast<float>(running_x), anchored.centre_y + static_cast<float>(running_y), refined_x, refined_y)) {
+                return false;
+            }
+            running_x = static_cast<double>(refined_x - anchored.centre_x);
+            running_y = static_cast<double>(refined_y - anchored.centre_y);
+            out.x = core::to_pixel_centre(refined_x);
+            out.y = core::to_pixel_centre(refined_y);
+        }
+        out.tracked = true;
         displacement_x = static_cast<float>(running_x);
         displacement_y = static_cast<float>(running_y);
-        out.tracked = out.error <= settings.max_error;
-        return out.tracked;
+        return true;
+    }
+
+    patch_flow::options wavelet_flow::refine_options(const options& settings) {
+        patch_flow::options built;
+        built.model = patch_flow::model_kind::translation_illumination;
+        built.half_window = settings.refine_half_window;
+        built.levels = settings.refine_levels;
+        built.iterations = settings.refine_iterations;
+        built.min_eigenvalue = settings.refine_min_eigenvalue;
+        built.max_error = settings.refine_max_error;
+        return built;
+    }
+
+    bool wavelet_flow::refine(const patch_flow::anchor& template_patch, const image::pyramid& target, const options& settings, const float estimate_x, const float estimate_y, float& refined_x, float& refined_y) {
+        // The phase estimate seeds a gain and bias compensated alignment of the seed's patch, which must converge
+        // near it: the wavelet gives the coarse displacement robust to illumination, the intensities the sub-pixel one.
+        patch_flow::state warp;
+        warp.translation_x = estimate_x - template_patch.centre_x;
+        warp.translation_y = estimate_y - template_patch.centre_y;
+        patch_flow::result aligned;
+        if (!patch_flow::align(target, template_patch, wavelet_flow::refine_options(settings), warp, aligned)) {
+            return false;
+        }
+        const float aligned_x = core::to_pixel_index_position(aligned.x);
+        const float aligned_y = core::to_pixel_index_position(aligned.y);
+        const double moved_x = static_cast<double>(aligned_x - estimate_x);
+        const double moved_y = static_cast<double>(aligned_y - estimate_y);
+        const double bound = static_cast<double>(settings.refine_bound);
+        if (!(((moved_x * moved_x) + (moved_y * moved_y)) <= (bound * bound))) {
+            return false;
+        }
+        refined_x = aligned_x;
+        refined_y = aligned_y;
+        return true;
     }
 }

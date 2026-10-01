@@ -81,6 +81,23 @@ namespace feature::tracker {
         current.bx = median_x;
         current.by = median_y;
 
+        // The normal matrix is built from centred and scaled source positions so its conditioning does not depend on
+        // where in the image the tracks are, the solution is mapped back to pixel coordinates afterwards.
+        double centre_x = 0.0;
+        double centre_y = 0.0;
+        for (size_t i = 0; i < count; ++i) {
+            centre_x += static_cast<double>(from_x[i]);
+            centre_y += static_cast<double>(from_y[i]);
+        }
+        centre_x /= static_cast<double>(count);
+        centre_y /= static_cast<double>(count);
+        double spread = 0.0;
+        for (size_t i = 0; i < count; ++i) {
+            spread += math::abs(static_cast<double>(from_x[i]) - centre_x) + math::abs(static_cast<double>(from_y[i]) - centre_y);
+        }
+        spread /= 2.0 * static_cast<double>(count);
+        const double scale = (spread > 0.0) ? (1.0 / spread) : 1.0;
+
         const double sigma_squared = static_cast<double>(settings.sigma) * static_cast<double>(settings.sigma);
         for (int iteration = 0; iteration < settings.iterations; ++iteration) {
             math::matrix<double, 3, 3> normal = math::matrix<double, 3, 3>::zero();
@@ -95,7 +112,7 @@ namespace feature::tracker {
                 const double residual_squared = residual_x * residual_x + residual_y * residual_y;
                 const double denominator = residual_squared + sigma_squared;
                 const double weight = (sigma_squared * sigma_squared) / (denominator * denominator);
-                const double phi[3] = { static_cast<double>(from_x[i]), static_cast<double>(from_y[i]), 1.0 };
+                const double phi[3] = { (static_cast<double>(from_x[i]) - centre_x) * scale, (static_cast<double>(from_y[i]) - centre_y) * scale, 1.0 };
                 for (size_t row = 0; row < 3; ++row) {
                     for (size_t column = 0; column < 3; ++column) {
                         normal[row][column] += weight * phi[row] * phi[column];
@@ -110,13 +127,17 @@ namespace feature::tracker {
             }
             const math::matrix<double, 3, 1> row_x = normal_inverse * rhs_x;
             const math::matrix<double, 3, 1> row_y = normal_inverse * rhs_y;
+            const double a00 = row_x[0] * scale;
+            const double a01 = row_x[1] * scale;
+            const double a10 = row_y[0] * scale;
+            const double a11 = row_y[1] * scale;
             affine next;
-            next.a00 = static_cast<float>(row_x[0]);
-            next.a01 = static_cast<float>(row_x[1]);
-            next.bx = static_cast<float>(row_x[2]);
-            next.a10 = static_cast<float>(row_y[0]);
-            next.a11 = static_cast<float>(row_y[1]);
-            next.by = static_cast<float>(row_y[2]);
+            next.a00 = static_cast<float>(a00);
+            next.a01 = static_cast<float>(a01);
+            next.bx = static_cast<float>(row_x[2] - (a00 * centre_x) - (a01 * centre_y));
+            next.a10 = static_cast<float>(a10);
+            next.a11 = static_cast<float>(a11);
+            next.by = static_cast<float>(row_y[2] - (a10 * centre_x) - (a11 * centre_y));
             const float change = math::max(
                 math::max(
                     math::max(math::abs(next.a00 - current.a00), math::abs(next.a01 - current.a01)),

@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "feature/tracker/wavelet_flow.hpp"
 
 #include "image/image.hpp"
+#include "image/pyramid.hpp"
 #include "image/quaternion_wavelet.hpp"
 
 #if defined(_MSC_VER)
@@ -58,7 +59,7 @@ namespace {
         double amplitude[wave_count];
         double phase[wave_count];
 
-        explicit texture_field(unsigned long long seed) {
+        explicit texture_field(unsigned long long seed, const double blur = 0.0) {
             constexpr static const double lowest = 0.03;
             constexpr static const double highest = 2.40;
             for (int wave = 0; wave < wave_count; ++wave) {
@@ -75,7 +76,8 @@ namespace {
             }
             const double normalisation = 45.0 / std::sqrt(2.0 * energy);
             for (int wave = 0; wave < wave_count; ++wave) {
-                this->amplitude[wave] *= normalisation;
+                const double frequency_squared = (this->frequency_x[wave] * this->frequency_x[wave]) + (this->frequency_y[wave] * this->frequency_y[wave]);
+                this->amplitude[wave] *= normalisation * std::exp(-0.5 * blur * blur * frequency_squared);
             }
         }
 
@@ -116,6 +118,60 @@ namespace {
                 points_y.push_back(static_cast<float>(y) + 0.5f);
             }
         }
+    }
+
+    struct accuracy final {
+        size_t points = 0;
+        size_t kept = 0;
+        size_t wrong = 0;
+        double median = -1.0;
+    };
+
+    // Tracks the probe grid over random shifts of up to 8 px and counts the accepted tracks more than 0.5 px wrong: by
+    // phase alone on an undecimated finest level, and refined in the intensity domain on the decimated transform.
+    void shifted_accuracy(const texture_field& field, const double gain, unsigned long long seed, accuracy& phase, accuracy& refined) {
+        const image::image base = render(field, 0.0, 0.0);
+        const image::quaternion_wavelet dense_reference(base, 0, 2, true);
+        const image::quaternion_wavelet reference(base);
+        const image::pyramid pyramid_reference(base);
+        feature::tracker::wavelet_flow::options phase_settings;
+        feature::tracker::wavelet_flow::options refined_settings;
+        refined_settings.max_error = 2.0f;
+        std::vector<float> points_x;
+        std::vector<float> points_y;
+        probe_points(points_x, points_y);
+        std::vector<double> phase_errors;
+        std::vector<double> refined_errors;
+        const auto collect = [&](const std::vector<feature::tracker::wavelet_flow::result>& results, const double shift_x, const double shift_y, accuracy& measured, std::vector<double>& errors) {
+            for (size_t index = 0; index < points_x.size(); ++index) {
+                ++measured.points;
+                if (!results[index].tracked) {
+                    continue;
+                }
+                const double error = std::hypot(static_cast<double>(results[index].x - points_x[index]) - shift_x, static_cast<double>(results[index].y - points_y[index]) - shift_y);
+                ++measured.kept;
+                measured.wrong += (error > 0.5) ? 1u : 0u;
+                errors.push_back(error);
+            }
+        };
+        for (int test = 0; test < 4; ++test) {
+            const double shift_x = 8.0 * ((2.0 * next_random_unit(seed)) - 1.0);
+            const double shift_y = 8.0 * ((2.0 * next_random_unit(seed)) - 1.0);
+            const image::image moved = render(field, shift_x, shift_y, gain, 128.0 * (1.0 - gain));
+            std::vector<feature::tracker::wavelet_flow::result> results(points_x.size());
+            if (gain == 1.0) {
+                feature::tracker::wavelet_flow::track(dense_reference, image::quaternion_wavelet(moved, 0, 2, true), points_x.data(), points_y.data(), points_x.size(), results.data(), phase_settings);
+                collect(results, shift_x, shift_y, phase, phase_errors);
+            }
+            const image::pyramid pyramid_current(moved);
+            feature::tracker::wavelet_flow::track(reference, image::quaternion_wavelet(moved), points_x.data(), points_y.data(), points_x.size(), results.data(), refined_settings, nullptr, nullptr, &pyramid_reference, &pyramid_current);
+            collect(results, shift_x, shift_y, refined, refined_errors);
+        }
+        for (std::vector<double>* const errors : { &phase_errors, &refined_errors }) {
+            std::sort(errors->begin(), errors->end());
+        }
+        phase.median = phase_errors.empty() ? -1.0 : phase_errors[phase_errors.size() / 2];
+        refined.median = refined_errors.empty() ? -1.0 : refined_errors[refined_errors.size() / 2];
     }
 
     double median_error(const texture_field& field, const image::quaternion_wavelet& reference, const image::image& moved, const double shift_x, const double shift_y, const feature::tracker::wavelet_flow::options& settings, size_t& kept) {
@@ -342,6 +398,21 @@ int main() {
         for (size_t index = 0; index < dimension * dimension; ++index) {
             flat.get_data()[index] = static_cast<unsigned char>(128);
         }
+        {
+            // An alignment rejected by the error gate reports where it went but leaves the caller's displacement unchanged.
+            feature::tracker::wavelet_flow::options tight = settings;
+            tight.max_error = 1e-4f;
+            const image::quaternion_wavelet current(render(field, 1.1, -0.6));
+            float held_x = 0.25f;
+            float held_y = -0.1f;
+            feature::tracker::wavelet_flow::result rejected;
+            REQUIRE(!feature::tracker::wavelet_flow::align(current, anchors[0], tight, held_x, held_y, rejected));
+            REQUIRE(!rejected.tracked);
+            REQUIRE(rejected.error > tight.max_error);
+            REQUIRE(std::abs(static_cast<double>(rejected.x - points_x[0]) - 1.1) < 0.5);
+            REQUIRE(held_x == 0.25f);
+            REQUIRE(held_y == -0.1f);
+        }
         feature::tracker::wavelet_flow::anchor empty;
         feature::tracker::wavelet_flow::result outcome;
         float zero_x = 0.0f;
@@ -349,6 +420,75 @@ int main() {
         REQUIRE(feature::tracker::wavelet_flow::build_anchor(image::quaternion_wavelet(flat), points_x[0], points_y[0], settings, empty));
         REQUIRE(!feature::tracker::wavelet_flow::align(reference, empty, settings, zero_x, zero_y, outcome));
         REQUIRE(!outcome.tracked);
+    }
+
+    {
+        // Accepted tracks more than 0.5 px wrong, on sharp and blurred (sigma 1 and 1.5) textures whose energy lies below
+        // the band centres: with measured local frequencies at every level, and refined in the intensity domain.
+        for (const double blur : { 0.0, 1.0, 1.5 }) {
+            accuracy phase;
+            accuracy refined;
+            shifted_accuracy(texture_field(11, blur), 1.0, 21, phase, refined);
+            REQUIRE(phase.kept * 10 >= phase.points * 9);
+            REQUIRE(phase.wrong * 100 <= phase.kept);
+            REQUIRE(refined.kept * 10 >= refined.points * 9);
+            REQUIRE(refined.wrong == 0);
+            REQUIRE(refined.median < 0.08);
+        }
+        // The refinement's gain and bias keep the phase flow's invariance to a contrast change.
+        accuracy unused;
+        accuracy exposed;
+        shifted_accuracy(field, 1.3, 23, unused, exposed);
+        REQUIRE(exposed.kept * 10 >= exposed.points * 9);
+        REQUIRE(exposed.wrong == 0);
+        REQUIRE(exposed.median < 0.08);
+    }
+
+    {
+        // Anchors built with a pyramid refine their alignment in the intensity domain too.
+        std::vector<float> points_x;
+        std::vector<float> points_y;
+        probe_points(points_x, points_y);
+        const image::pyramid pyramid_reference(base);
+        feature::tracker::wavelet_flow::options refined = settings;
+        refined.max_error = 2.0f;
+        std::vector<feature::tracker::wavelet_flow::anchor> anchors(points_x.size());
+        for (size_t index = 0; index < points_x.size(); ++index) {
+            REQUIRE(feature::tracker::wavelet_flow::build_anchor(reference, points_x[index], points_y[index], refined, anchors[index], &pyramid_reference));
+            REQUIRE(anchors[index].refine.levels == refined.refine_levels);
+        }
+        const double run_x[3] = { 0.8, 2.1, 6.5 };
+        const double run_y[3] = { -0.4, -1.3, -1.1 };
+        std::vector<float> displacement_x(points_x.size(), 0.0f);
+        std::vector<float> displacement_y(points_x.size(), 0.0f);
+        for (int frame = 0; frame < 3; ++frame) {
+            const image::image moved = render(field, run_x[frame], run_y[frame], (frame == 2) ? 1.3 : 1.0, (frame == 2) ? -38.4 : 0.0);
+            const image::quaternion_wavelet current(moved);
+            const image::pyramid pyramid_current(moved);
+            std::vector<double> errors;
+            for (size_t index = 0; index < points_x.size(); ++index) {
+                feature::tracker::wavelet_flow::result outcome;
+                if (!feature::tracker::wavelet_flow::align(current, anchors[index], refined, displacement_x[index], displacement_y[index], outcome, &pyramid_current)) {
+                    continue;
+                }
+                const double error = std::hypot(static_cast<double>(displacement_x[index]) - run_x[frame], static_cast<double>(displacement_y[index]) - run_y[frame]);
+                REQUIRE(error < 0.5);
+                errors.push_back(error);
+            }
+            REQUIRE(errors.size() > (points_x.size() * 9) / 10);
+            std::sort(errors.begin(), errors.end());
+            REQUIRE(errors[errors.size() / 2] < 0.08);
+        }
+        const image::image flat(dimension, dimension);
+        for (size_t index = 0; index < dimension * dimension; ++index) {
+            flat.get_data()[index] = static_cast<unsigned char>(128);
+        }
+        feature::tracker::wavelet_flow::anchor unrefinable;
+        REQUIRE(!feature::tracker::wavelet_flow::build_anchor(image::quaternion_wavelet(flat), points_x[0], points_y[0], refined, unrefinable, &pyramid_reference) || (unrefinable.refine.levels > 0));
+        REQUIRE(!feature::tracker::wavelet_flow::build_anchor(reference, points_x[0], points_y[0], refined, unrefinable, nullptr) || unrefinable.refine.values.empty());
+        const image::pyramid pyramid_flat(flat);
+        REQUIRE(!feature::tracker::wavelet_flow::build_anchor(reference, points_x[0], points_y[0], refined, unrefinable, &pyramid_flat));
+        REQUIRE(unrefinable.levels.empty());
     }
 
     {

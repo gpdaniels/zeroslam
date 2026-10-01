@@ -362,6 +362,112 @@ int main(int argc, char* argv[]) {
         REQUIRE(std::abs(static_cast<double>(warm_out.y - cold_out.y)) < 0.02);
     }
 
+    {
+        // An alignment rejected by the error gate still reports where it went but leaves the caller's warp unchanged.
+        const image::image shifted = make_image(dimension, [&](const double x, const double y) {
+            return field.evaluate(x - 1.25, y + 0.5);
+        });
+        const image::pyramid pyramid_shifted(shifted);
+        feature::tracker::patch_flow::options settings = make_options(feature::tracker::patch_flow::model_kind::translation);
+        settings.max_error = 0.01f;
+        feature::tracker::patch_flow::anchor anchored;
+        REQUIRE(feature::tracker::patch_flow::build_anchor(pyramid_base, probe_x[0], probe_y[0], settings, anchored));
+        feature::tracker::patch_flow::state warp;
+        warp.translation_x = 0.3f;
+        warp.translation_y = -0.2f;
+        feature::tracker::patch_flow::result out;
+        REQUIRE(!feature::tracker::patch_flow::align(pyramid_shifted, anchored, settings, warp, out));
+        REQUIRE(!out.tracked);
+        REQUIRE(out.error > settings.max_error);
+        REQUIRE(std::abs(static_cast<double>(out.x - probe_x[0]) - 1.25) < 0.05);
+        REQUIRE(warp.translation_x == 0.3f);
+        REQUIRE(warp.translation_y == -0.2f);
+        REQUIRE(warp.linear_xx == 1.0f);
+        REQUIRE(warp.gain == 0.0f);
+    }
+
+    {
+        // Past a gain of 2x the anchor the geometric step must be scaled by 1/(1+gain), or the illumination models diverge.
+        const double shift_x = 0.4;
+        const double shift_y = -0.7;
+        const auto dark = [&](const double x, const double y) {
+            return 40.0 + 0.4 * (field.evaluate(x, y) - 100.0);
+        };
+        const image::image dim = make_image(dimension, dark);
+        const image::pyramid pyramid_dim(dim);
+        const feature::tracker::patch_flow::model_kind models[2] = { feature::tracker::patch_flow::model_kind::translation_illumination, feature::tracker::patch_flow::model_kind::affine_illumination };
+        for (const double factor : { 1.95, 2.05, 2.3, 2.8 }) {
+            const image::image exposed = make_image(dimension, [&](const double x, const double y) {
+                return (factor * dark(x - shift_x, y - shift_y)) + 5.0;
+            });
+            const image::pyramid pyramid_exposed(exposed);
+            for (const feature::tracker::patch_flow::model_kind model : models) {
+                const feature::tracker::patch_flow::options settings = make_options(model);
+                size_t close = 0;
+                double sum = 0.0;
+                size_t count = 0;
+                for (int row = 0; row < 6; ++row) {
+                    for (int column = 0; column < 5; ++column) {
+                        const float x = 30.5f + (32.0f * static_cast<float>(column));
+                        const float y = 30.5f + (26.0f * static_cast<float>(row));
+                        feature::tracker::patch_flow::state warp;
+                        feature::tracker::patch_flow::result out;
+                        REQUIRE(track_point(pyramid_exposed, pyramid_dim, x, y, settings, warp, out));
+                        const double error_x = static_cast<double>(out.x - x) - shift_x;
+                        const double error_y = static_cast<double>(out.y - y) - shift_y;
+                        sum += (error_x * error_x) + (error_y * error_y);
+                        close += (((error_x * error_x) + (error_y * error_y)) < 0.01) ? 1u : 0u;
+                        ++count;
+                        const double prediction = ((1.0 + static_cast<double>(warp.gain)) * 40.0) + static_cast<double>(warp.bias);
+                        REQUIRE(std::abs(prediction - ((factor * 40.0) + 5.0)) < 2.0);
+                    }
+                }
+                REQUIRE(close * 4 >= count * 3);
+                REQUIRE(std::sqrt(sum / static_cast<double>(count)) < 0.15);
+            }
+        }
+    }
+
+    {
+        // Near the border the level 1 window leaves the image as it moves toward the edge: with continue_outside that
+        // level is skipped from its entry state and level 0 still aligns, by default the alignment is rejected.
+        const double shift_x = -4.0;
+        const double shift_y = 0.5;
+        const image::image shifted = make_image(dimension, [&](const double x, const double y) {
+            return field.evaluate(x - shift_x, y - shift_y);
+        });
+        const image::pyramid pyramid_shifted(shifted);
+        feature::tracker::patch_flow::options settings = make_options(feature::tracker::patch_flow::model_kind::translation);
+        feature::tracker::patch_flow::anchor anchored;
+        REQUIRE(feature::tracker::patch_flow::build_anchor(pyramid_base, 22.5f, 96.5f, settings, anchored));
+        REQUIRE(anchored.levels == 2);
+        feature::tracker::patch_flow::state warp;
+        feature::tracker::patch_flow::result out;
+        REQUIRE(!feature::tracker::patch_flow::align(pyramid_shifted, anchored, settings, warp, out));
+        settings.continue_outside = true;
+        REQUIRE(feature::tracker::patch_flow::align(pyramid_shifted, anchored, settings, warp, out));
+        REQUIRE(std::abs(static_cast<double>(out.x - 22.5f) - shift_x) < 0.05);
+        REQUIRE(std::abs(static_cast<double>(out.y - 96.5f) - shift_y) < 0.05);
+    }
+
+    {
+        // A coarse level whose window fails the eigenvalue test caps the anchor below it instead of failing the anchor:
+        // period 4 stripes decimate to a Nyquist pattern at level 1, whose central differences vanish.
+        const image::image stripes = make_image(dimension, [](const double x, const double y) {
+            const double wave = 2.0 * pi / 4.0;
+            return 128.0 + (60.0 * std::cos(wave * x)) + (60.0 * std::cos((wave * y) + 0.7));
+        });
+        const image::pyramid pyramid_stripes(stripes);
+        const feature::tracker::patch_flow::options settings = make_options(feature::tracker::patch_flow::model_kind::translation);
+        feature::tracker::patch_flow::anchor anchored;
+        REQUIRE(feature::tracker::patch_flow::build_anchor(pyramid_stripes, 96.5f, 96.5f, settings, anchored));
+        REQUIRE(anchored.levels == 1);
+        REQUIRE(anchored.values.size() == static_cast<size_t>(19 * 19));
+        REQUIRE(anchored.gradients_x.size() == anchored.values.size());
+        REQUIRE(anchored.gradients_y.size() == anchored.values.size());
+        REQUIRE(anchored.inverse_hessian.size() == static_cast<size_t>(2 * 2));
+    }
+
     std::printf("All patch flow tests passed.\n");
     return 0;
 }

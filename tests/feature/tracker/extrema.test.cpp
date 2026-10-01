@@ -16,6 +16,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "feature/tracker/extrema.hpp"
 
+#include "feature/angle/orb.hpp"
+#include "feature/descriptor/orb.hpp"
+#include "image/blur.hpp"
+#include "match/distance/hamming.hpp"
+#include "match/pair.hpp"
 #include "math/math.hpp"
 
 #if defined(_MSC_VER)
@@ -112,6 +117,74 @@ int main(int argc, char* argv[]) {
     const std::vector<wave> waves = make_waves(42);
 
     {
+        const auto filter = [](std::vector<match::pair> matches, const size_t candidates) {
+            matches.resize(feature::tracker::extrema::ratio_filter(matches.data(), matches.size(), 0.75f, 50.0f, candidates));
+            return matches;
+        };
+        // The matcher returns only the best when its second best is at or above the threshold: kept only if any such second passes.
+        REQUIRE(filter({ { 0, 7, 49.0f } }, 10).empty());
+        REQUIRE(filter({ { 0, 7, 30.0f } }, 10).size() == 1);
+        REQUIRE(filter({ { 0, 7, 49.0f } }, 1).size() == 1);
+        // The matcher returns the second best too, whatever its score.
+        REQUIRE(filter({ { 0, 7, 49.0f }, { 0, 3, 50.0f } }, 10).empty());
+        REQUIRE(filter({ { 0, 7, 30.0f }, { 0, 3, 50.0f } }, 10).size() == 1);
+        REQUIRE(filter({ { 0, 7, 30.0f }, { 0, 3, 45.0f } }, 10).size() == 1);
+        REQUIRE(filter({ { 0, 7, 34.0f }, { 0, 3, 45.0f } }, 10).empty());
+        REQUIRE(filter({ { 0, 7, 0.0f }, { 0, 3, 0.0f } }, 10).empty());
+        const std::vector<match::pair> unordered = filter({ { 0, 3, 50.0f }, { 0, 7, 30.0f } }, 10);
+        REQUIRE((unordered.size() == 1) && (unordered[0].rhs_index == 7) && (unordered[0].score == 30.0f));
+        const std::vector<match::pair> triple = filter({ { 0, 1, 10.0f }, { 0, 2, 40.0f }, { 0, 3, 20.0f } }, 10);
+        REQUIRE((triple.size() == 1) && (triple[0].rhs_index == 1));
+        REQUIRE(filter({ { 0, 1, 10.0f }, { 0, 2, 12.0f }, { 0, 3, 11.0f } }, 10).empty());
+        const std::vector<match::pair> groups = filter({ { 0, 5, 10.0f }, { 0, 6, 40.0f }, { 1, 2, 45.0f }, { 1, 4, 46.0f }, { 2, 9, 20.0f }, { 3, 8, 12.0f }, { 3, 1, 30.0f } }, 10);
+        REQUIRE(groups.size() == 3);
+        REQUIRE((groups[0].lhs_index == 0) && (groups[0].rhs_index == 5));
+        REQUIRE((groups[1].lhs_index == 2) && (groups[1].rhs_index == 9));
+        REQUIRE((groups[2].lhs_index == 3) && (groups[2].rhs_index == 8));
+    }
+
+    {
+        // Spawn descriptors describe the gaussian 7x7 smoothed image, with the dominant angle of the raw image.
+        feature::tracker::extrema tracker(test_options());
+        const std::vector<unsigned char> frame_data = sample_frame(waves, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        std::vector<unsigned char> smoothed(frame_data.size());
+        image::blur::gaussian_7x7(frame_data.data(), frame_width, frame_height, frame_width, smoothed.data());
+        image::image frame(frame_height, frame_width, const_cast<unsigned char*>(frame_data.data()));
+        tracker.update(0, frame);
+        size_t described = 0;
+        size_t matched = 0;
+        size_t differs = 0;
+        for (feature::tracker::tracker::track* track : tracker.active_tracks()) {
+            if (!track->descriptor_valid) {
+                continue;
+            }
+            ++described;
+            const int cell_x = static_cast<int>(math::round(track->x - 0.5f));
+            const int cell_y = static_cast<int>(math::round(track->y - 0.5f));
+            bool found = false;
+            for (int v = -1; (v <= 1) && !found; ++v) {
+                for (int u = -1; (u <= 1) && !found; ++u) {
+                    const size_t offset = (static_cast<size_t>(cell_y + v) * static_cast<size_t>(frame_width)) + static_cast<size_t>(cell_x + u);
+                    const float angle = feature::angle::orb::dominant_angle(frame_data.data() + offset, frame_width);
+                    feature::descriptor::binary<256> expected;
+                    feature::descriptor::orb::describe(smoothed.data() + offset, frame_width, angle, expected);
+                    if (match::distance::hamming::distance(expected, track->descriptor) != 0u) {
+                        continue;
+                    }
+                    found = true;
+                    feature::descriptor::binary<256> raw;
+                    feature::descriptor::orb::describe(frame_data.data() + offset, frame_width, angle, raw);
+                    differs += (match::distance::hamming::distance(raw, track->descriptor) != 0u) ? 1u : 0u;
+                }
+            }
+            matched += found ? 1u : 0u;
+        }
+        REQUIRE(described > 100);
+        REQUIRE(matched == described);
+        REQUIRE(differs * 2 >= matched);
+    }
+
+    {
         feature::tracker::extrema tracker(test_options());
         const std::vector<unsigned char> frame_data = sample_frame(waves, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f);
         image::image frame(frame_height, frame_width, const_cast<unsigned char*>(frame_data.data()));
@@ -122,15 +195,39 @@ int main(int argc, char* argv[]) {
         std::vector<feature::tracker::tracker::track*> active = tracker.active_tracks();
         REQUIRE(active.size() == diagnostics.spawned);
         const float spacing_squared = 4.0f * 4.0f;
+        const float border = static_cast<float>(test_options().descriptor_border);
+        size_t invalid = 0;
+        size_t valid = 0;
         for (size_t i = 0; i < active.size(); ++i) {
             REQUIRE(active[i]->length == 1);
             REQUIRE(tracker.sign_of(active[i]->id) != 0);
+            REQUIRE(active[i]->measurement_octave == 0);
+            REQUIRE(active[i]->history.size() == 1);
+            REQUIRE(active[i]->history[0].measurement_octave == 0);
+            const float x = active[i]->x - 0.5f;
+            const float y = active[i]->y - 0.5f;
+            const float inset = math::min(math::min(x, y), math::min(static_cast<float>(frame_width - 1) - x, static_cast<float>(frame_height - 1) - y));
+            if (inset < border - 1.0f) {
+                REQUIRE(!active[i]->descriptor_valid);
+                ++invalid;
+            }
+            if (inset > border + 1.0f) {
+                REQUIRE(active[i]->descriptor_valid);
+                ++valid;
+            }
+            if (!active[i]->descriptor_valid) {
+                for (size_t byte = 0; byte < sizeof(active[i]->descriptor.data); ++byte) {
+                    REQUIRE(active[i]->descriptor.data[byte] == 0);
+                }
+            }
             for (size_t j = i + 1; j < active.size(); ++j) {
                 const float du = active[i]->x - active[j]->x;
                 const float dv = active[i]->y - active[j]->y;
                 REQUIRE(du * du + dv * dv >= spacing_squared * 0.99f);
             }
         }
+        REQUIRE(invalid > 0);
+        REQUIRE(valid > 100);
     }
 
     {
@@ -191,6 +288,8 @@ int main(int argc, char* argv[]) {
             REQUIRE(track->length == 2);
             REQUIRE(track->history.size() == 2);
             REQUIRE(track->history[1].frame_id == 1);
+            REQUIRE(track->history[1].measurement_octave == 0);
+            REQUIRE(track->measurement_octave == 0);
         }
         REQUIRE(interior > 50);
         REQUIRE(surviving * 10 >= interior * 8);

@@ -24,6 +24,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "feature/tracker/dominant_flow.hpp"
 #include "feature/tracker/tracker.hpp"
 #include "image/image.hpp"
+#include "match/pair.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -115,6 +116,11 @@ namespace feature::tracker {
         explicit extrema(const options& opts);
 
         void update(int frame_id, const image::image& image_level0);
+
+        // Keeps the best of each lhs group of k-best matches when it passes the ratio test against the group's second
+        // best, and returns the kept count. A lone match is kept when it had no other candidate, or when it would pass
+        // the ratio test against any second best at or above the matcher's threshold.
+        static size_t ratio_filter(match::pair* matches, size_t count, float ratio, float threshold, size_t candidates);
 
         void set_options(const options& opts);
         const options& get_options() const;

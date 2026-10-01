@@ -224,6 +224,50 @@ int main(int argc, char* argv[]) {
         REQUIRE(first.by == second.by);
     }
 
+    {
+        // 50 tracks in a 40 px window far from the image origin: a well conditioned fit however far the tracks are.
+        unsigned long long state = 23;
+        feature::tracker::dominant_flow::affine truth;
+        truth.a00 = 1.01f;
+        truth.a01 = 0.02f;
+        truth.a10 = -0.015f;
+        truth.a11 = 0.99f;
+        truth.bx = 3.5f;
+        truth.by = -2.25f;
+        pair_set pairs;
+        for (size_t i = 0; i < 50; ++i) {
+            const float x = 620.0f + 40.0f * next_random_unit(state);
+            const float y = 460.0f + 40.0f * next_random_unit(state);
+            float mapped_x;
+            float mapped_y;
+            truth.apply(x, y, mapped_x, mapped_y);
+            pairs.from_x.push_back(x);
+            pairs.from_y.push_back(y);
+            pairs.to_x.push_back(mapped_x);
+            pairs.to_y.push_back(mapped_y);
+        }
+        feature::tracker::dominant_flow::affine flow;
+        REQUIRE(feature::tracker::dominant_flow::fit(pairs.from_x.data(), pairs.from_y.data(), pairs.to_x.data(), pairs.to_y.data(), pairs.from_x.size(), feature::tracker::dominant_flow::options(), flow));
+        REQUIRE(affine_close(flow, truth, 1.0e-3f, 0.5f));
+        for (size_t i = 0; i < pairs.from_x.size(); ++i) {
+            float fitted_x;
+            float fitted_y;
+            flow.apply(pairs.from_x[i], pairs.from_y[i], fitted_x, fitted_y);
+            REQUIRE(close(fitted_x, pairs.to_x[i], 1.0e-2f));
+            REQUIRE(close(fitted_y, pairs.to_y[i], 1.0e-2f));
+        }
+
+        // The same window with a pure translation, as a tracker frame usually is.
+        feature::tracker::dominant_flow::affine shift;
+        shift.bx = -4.0f;
+        shift.by = 1.5f;
+        for (size_t i = 0; i < pairs.from_x.size(); ++i) {
+            shift.apply(pairs.from_x[i], pairs.from_y[i], pairs.to_x[i], pairs.to_y[i]);
+        }
+        REQUIRE(feature::tracker::dominant_flow::fit(pairs.from_x.data(), pairs.from_y.data(), pairs.to_x.data(), pairs.to_y.data(), pairs.from_x.size(), feature::tracker::dominant_flow::options(), flow));
+        REQUIRE(affine_close(flow, shift, 1.0e-4f, 0.1f));
+    }
+
     std::printf("All dominant flow tests passed.\n");
     return 0;
 }

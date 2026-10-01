@@ -18,6 +18,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef ZEROSLAM_FEATURE_TRACKER_WAVELET_FLOW_HPP
 #define ZEROSLAM_FEATURE_TRACKER_WAVELET_FLOW_HPP
 
+#include "feature/tracker/patch_flow.hpp"
+#include "image/pyramid.hpp"
 #include "image/quaternion_wavelet.hpp"
 
 namespace feature::tracker {
@@ -48,6 +50,14 @@ namespace feature::tracker {
             bool measured_frequency = true;
             bool robust = false;
             bool guess_first = false;
+            // With pyramids, each estimate is refined and verified in the intensity domain by a gain and bias
+            // compensated patch alignment, which must converge within refine_bound pixels of the phase estimate.
+            int refine_levels = 1;
+            int refine_half_window = 7;
+            int refine_iterations = 30;
+            double refine_min_eigenvalue = 1e-3;
+            float refine_max_error = 40.0f;
+            float refine_bound = 4.0f;
         };
 
         struct anchor final {
@@ -67,6 +77,7 @@ namespace feature::tracker {
             float centre_x = 0.0f;
             float centre_y = 0.0f;
             std::vector<level> levels;
+            patch_flow::anchor refine;
         };
 
     public:
@@ -92,12 +103,14 @@ namespace feature::tracker {
             result* results_out,
             const options& settings,
             const float* guess_x = nullptr,
-            const float* guess_y = nullptr
+            const float* guess_y = nullptr,
+            const image::pyramid* pyramid_previous = nullptr,
+            const image::pyramid* pyramid_next = nullptr
         );
 
-        static bool build_anchor(const image::quaternion_wavelet& transform, float x, float y, const options& settings, anchor& out);
+        static bool build_anchor(const image::quaternion_wavelet& transform, float x, float y, const options& settings, anchor& out, const image::pyramid* pyramid = nullptr);
 
-        static bool align(const image::quaternion_wavelet& transform, const anchor& anchored, const options& settings, float& displacement_x, float& displacement_y, result& out);
+        static bool align(const image::quaternion_wavelet& transform, const anchor& anchored, const options& settings, float& displacement_x, float& displacement_y, result& out, const image::pyramid* pyramid = nullptr);
 
     private:
         struct window final {
@@ -125,7 +138,13 @@ namespace feature::tracker {
 
         static int level_strides(const image::quaternion_wavelet::level& data, int level, int* strides);
 
-        static bool solve_level(const window& shape, const image::quaternion_wavelet::level& current, const options& settings, double& displacement_x, double& displacement_y, double& error);
+        static bool solve_level(const window& shape, const image::quaternion_wavelet::level& current, const options& settings, double& displacement_x, double& displacement_y, double& error, bool evaluate_only = false);
+
+        static bool bounded_level(const window& shape, const image::quaternion_wavelet::level& current, const options& settings, bool bounded, double bound, double& displacement_x, double& displacement_y, double& error);
+
+        static patch_flow::options refine_options(const options& settings);
+
+        static bool refine(const patch_flow::anchor& template_patch, const image::pyramid& target, const options& settings, float estimate_x, float estimate_y, float& refined_x, float& refined_y);
     };
 }
 

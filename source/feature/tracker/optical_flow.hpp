@@ -37,6 +37,18 @@ namespace feature::tracker {
         constexpr static const int maximum_half_window = 15;
         constexpr static const int maximum_window_width = 2 * maximum_half_window + 1;
         constexpr static const int maximum_window_area = maximum_window_width * maximum_window_width;
+        constexpr static const int maximum_padded_width = maximum_window_width + 2;
+        constexpr static const int maximum_padded_area = maximum_padded_width * maximum_padded_width;
+        // A weak coarse level is skipped with its flow propagated. The finer levels may then hold only aliased residue of a
+        // fine texture, whose estimate lands on a wrong minimum with an error comparable to the template's own contrast,
+        // so such a track must end with a mean absolute error below this fraction of the template's mean absolute
+        // deviation.
+        constexpr static const double skipped_level_relative_error = 0.5;
+
+        // With continue_outside a coarse level whose iteration leaves the image restarts the next level from its entry
+        // flow instead of rejecting the track. It is off by default: the tracks it keeps lie in a band about 64-130 px
+        // from the image border, and on undistorted fisheye frames (LaMAria R_02_easy) they raised the median
+        // trajectory error over five runs from 0.46 m to 2.57 m.
 
         struct result final {
             float x;
@@ -52,6 +64,9 @@ namespace feature::tracker {
         static void sample_table(float centre, float flow, float shift, int half_window, int* __restrict const base, float* __restrict const weight);
         static void sample_window(const unsigned char* __restrict const data, int width, const int* __restrict const base_x, const float* __restrict const weight_x, const int* __restrict const base_y, const float* __restrict const weight_y, int half_window, float* __restrict const window);
 
+        // Samples the window and its central difference gradients from one window padded by a pixel on each side.
+        static void sample_gradients(const image::image& source, float centre_x, float centre_y, int half_window, float* __restrict const values, float* __restrict const gradients_x, float* __restrict const gradients_y);
+
         static bool track_single(
             const image::pyramid& pyramid_previous,
             const image::pyramid& pyramid_next,
@@ -66,7 +81,8 @@ namespace feature::tracker {
             float& result_error,
             float guess_x = 0.0f,
             float guess_y = 0.0f,
-            bool damped_steps = false
+            bool damped_steps = false,
+            bool continue_outside = false
         );
 
         static void track(
@@ -84,7 +100,8 @@ namespace feature::tracker {
             float fb_threshold = 1.0f,
             const float* guess_x = nullptr,
             const float* guess_y = nullptr,
-            bool damped_steps = false
+            bool damped_steps = false,
+            bool continue_outside = false
         );
     };
 }

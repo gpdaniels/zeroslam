@@ -38,6 +38,7 @@ namespace feature::tracker {
         constexpr static const int maximum_window_width = 2 * maximum_half_window + 1;
         constexpr static const int maximum_window_area = maximum_window_width * maximum_window_width;
         constexpr static const int maximum_parameters = 8;
+        constexpr static const double minimum_contrast = 0.0625;
 
         enum class model_kind {
             translation,
@@ -55,6 +56,8 @@ namespace feature::tracker {
             double min_eigenvalue = 1e-3;
             float max_error = 40.0f;
             bool damped_steps = false;
+            // As for the KLT, a coarse level whose window leaves the image only restarts the next level when asked to.
+            bool continue_outside = false;
         };
 
         struct anchor final {

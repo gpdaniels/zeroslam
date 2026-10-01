@@ -560,6 +560,49 @@ int main(int argc, char* argv[]) {
         REQUIRE(manager.tracks().size() == 2);
         REQUIRE(manager.tracks()[0].octave == 0);
         REQUIRE(manager.tracks()[1].octave == 3);
+        REQUIRE(manager.tracks()[0].measurement_octave == 0);
+        REQUIRE(manager.tracks()[1].measurement_octave == 3);
+        REQUIRE(manager.tracks()[1].history.size() == 1);
+        REQUIRE(manager.tracks()[1].history[0].measurement_octave == 3);
+        REQUIRE(manager.tracks()[0].descriptor_valid);
+        REQUIRE(manager.tracks()[1].descriptor_valid);
+    }
+
+    {
+        constexpr static const int base_x[3] = { 60, 100, 140 };
+        constexpr static const int base_y[3] = { 70, 110, 80 };
+        constexpr static const size_t point_count = 3;
+        const auto run = [&](const feature::tracker::tracker::association_kind association, const int detection_octave, const int expected_octave) {
+            feature::tracker::tracker::options opts;
+            opts.association = association;
+            feature::tracker::tracker manager(opts);
+            for (int k = 0; k < 3; ++k) {
+                const image::image frame = make_frame(dimension, k, shift_x, shift_y);
+                std::vector<feature::point> keypoints;
+                std::vector<feature::descriptor::binary<256>> descriptors;
+                for (size_t p = 0; p < point_count; ++p) {
+                    const int x = base_x[p] + k * shift_x;
+                    const int y = base_y[p] + k * shift_y;
+                    keypoints.push_back(feature::point{ static_cast<float>(x), static_cast<float>(y), 0.0f, 0.0f, detection_octave });
+                    descriptors.push_back(describe_at(frame, x, y));
+                }
+                manager.update(k, image::pyramid(frame), keypoints, descriptors);
+            }
+            REQUIRE(manager.tracks().size() == point_count);
+            for (size_t p = 0; p < point_count; ++p) {
+                const feature::tracker::tracker::track& followed = manager.tracks()[p];
+                REQUIRE(followed.active);
+                REQUIRE(followed.octave == detection_octave);
+                REQUIRE(followed.measurement_octave == expected_octave);
+                REQUIRE(followed.history.size() == 3);
+                REQUIRE(followed.history[0].measurement_octave == detection_octave);
+                REQUIRE(followed.history[1].measurement_octave == expected_octave);
+                REQUIRE(followed.history[2].measurement_octave == expected_octave);
+            }
+        };
+        run(feature::tracker::tracker::association_kind::optical_flow, 1, 0);
+        run(feature::tracker::tracker::association_kind::both, 1, 0);
+        run(feature::tracker::tracker::association_kind::descriptor, 1, 1);
     }
 
     {
@@ -701,7 +744,7 @@ int main(int argc, char* argv[]) {
         constexpr static const size_t point_count = 4;
         constexpr static const int frame_count = 8;
 
-        const auto run = [&](const feature::tracker::patch_flow::model_kind model, const float refresh) {
+        const auto run = [&](const feature::tracker::patch_flow::model_kind model, const float refresh, const bool refreshed) {
             feature::tracker::tracker::options opts;
             opts.association = feature::tracker::tracker::association_kind::optical_flow;
             opts.anchored_patches = true;
@@ -710,7 +753,9 @@ int main(int argc, char* argv[]) {
             feature::tracker::tracker manager(opts);
             int point_ids[point_count] = { -1, -1, -1, -1 };
             for (int k = 0; k < frame_count; ++k) {
-                const image::image frame = make_frame(dimension, k, shift_x, shift_y);
+                const image::image frame = make_image(dimension, dimension, [=](double x, double y) {
+                    return texture(x - static_cast<double>(k * shift_x), y - static_cast<double>(k * shift_y)) + (2.0 * frame_noise(x, y, k));
+                });
                 std::vector<feature::point> keypoints;
                 std::vector<feature::descriptor::binary<256>> descriptors;
                 for (size_t p = 0; (k == 0) && (p < point_count); ++p) {
@@ -738,15 +783,21 @@ int main(int argc, char* argv[]) {
                 const double expected_y = static_cast<double>(base_y[p] + (frame_count - 1) * shift_y);
                 REQUIRE(std::abs(static_cast<double>(followed->x) - expected_x) < 0.5);
                 REQUIRE(std::abs(static_cast<double>(followed->y) - expected_y) < 0.5);
+                // A refreshed anchor is rebuilt where the track is now, a kept one stays at the spawn position.
+                REQUIRE(followed->anchored != nullptr);
+                const double anchor_travel = std::abs(static_cast<double>(followed->anchored->anchor.centre_x) + 0.5 - static_cast<double>(base_x[p]));
+                REQUIRE((anchor_travel > 1.0) == refreshed);
             }
             REQUIRE(manager.tracks().size() == point_count);
         };
 
-        run(feature::tracker::patch_flow::model_kind::translation, 0.0f);
-        run(feature::tracker::patch_flow::model_kind::affine, 0.0f);
-        run(feature::tracker::patch_flow::model_kind::translation_illumination, 0.0f);
-        run(feature::tracker::patch_flow::model_kind::affine_illumination, 0.0f);
-        run(feature::tracker::patch_flow::model_kind::translation, 1.0f);
+        run(feature::tracker::patch_flow::model_kind::translation, 0.0f, false);
+        run(feature::tracker::patch_flow::model_kind::affine, 0.0f, false);
+        run(feature::tracker::patch_flow::model_kind::translation_illumination, 0.0f, false);
+        run(feature::tracker::patch_flow::model_kind::affine_illumination, 0.0f, false);
+        // The refresh threshold is a fraction of the rejection gate: a tiny fraction refreshes every frame, 1 never does.
+        run(feature::tracker::patch_flow::model_kind::translation, 0.001f, true);
+        run(feature::tracker::patch_flow::model_kind::translation, 1.0f, false);
     }
 
     {
@@ -793,7 +844,10 @@ int main(int argc, char* argv[]) {
                 }
                 const double expected_x = static_cast<double>(base_x[p] + ((frame_count - 1) * step_x));
                 const double expected_y = static_cast<double>(base_y[p] + ((frame_count - 1) * step_y));
-                followed_count += ((std::abs(static_cast<double>(followed->x) - expected_x) < 1.0) && (std::abs(static_cast<double>(followed->y) - expected_y) < 1.0)) ? 1u : 0u;
+                // An active track is right: a wrong estimate must be rejected, not carried.
+                REQUIRE(std::abs(static_cast<double>(followed->x) - expected_x) < 1.0);
+                REQUIRE(std::abs(static_cast<double>(followed->y) - expected_y) < 1.0);
+                ++followed_count;
             }
             return followed_count;
         };
@@ -804,8 +858,134 @@ int main(int argc, char* argv[]) {
         REQUIRE(run(6, 3, 0.0, feature::tracker::tracker::wavelet_seed_kind::rest, true, 6) == point_count);
         REQUIRE(run(10, 5, 0.0, feature::tracker::tracker::wavelet_seed_kind::rest, false, 4) == 0);
         REQUIRE(run(10, 5, 0.0, feature::tracker::tracker::wavelet_seed_kind::klt, false, 4) == point_count);
-        REQUIRE(run(2, 1, 40.0, feature::tracker::tracker::wavelet_seed_kind::klt, false, 6) == 0);
+        // The intensity refinement keeps the phase estimates under heavy noise, whatever seeds them.
+        REQUIRE(run(2, 1, 40.0, feature::tracker::tracker::wavelet_seed_kind::klt, false, 6) == point_count);
         REQUIRE(run(2, 1, 40.0, feature::tracker::tracker::wavelet_seed_kind::klt_fallback, false, 6) == point_count);
+        REQUIRE(run(2, 1, 40.0, feature::tracker::tracker::wavelet_seed_kind::rest, false, 6) == point_count);
+    }
+
+    {
+        // Wavelet anchors refresh on the same fraction of their own gate, the rms phase error.
+        constexpr static const size_t wavelet_dimension = 256;
+        constexpr static const int base_x[3] = { 90, 128, 160 };
+        constexpr static const int base_y[3] = { 90, 110, 150 };
+        constexpr static const size_t point_count = 3;
+        const auto run = [&](const float refresh, const bool refreshed) {
+            feature::tracker::tracker::options opts;
+            opts.association = feature::tracker::tracker::association_kind::optical_flow;
+            opts.flow = feature::tracker::tracker::flow_kind::wavelet;
+            opts.anchored_patches = true;
+            opts.anchor_refresh_error = refresh;
+            feature::tracker::tracker manager(opts);
+            for (int k = 0; k < 4; ++k) {
+                const image::image frame = make_image(wavelet_dimension, wavelet_dimension, [=](double x, double y) {
+                    return broadband_texture(x - static_cast<double>(2 * k), y - static_cast<double>(k));
+                });
+                std::vector<feature::point> keypoints;
+                std::vector<feature::descriptor::binary<256>> descriptors;
+                for (size_t p = 0; (k == 0) && (p < point_count); ++p) {
+                    keypoints.push_back(feature::point{ static_cast<float>(base_x[p]), static_cast<float>(base_y[p]), 0.0f, 0.0f, 0 });
+                    descriptors.push_back(describe_at(frame, base_x[p], base_y[p]));
+                }
+                manager.update(k, image::pyramid(frame), keypoints, descriptors);
+            }
+            REQUIRE(manager.tracks().size() == point_count);
+            for (size_t p = 0; p < point_count; ++p) {
+                const feature::tracker::tracker::track& followed = manager.tracks()[p];
+                REQUIRE(followed.active);
+                REQUIRE(followed.wavelet_anchored != nullptr);
+                const double anchor_travel = std::abs(static_cast<double>(followed.wavelet_anchored->anchor.centre_x) + 0.5 - static_cast<double>(base_x[p]));
+                REQUIRE((anchor_travel > 1.0) == refreshed);
+            }
+        };
+        run(0.001f, true);
+        run(1.0f, false);
+    }
+
+    {
+        // Spawning skips a detection nearer than min_spawn_distance to any track, the ones spawned before it included:
+        // the grid must choose exactly the detections the all-pairs rule chooses.
+        unsigned int state = 12345u;
+        const auto next_unit = [&state]() {
+            state = (state * 1664525u) + 1013904223u;
+            return static_cast<float>(state >> 8) / 16777216.0f;
+        };
+        const image::image image0 = make_frame(dimension, 0, shift_x, shift_y);
+        const feature::descriptor::binary<256> descriptor = describe_at(image0, 100, 100);
+        for (const float spacing : { 8.0f, 3.5f, 0.0f }) {
+            feature::tracker::tracker::options opts;
+            opts.min_spawn_distance = spacing;
+            feature::tracker::tracker manager(opts);
+            std::vector<float> kept_x;
+            std::vector<float> kept_y;
+            for (int t = 0; t < 40; ++t) {
+                const feature::point existing{ 600.0f * next_unit(), 440.0f * next_unit(), 0.0f, 0.0f, 0 };
+                static_cast<void>(manager.spawn(0, existing, descriptor));
+                kept_x.push_back(existing.x);
+                kept_y.push_back(existing.y);
+            }
+            std::vector<feature::point> keypoints;
+            std::vector<feature::descriptor::binary<256>> descriptors;
+            for (int d = 0; d < 3000; ++d) {
+                feature::point detection{ 640.0f * next_unit(), 480.0f * next_unit(), 0.0f, 0.0f, 0 };
+                if ((d > 0) && (next_unit() < 0.5f)) {
+                    detection.x = keypoints.back().x + (12.0f * (next_unit() - 0.5f));
+                    detection.y = keypoints.back().y + (12.0f * (next_unit() - 0.5f));
+                }
+                keypoints.push_back(detection);
+                descriptors.push_back(descriptor);
+            }
+            manager.update(0, image::pyramid(image0), keypoints, descriptors);
+            const float limit = spacing * spacing;
+            for (const feature::point& detection : keypoints) {
+                bool crowded = false;
+                for (size_t k = 0; (k < kept_x.size()) && !crowded; ++k) {
+                    const float dx = detection.x - kept_x[k];
+                    const float dy = detection.y - kept_y[k];
+                    crowded = ((dx * dx) + (dy * dy)) < limit;
+                }
+                if (!crowded) {
+                    kept_x.push_back(detection.x);
+                    kept_y.push_back(detection.y);
+                }
+            }
+            REQUIRE(manager.tracks().size() == kept_x.size());
+            for (size_t k = 0; k < kept_x.size(); ++k) {
+                REQUIRE(manager.tracks()[k].x == kept_x[k]);
+                REQUIRE(manager.tracks()[k].y == kept_y[k]);
+            }
+        }
+    }
+
+    {
+        // A detection the drift check accepts for a flow track is claimed, so a lost track cannot take it as well.
+        feature::tracker::tracker::options opts;
+        opts.collision_distance = 0.0f;
+        feature::tracker::tracker manager(opts);
+        constexpr static const int px = 100;
+        constexpr static const int py = 100;
+        const image::image image0 = make_frame(dimension, 0, shift_x, shift_y);
+        const feature::descriptor::binary<256> descriptor = describe_at(image0, px, py);
+        {
+            const std::vector<feature::point> keypoints = { feature::point{ static_cast<float>(px), static_cast<float>(py), 0.0f, 0.0f, 0 } };
+            const std::vector<feature::descriptor::binary<256>> descriptors = { descriptor };
+            manager.update(0, image::pyramid(image0), keypoints, descriptors);
+        }
+        REQUIRE(manager.tracks().size() == 1);
+        const int flowing_id = manager.tracks()[0].id;
+        feature::tracker::tracker::track& lost = manager.spawn(0, feature::point{ static_cast<float>(px + 3), static_cast<float>(py), 0.0f, 0.0f, 0 }, descriptor);
+        lost.active = false;
+        const int lost_id = lost.id;
+        {
+            const image::image image1 = make_frame(dimension, 1, shift_x, shift_y);
+            const std::vector<feature::point> keypoints = { feature::point{ static_cast<float>(px + shift_x), static_cast<float>(py + shift_y), 0.0f, 0.0f, 0 } };
+            const std::vector<feature::descriptor::binary<256>> descriptors = { describe_at(image1, px + shift_x, py + shift_y) };
+            manager.update(1, image::pyramid(image1), keypoints, descriptors);
+        }
+        REQUIRE(manager.find(flowing_id) != nullptr);
+        REQUIRE(manager.find(flowing_id)->active);
+        REQUIRE(manager.find(lost_id) != nullptr);
+        REQUIRE(!manager.find(lost_id)->active);
     }
 
     return EXIT_SUCCESS;

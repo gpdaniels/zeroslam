@@ -45,6 +45,112 @@ namespace feature::tracker {
         return false;
     }
 
+    void tracker::spawn_unclaimed(const int frame_id, const std::vector<feature::point>& keypoints, const std::vector<descriptor::binary<256>>& descriptors, const size_t detection_count, unsigned char* const claimed) {
+        // Spawns each unclaimed detection that no track (including one spawned just before it) is nearer than the
+        // spawn distance to, checking only the tracks in neighbouring cells of a grid of spawn-distance cells.
+        const float limit = this->settings.min_spawn_distance;
+        const float limit_squared = limit * limit;
+        bool any = false;
+        float minimum_x = 0.0f;
+        float minimum_y = 0.0f;
+        float maximum_x = 0.0f;
+        float maximum_y = 0.0f;
+        for (size_t d = 0; d < detection_count; ++d) {
+            if (claimed[d]) {
+                continue;
+            }
+            minimum_x = any ? math::min(minimum_x, keypoints[d].x) : keypoints[d].x;
+            minimum_y = any ? math::min(minimum_y, keypoints[d].y) : keypoints[d].y;
+            maximum_x = any ? math::max(maximum_x, keypoints[d].x) : keypoints[d].x;
+            maximum_y = any ? math::max(maximum_y, keypoints[d].y) : keypoints[d].y;
+            any = true;
+        }
+        if (!any) {
+            return;
+        }
+        core::arena::scope scratch;
+        constexpr static const double maximum_cells_per_axis = 1024.0;
+        const double margin = math::max(0.0, static_cast<double>(limit));
+        const double origin_x = static_cast<double>(minimum_x) - margin;
+        const double origin_y = static_cast<double>(minimum_y) - margin;
+        const double span_x = static_cast<double>(maximum_x) - static_cast<double>(minimum_x) + (2.0 * margin);
+        const double span_y = static_cast<double>(maximum_y) - static_cast<double>(minimum_y) + (2.0 * margin);
+        const double cell = math::max(math::max(margin, 1.0), math::max(span_x, span_y) / maximum_cells_per_axis);
+        const bool gridded = (limit > 0.0f) && math::isfinite(span_x) && math::isfinite(span_y);
+        const int columns = gridded ? (static_cast<int>(span_x / cell) + 1) : 1;
+        const int rows = gridded ? (static_cast<int>(span_y / cell) + 1) : 1;
+        std::vector<unsigned int, core::arena_allocator<unsigned int>> heads(static_cast<size_t>(columns) * static_cast<size_t>(rows), 0u);
+        std::vector<unsigned int, core::arena_allocator<unsigned int>> links;
+        std::vector<float, core::arena_allocator<float>> occupied_x;
+        std::vector<float, core::arena_allocator<float>> occupied_y;
+        const auto cell_of = [&](const float x, const float y, int& cell_x, int& cell_y) {
+            const double scaled_x = (static_cast<double>(x) - origin_x) / cell;
+            const double scaled_y = (static_cast<double>(y) - origin_y) / cell;
+            if (!(scaled_x >= 0.0) || !(scaled_y >= 0.0) || !(scaled_x < static_cast<double>(columns)) || !(scaled_y < static_cast<double>(rows))) {
+                return false;
+            }
+            cell_x = static_cast<int>(scaled_x);
+            cell_y = static_cast<int>(scaled_y);
+            return true;
+        };
+        const auto occupy = [&](const float x, const float y) {
+            int cell_x = 0;
+            int cell_y = 0;
+            if (!cell_of(x, y, cell_x, cell_y)) {
+                return;
+            }
+            const size_t index = (static_cast<size_t>(cell_y) * static_cast<size_t>(columns)) + static_cast<size_t>(cell_x);
+            occupied_x.push_back(x);
+            occupied_y.push_back(y);
+            links.push_back(heads[index]);
+            heads[index] = static_cast<unsigned int>(occupied_x.size());
+        };
+        if (gridded) {
+            for (size_t i = 0; i < this->track_list.size(); ++i) {
+                occupy(this->track_list[i].x, this->track_list[i].y);
+            }
+        }
+        for (size_t d = 0; d < detection_count; ++d) {
+            if (claimed[d]) {
+                continue;
+            }
+            const float x = keypoints[d].x;
+            const float y = keypoints[d].y;
+            int cell_x = 0;
+            int cell_y = 0;
+            bool crowded = false;
+            if (gridded && cell_of(x, y, cell_x, cell_y)) {
+                for (int offset_y = -1; (offset_y <= 1) && !crowded; ++offset_y) {
+                    for (int offset_x = -1; (offset_x <= 1) && !crowded; ++offset_x) {
+                        const int neighbour_x = cell_x + offset_x;
+                        const int neighbour_y = cell_y + offset_y;
+                        if ((neighbour_x < 0) || (neighbour_y < 0) || (neighbour_x >= columns) || (neighbour_y >= rows)) {
+                            continue;
+                        }
+                        const size_t index = (static_cast<size_t>(neighbour_y) * static_cast<size_t>(columns)) + static_cast<size_t>(neighbour_x);
+                        for (unsigned int item = heads[index]; item != 0u; item = links[item - 1u]) {
+                            if (tracker::distance_squared(x, y, occupied_x[item - 1u], occupied_y[item - 1u]) < limit_squared) {
+                                crowded = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            else {
+                crowded = this->near_existing_track(x, y);
+            }
+            if (crowded) {
+                continue;
+            }
+            this->spawn(frame_id, keypoints[d], descriptors[d]);
+            if (gridded) {
+                occupy(x, y);
+            }
+            claimed[d] = static_cast<unsigned char>(1);
+        }
+    }
+
     patch_flow::options tracker::anchor_options() const {
         patch_flow::options built;
         built.model = this->settings.anchor_model;
@@ -63,10 +169,17 @@ namespace feature::tracker {
         built.fb_threshold = this->settings.klt_fb_threshold;
         built.robust = this->settings.wavelet_robust;
         built.guess_first = (this->settings.wavelet_seed != wavelet_seed_kind::rest);
+        // The tracker always refines the phase estimates in the intensity domain, which verifies them, so the phase gate
+        // only rejects estimates too poor to refine.
+        built.max_error = 2.0f;
+        built.refine_half_window = this->settings.klt_half_window;
+        built.refine_iterations = this->settings.klt_iterations;
+        built.refine_min_eigenvalue = static_cast<double>(this->settings.klt_min_eigenvalue);
+        built.refine_max_error = this->settings.klt_max_error;
         return built;
     }
 
-    void tracker::build_wavelet_anchors(const image::quaternion_wavelet& transform) {
+    void tracker::build_wavelet_anchors(const image::quaternion_wavelet& transform, const image::pyramid& pyramid) {
         std::vector<size_t> pending;
         for (size_t i = 0; i < this->track_list.size(); ++i) {
             if (!this->track_list[i].wavelet_anchored) {
@@ -82,7 +195,7 @@ namespace feature::tracker {
         }
         core::thread_pool::instance().parallel_for(pending.size(), 16, [&](const size_t p) {
             track& current = this->track_list[pending[p]];
-            static_cast<void>(wavelet_flow::build_anchor(transform, current.x, current.y, build_options, current.wavelet_anchored->anchor));
+            static_cast<void>(wavelet_flow::build_anchor(transform, current.x, current.y, build_options, current.wavelet_anchored->anchor, &pyramid));
         });
     }
 
@@ -219,6 +332,7 @@ namespace feature::tracker {
         created.active = true;
         created.x = keypoint.x;
         created.y = keypoint.y;
+        created.measurement_octave = keypoint.octave;
         created.octave = keypoint.octave;
         created.start_frame_id = frame_id;
         created.last_frame_id = frame_id;
@@ -227,19 +341,21 @@ namespace feature::tracker {
         created.outliers = 0;
         created.outlier_frame_id = -1;
         created.descriptor = descriptor;
-        created.history.push_back(observation{ frame_id, keypoint.x, keypoint.y });
+        created.descriptor_valid = true;
+        created.history.push_back(observation{ frame_id, keypoint.x, keypoint.y, keypoint.octave });
         this->track_list.push_back(static_cast<track&&>(created));
         return this->track_list.back();
     }
 
-    void tracker::observe(track& existing, int frame_id, float x, float y) {
+    void tracker::observe(track& existing, int frame_id, float x, float y, int measurement_octave) {
         existing.x = x;
         existing.y = y;
+        existing.measurement_octave = measurement_octave;
         existing.active = true;
         existing.missed = 0;
         existing.last_frame_id = frame_id;
         existing.length += 1;
-        existing.history.push_back(observation{ frame_id, x, y });
+        existing.history.push_back(observation{ frame_id, x, y, measurement_octave });
     }
 
     tracker::tracker()
@@ -281,13 +397,7 @@ namespace feature::tracker {
         std::vector<unsigned char, core::arena_allocator<unsigned char>> claimed(detection_count, static_cast<unsigned char>(0));
 
         if (!this->has_previous) {
-            for (size_t d = 0; d < detection_count; ++d) {
-                if (this->near_existing_track(keypoints[d].x, keypoints[d].y)) {
-                    continue;
-                }
-                this->spawn(frame_id, keypoints[d], descriptors[d]);
-                claimed[d] = static_cast<unsigned char>(1);
-            }
+            this->spawn_unclaimed(frame_id, keypoints, descriptors, detection_count, claimed.data());
             const bool intensity = (this->settings.flow == flow_kind::intensity);
             if (this->settings.anchored_patches && intensity) {
                 this->build_anchors(pyramid);
@@ -296,7 +406,7 @@ namespace feature::tracker {
             if (!intensity) {
                 this->wavelet_previous = image::quaternion_wavelet(pyramid[0], static_cast<size_t>(math::max(2, this->settings.wavelet_levels)), 2, this->settings.wavelet_undecimated);
                 if (this->settings.anchored_patches) {
-                    this->build_wavelet_anchors(this->wavelet_previous);
+                    this->build_wavelet_anchors(this->wavelet_previous, pyramid);
                 }
             }
             this->has_previous = true;
@@ -316,7 +426,7 @@ namespace feature::tracker {
                 this->wavelet_previous = image::quaternion_wavelet(this->pyramid_previous[0], depth, 2, this->settings.wavelet_undecimated);
             }
             if (this->settings.anchored_patches) {
-                this->build_wavelet_anchors(this->wavelet_previous);
+                this->build_wavelet_anchors(this->wavelet_previous, this->pyramid_previous);
             }
         }
 
@@ -448,12 +558,14 @@ namespace feature::tracker {
                             return;
                         }
                         wavelet_flow::result outcome;
-                        bool aligned = wavelet_flow::align(wavelet, current.wavelet_anchored->anchor, align_options, current.wavelet_anchored->displacement_x, current.wavelet_anchored->displacement_y, outcome);
+                        const float saved_x = current.wavelet_anchored->displacement_x;
+                        const float saved_y = current.wavelet_anchored->displacement_y;
+                        bool aligned = wavelet_flow::align(wavelet, current.wavelet_anchored->anchor, align_options, current.wavelet_anchored->displacement_x, current.wavelet_anchored->displacement_y, outcome, &pyramid);
                         if (!aligned && ((guesses_x[k] != 0.0f) || (guesses_y[k] != 0.0f))) {
-                            float retry_x = current.wavelet_anchored->displacement_x + guesses_x[k];
-                            float retry_y = current.wavelet_anchored->displacement_y + guesses_y[k];
+                            float retry_x = saved_x + guesses_x[k];
+                            float retry_y = saved_y + guesses_y[k];
                             wavelet_flow::result retried;
-                            if (wavelet_flow::align(wavelet, current.wavelet_anchored->anchor, align_options, retry_x, retry_y, retried)) {
+                            if (wavelet_flow::align(wavelet, current.wavelet_anchored->anchor, align_options, retry_x, retry_y, retried, &pyramid)) {
                                 current.wavelet_anchored->displacement_x = retry_x;
                                 current.wavelet_anchored->displacement_y = retry_y;
                                 outcome = retried;
@@ -507,7 +619,9 @@ namespace feature::tracker {
                         phases.data(),
                         this->wavelet_options(),
                         guesses_x.data(),
-                        guesses_y.data()
+                        guesses_y.data(),
+                        &this->pyramid_previous,
+                        &pyramid
                     );
                     for (size_t k = 0; k < active_indices.size(); ++k) {
                         results[k].x = phases[k].x;
@@ -539,6 +653,8 @@ namespace feature::tracker {
                     );
                 }
                 const bool check_drift = this->settings.association == association_kind::both;
+                // The refresh threshold is a fraction of the rejection gate of the flow that produced the error.
+                const float refresh_gate = wavelet_path ? this->wavelet_options().max_error : this->anchor_options().max_error;
                 size_t carried = 0;
                 for (size_t k = 0; k < active_indices.size(); ++k) {
                     track& current = this->track_list[active_indices[k]];
@@ -553,6 +669,7 @@ namespace feature::tracker {
                         if (best.detection < detection_count) {
                             if (best.hamming <= this->settings.match_hamming) {
                                 current.descriptor = descriptors[best.detection];
+                                claimed[best.detection] = static_cast<unsigned char>(1);
                             }
                             else if ((this->settings.drift_hamming > 0) && (best.hamming > this->settings.drift_hamming)) {
                                 current.active = false;
@@ -564,8 +681,8 @@ namespace feature::tracker {
                     flow_from_y.push_back(current.y);
                     flow_to_x.push_back(results[k].x);
                     flow_to_y.push_back(results[k].y);
-                    this->observe(current, frame_id, results[k].x, results[k].y);
-                    if (this->settings.anchored_patches && (this->settings.anchor_refresh_error > 0.0f) && (results[k].error > this->settings.anchor_refresh_error)) {
+                    this->observe(current, frame_id, results[k].x, results[k].y, 0);
+                    if (this->settings.anchored_patches && (this->settings.anchor_refresh_error > 0.0f) && (results[k].error > this->settings.anchor_refresh_error * refresh_gate)) {
                         current.anchored.reset();
                         current.wavelet_anchored.reset();
                     }
@@ -628,7 +745,7 @@ namespace feature::tracker {
                 continue;
             }
             ++matched_by_descriptor;
-            this->observe(current, frame_id, keypoints[best.detection].x, keypoints[best.detection].y);
+            this->observe(current, frame_id, keypoints[best.detection].x, keypoints[best.detection].y, keypoints[best.detection].octave);
             if (this->settings.anchored_patches) {
                 current.anchored.reset();
                 current.wavelet_anchored.reset();
@@ -660,20 +777,11 @@ namespace feature::tracker {
         }
         this->track_list.resize(write);
 
-        for (size_t d = 0; d < detection_count; ++d) {
-            if (claimed[d]) {
-                continue;
-            }
-            if (this->near_existing_track(keypoints[d].x, keypoints[d].y)) {
-                continue;
-            }
-            this->spawn(frame_id, keypoints[d], descriptors[d]);
-            claimed[d] = static_cast<unsigned char>(1);
-        }
+        this->spawn_unclaimed(frame_id, keypoints, descriptors, detection_count, claimed.data());
 
         if (this->settings.anchored_patches) {
             if (wavelet_path) {
-                this->build_wavelet_anchors(wavelet);
+                this->build_wavelet_anchors(wavelet, pyramid);
             }
             else {
                 this->build_anchors(pyramid);

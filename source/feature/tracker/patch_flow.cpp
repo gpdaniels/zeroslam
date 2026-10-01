@@ -320,13 +320,26 @@ namespace feature::tracker {
             const float scale = 1.0f / static_cast<float>(1 << level);
             const float level_x = centre_x * scale;
             const float level_y = centre_y * scale;
+            // A coarse level that fails caps the anchor below it, only a level 0 failure rejects the anchor.
+            const auto cap = [&]() {
+                if (level == 0) {
+                    out = anchor();
+                    return false;
+                }
+                out.levels = level;
+                out.values.resize(static_cast<size_t>(level * window_area));
+                out.gradients_x.resize(static_cast<size_t>(level * window_area));
+                out.gradients_y.resize(static_cast<size_t>(level * window_area));
+                out.inverse_hessian.resize(static_cast<size_t>(level * parameters * parameters));
+                return true;
+            };
             if (!optical_flow::window_in_bounds(source, level_x, level_y, half_window)) {
-                out = anchor();
-                return false;
+                return cap();
             }
             float* const values = out.values.data() + static_cast<size_t>(level * window_area);
             float* const gradients_x = out.gradients_x.data() + static_cast<size_t>(level * window_area);
             float* const gradients_y = out.gradients_y.data() + static_cast<size_t>(level * window_area);
+            optical_flow::sample_gradients(source, level_x, level_y, half_window, values, gradients_x, gradients_y);
             double hessian[patch_flow::maximum_parameters * patch_flow::maximum_parameters] = {};
             double structure_xx = 0.0;
             double structure_xy = 0.0;
@@ -334,14 +347,9 @@ namespace feature::tracker {
             int index = 0;
             for (int j = -half_window; j <= half_window; ++j) {
                 for (int i = -half_window; i <= half_window; ++i) {
-                    const float base_x = level_x + static_cast<float>(i);
-                    const float base_y = level_y + static_cast<float>(j);
-                    const float value = optical_flow::sample_bilinear(source, base_x, base_y);
-                    const float gradient_x = 0.5f * (optical_flow::sample_bilinear(source, base_x + 1.0f, base_y) - optical_flow::sample_bilinear(source, base_x - 1.0f, base_y));
-                    const float gradient_y = 0.5f * (optical_flow::sample_bilinear(source, base_x, base_y + 1.0f) - optical_flow::sample_bilinear(source, base_x, base_y - 1.0f));
-                    values[index] = value;
-                    gradients_x[index] = gradient_x;
-                    gradients_y[index] = gradient_y;
+                    const float value = values[index];
+                    const float gradient_x = gradients_x[index];
+                    const float gradient_y = gradients_y[index];
                     structure_xx += static_cast<double>(gradient_x) * static_cast<double>(gradient_x);
                     structure_xy += static_cast<double>(gradient_x) * static_cast<double>(gradient_y);
                     structure_yy += static_cast<double>(gradient_y) * static_cast<double>(gradient_y);
@@ -365,13 +373,11 @@ namespace feature::tracker {
             const double eigen_gap = math::sqrt(math::max(0.0, trace * trace - 4.0 * determinant));
             const double smaller_eigenvalue = 0.5 * (trace - eigen_gap);
             if (!(determinant > 0.0) || (smaller_eigenvalue < settings.min_eigenvalue * window_area_as_double)) {
-                out = anchor();
-                return false;
+                return cap();
             }
             double inverse[patch_flow::maximum_parameters * patch_flow::maximum_parameters] = {};
             if (!patch_flow::invert(hessian, parameters, inverse)) {
-                out = anchor();
-                return false;
+                return cap();
             }
             double* const stored = out.inverse_hessian.data() + static_cast<size_t>(level * parameters * parameters);
             for (int entry = 0; entry < parameters * parameters; ++entry) {
@@ -413,9 +419,16 @@ namespace feature::tracker {
             const double* const inverse = anchored.inverse_hessian.data() + static_cast<size_t>(level * parameters * parameters);
             double previous_direction[patch_flow::maximum_parameters] = {};
             bool have_direction = false;
+            // A coarse level whose step degenerates (or, with continue_outside, whose window leaves the image) is skipped
+            // from its entry state.
+            const state entry = current;
             for (int iteration = 0; iteration < iterations; ++iteration) {
                 if (!patch_flow::warp_in_bounds(source, level_x, level_y, current, half_window)) {
-                    return false;
+                    if ((level == 0) || !settings.continue_outside) {
+                        return false;
+                    }
+                    current = entry;
+                    break;
                 }
                 const double gain = static_cast<double>(current.gain);
                 const double bias = static_cast<double>(current.bias);
@@ -446,6 +459,15 @@ namespace feature::tracker {
                     }
                     step[row] = total;
                 }
+                // The residual scales the template by (1 + gain) but the precomputed Hessian's geometric columns do not,
+                // so the geometric step comes out (1 + gain) times too large.
+                const double contrast = 1.0 + gain;
+                const bool degenerate = patch_flow::has_illumination(anchored.model) && !(contrast > patch_flow::minimum_contrast);
+                if (patch_flow::has_illumination(anchored.model) && !degenerate) {
+                    for (int parameter = 0; parameter < parameters - 2; ++parameter) {
+                        step[parameter] /= contrast;
+                    }
+                }
                 if (settings.damped_steps) {
                     double norm = 0.0;
                     for (int parameter = 0; parameter < parameters; ++parameter) {
@@ -475,8 +497,12 @@ namespace feature::tracker {
                     }
                 }
                 const double motion = patch_flow::step_motion(anchored.model, step, half_window);
-                if (!patch_flow::compose_inverse(anchored.model, step, current)) {
-                    return false;
+                if (degenerate || !patch_flow::compose_inverse(anchored.model, step, current)) {
+                    if (level == 0) {
+                        return false;
+                    }
+                    current = entry;
+                    break;
                 }
                 if (motion < convergence) {
                     break;
@@ -508,11 +534,13 @@ namespace feature::tracker {
                 ++index;
             }
         }
-        warp = current;
         out.x = core::to_pixel_centre(anchored.centre_x + current.translation_x);
         out.y = core::to_pixel_centre(anchored.centre_y + current.translation_y);
         out.error = static_cast<float>(error_sum / static_cast<double>(window_area));
         out.tracked = (out.error <= settings.max_error);
+        if (out.tracked) {
+            warp = current;
+        }
         return out.tracked;
     }
 }

@@ -41,10 +41,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 namespace feature::tracker {
     class tracker final {
     public:
+        // The measurement octave is the pyramid level whose pixel grid the position was measured on: the detection's
+        // octave for a position taken from a detection, 0 for a position refined by tracking at full resolution.
         struct observation final {
             int frame_id;
             core::pixel_centre x;
             core::pixel_centre y;
+            int measurement_octave;
         };
 
         struct anchoring final {
@@ -58,12 +61,15 @@ namespace feature::tracker {
             float displacement_y = 0.0f;
         };
 
+        // A track without a valid descriptor (all zeros, as near the image border) must not be matched by descriptor or
+        // add its descriptor to a landmark.
         struct track final {
             int id;
             int landmark_id;
             bool active;
             core::pixel_centre x;
             core::pixel_centre y;
+            int measurement_octave;
             int octave;
             int start_frame_id;
             int last_frame_id;
@@ -72,6 +78,7 @@ namespace feature::tracker {
             int outliers;
             int outlier_frame_id;
             descriptor::binary<256> descriptor;
+            bool descriptor_valid;
             std::vector<observation> history;
             std::unique_ptr<anchoring> anchored;
             std::unique_ptr<wavelet_anchoring> wavelet_anchored;
@@ -119,6 +126,10 @@ namespace feature::tracker {
             bool klt_damped_steps = false;
             bool anchored_patches = false;
             patch_flow::model_kind anchor_model = patch_flow::model_kind::translation;
+            // Rebuilds a track's anchor when its alignment error exceeds this fraction of the rejection gate of its flow:
+            // klt_max_error (mean absolute intensity) for patch anchors, the wavelet flow's max_error (rms phase in
+            // radians) for wavelet anchors. 0 never refreshes, and neither does 1 or more since accepted errors are below
+            // the gate.
             float anchor_refresh_error = 0.0f;
             float min_spawn_distance = 8.0f;
             float collision_distance = 2.0f;
@@ -142,7 +153,7 @@ namespace feature::tracker {
     private:
         static float distance_squared(float ax, float ay, float bx, float by);
 
-        void observe(track& existing, int frame_id, float x, float y);
+        void observe(track& existing, int frame_id, float x, float y, int measurement_octave);
 
         patch_flow::options anchor_options() const;
 
@@ -150,9 +161,11 @@ namespace feature::tracker {
 
         void build_anchors(const image::pyramid& pyramid);
 
-        void build_wavelet_anchors(const image::quaternion_wavelet& transform);
+        void build_wavelet_anchors(const image::quaternion_wavelet& transform, const image::pyramid& pyramid);
 
         void discard_anchors();
+
+        void spawn_unclaimed(int frame_id, const std::vector<feature::point>& keypoints, const std::vector<descriptor::binary<256>>& descriptors, size_t detection_count, unsigned char* claimed);
 
     public:
         tracker();

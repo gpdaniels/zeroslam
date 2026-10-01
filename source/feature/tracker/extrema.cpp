@@ -39,40 +39,50 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 namespace feature::tracker {
-    namespace {
-        template <typename vector_type>
-        void ratio_filter(vector_type& matches, const float ratio) {
-            size_t write = 0;
-            size_t read = 0;
-            while (read < matches.size()) {
-                size_t group_end = read + 1;
-                while ((group_end < matches.size()) && (matches[group_end].lhs_index == matches[read].lhs_index)) {
-                    ++group_end;
+    size_t extrema::ratio_filter(match::pair* const matches, const size_t count, const float ratio, const float threshold, const size_t candidates) {
+        size_t write = 0;
+        size_t read = 0;
+        while (read < count) {
+            size_t group_end = read + 1;
+            while ((group_end < count) && (matches[group_end].lhs_index == matches[read].lhs_index)) {
+                ++group_end;
+            }
+            size_t best = read;
+            for (size_t index = read + 1; index < group_end; ++index) {
+                if (matches[index].score < matches[best].score) {
+                    best = index;
                 }
-                if (group_end - read == 1) {
-                    matches[write++] = matches[read];
-                }
-                else if (group_end - read == 2) {
-                    const match::pair& best = (matches[read].score <= matches[read + 1].score) ? matches[read] : matches[read + 1];
-                    const match::pair& worst = (matches[read].score <= matches[read + 1].score) ? matches[read + 1] : matches[read];
-                    if ((worst.score > 0.0f) && (best.score <= ratio * worst.score)) {
-                        matches[write++] = best;
+            }
+            bool kept = false;
+            if (group_end - read == 1) {
+                kept = (candidates < 2) || (matches[best].score <= ratio * threshold);
+            }
+            else {
+                size_t second = (best == read) ? (read + 1) : read;
+                for (size_t index = read; index < group_end; ++index) {
+                    if ((index != best) && (matches[index].score < matches[second].score)) {
+                        second = index;
                     }
                 }
-                read = group_end;
+                kept = (matches[second].score > 0.0f) && (matches[best].score <= ratio * matches[second].score);
             }
-            matches.resize(write);
+            if (kept) {
+                matches[write++] = matches[best];
+            }
+            read = group_end;
         }
+        return write;
     }
 
     void extrema::observe(tracker::track& existing, const int frame_id, const float x, const float y) {
         existing.x = core::to_pixel_centre(x);
         existing.y = core::to_pixel_centre(y);
+        existing.measurement_octave = 0;
         existing.active = true;
         existing.missed = 0;
         existing.last_frame_id = frame_id;
         existing.length += 1;
-        existing.history.push_back(tracker::observation{ frame_id, existing.x, existing.y });
+        existing.history.push_back(tracker::observation{ frame_id, existing.x, existing.y, 0 });
     }
 
     void extrema::hill_climb(
@@ -185,6 +195,9 @@ namespace feature::tracker {
         const int small_height = math::max(8, height / math::max(1, this->settings.flow_scale));
         std::vector<unsigned char, core::arena_allocator<unsigned char>> small_image(static_cast<size_t>(small_width) * static_cast<size_t>(small_height));
         image::resize::linear(blurred.data(), static_cast<size_t>(width), static_cast<size_t>(height), static_cast<size_t>(small_width), static_cast<size_t>(small_height), small_image.data());
+        // ORB describes smoothed pixels, as its test pairs were learned on, and takes the dominant angle unsmoothed.
+        std::vector<unsigned char, core::arena_allocator<unsigned char>> small_smoothed(small_image.size());
+        image::blur::gaussian_7x7(small_image.data(), small_width, small_height, small_width, small_smoothed.data());
         std::vector<feature::point> small_points;
         std::vector<descriptor::binary<256>> small_descriptors;
         {
@@ -199,8 +212,8 @@ namespace feature::tracker {
             small_points.reserve(small_extrema.size());
             small_descriptors.reserve(small_extrema.size());
             for (const detector::curvature_extrema::extremum& found : small_extrema) {
-                const unsigned char* const at = small_image.data() + static_cast<size_t>(found.cell_y) * static_cast<size_t>(small_width) + static_cast<size_t>(found.cell_x);
-                const float angle = feature::angle::orb::dominant_angle(at, small_width);
+                const size_t offset = static_cast<size_t>(found.cell_y) * static_cast<size_t>(small_width) + static_cast<size_t>(found.cell_x);
+                const float angle = feature::angle::orb::dominant_angle(small_image.data() + offset, small_width);
                 feature::point point;
                 point.x = static_cast<float>(found.cell_x);
                 point.y = static_cast<float>(found.cell_y);
@@ -208,7 +221,7 @@ namespace feature::tracker {
                 point.angle = angle;
                 point.octave = 0;
                 descriptor::binary<256> described;
-                descriptor::orb::describe(at, small_width, angle, described);
+                descriptor::orb::describe(small_smoothed.data() + offset, small_width, angle, described);
                 small_points.push_back(point);
                 small_descriptors.push_back(described);
             }
@@ -227,8 +240,7 @@ namespace feature::tracker {
                 matches.data(),
                 matches.size()
             );
-            matches.resize(match_count);
-            ratio_filter(matches, this->settings.flow_ratio);
+            matches.resize(extrema::ratio_filter(matches.data(), match_count, this->settings.flow_ratio, this->settings.flow_match_threshold, small_descriptors.size()));
             current_diagnostics.flow_matches = matches.size();
             std::vector<float, core::arena_allocator<float>> from_x(matches.size());
             std::vector<float, core::arena_allocator<float>> from_y(matches.size());
@@ -424,6 +436,7 @@ namespace feature::tracker {
                 created.track.active = true;
                 created.track.x = core::to_pixel_centre(found.x);
                 created.track.y = core::to_pixel_centre(found.y);
+                created.track.measurement_octave = 0;
                 created.track.octave = 0;
                 created.track.start_frame_id = frame_id;
                 created.track.last_frame_id = frame_id;
@@ -436,13 +449,14 @@ namespace feature::tracker {
                     created.track.descriptor.data[byte] = 0;
                 }
                 const int distance_from_border = this->settings.descriptor_border;
-                if ((found.cell_x >= distance_from_border) && (found.cell_x < width - distance_from_border) &&
-                    (found.cell_y >= distance_from_border) && (found.cell_y < height - distance_from_border)) {
-                    const unsigned char* const at = image_level0.get_data() + static_cast<size_t>(found.cell_y) * static_cast<size_t>(width) + static_cast<size_t>(found.cell_x);
-                    const float angle = feature::angle::orb::dominant_angle(at, width);
-                    descriptor::orb::describe(at, width, angle, created.track.descriptor);
+                created.track.descriptor_valid = (found.cell_x >= distance_from_border) && (found.cell_x < width - distance_from_border) &&
+                                                 (found.cell_y >= distance_from_border) && (found.cell_y < height - distance_from_border);
+                if (created.track.descriptor_valid) {
+                    const size_t offset = static_cast<size_t>(found.cell_y) * static_cast<size_t>(width) + static_cast<size_t>(found.cell_x);
+                    const float angle = feature::angle::orb::dominant_angle(image_level0.get_data() + offset, width);
+                    descriptor::orb::describe(blurred.data() + offset, width, angle, created.track.descriptor);
                 }
-                created.track.history.push_back(tracker::observation{ frame_id, created.track.x, created.track.y });
+                created.track.history.push_back(tracker::observation{ frame_id, created.track.x, created.track.y, 0 });
                 occupy(found.x, found.y);
                 this->entries.push_back(static_cast<entry&&>(created));
                 ++current_diagnostics.spawned;
