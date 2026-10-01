@@ -44,6 +44,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "mapping/loop_closure.hpp"
 #include "mapping/map.hpp"
 #include "mapping/point.hpp"
+#include "mapping/relative_graph.hpp"
 #include "match/distance/hamming.hpp"
 #include "match/matcher/bruteforce.hpp"
 #include "match/matcher/epipolar.hpp"
@@ -116,6 +117,10 @@ public:
         return this->keyframe_ids_;
     }
 
+    const mapping::relative_graph& relative_graph() const {
+        return this->relative_graph_;
+    }
+
     struct submap final {
         int start_id;
         int second_id;
@@ -165,6 +170,9 @@ private:
         std::sort(ordered_keyframe_ids.begin(), ordered_keyframe_ids.end());
         if ((ordered_keyframe_ids.size() < 2) || (this->reconstruction.frames.count(loop.keyframe_id) == 0) || (this->reconstruction.frames.count(keyframe_id) == 0)) {
             return false;
+        }
+        if (this->relative_adjustment()) {
+            return this->close_loop_relative(keyframe_id, loop, records);
         }
 
         const auto similarity_parameters = [](const math::sim3<double>& similarity, double (&parameters)[8]) {
@@ -241,23 +249,7 @@ private:
             }
         }
 
-        size_t fused = 0;
-        for (const mapping::loop_closure::correspondence& match : loop.matches) {
-            if ((match.landmark_id == match.recorded_landmark_id) || !this->reconstruction.merge_landmark(match.recorded_landmark_id, match.landmark_id)) {
-                continue;
-            }
-            ++fused;
-            for (feature::tracker::tracker::track* const t : this->all_point_tracks()) {
-                if (t->landmark_id == match.landmark_id) {
-                    t->landmark_id = match.recorded_landmark_id;
-                }
-            }
-            for (mapping::loop_closure::record& record : records) {
-                if (record.landmark_id == match.landmark_id) {
-                    record.landmark_id = match.recorded_landmark_id;
-                }
-            }
-        }
+        const size_t fused = this->fuse_loop_landmarks(loop, records);
         this->verified_loops.push_back({ keyframe_id, loop, fused });
         if (joining) {
             this->join_submap(keyframe_id);
@@ -310,6 +302,51 @@ private:
         this->update_anchored_frames();
         this->refit_anchored_frames();
         core::logger::log(core::logger::level::note, "Loop %d -> %d closed over %zu keyframes, %zu landmarks fused, scale at the keyframe %.4f.", keyframe_id, loop.keyframe_id, ordered_keyframe_ids.size(), fused, corrected.at(keyframe_id).scale());
+        return true;
+    }
+
+    // Merges the current keyframe's landmarks into those the loop matched them to, keeping the recorded ones.
+    size_t fuse_loop_landmarks(const mapping::loop_closure::result& loop, std::vector<mapping::loop_closure::record>& records) {
+        size_t fused = 0;
+        for (const mapping::loop_closure::correspondence& match : loop.matches) {
+            if ((match.landmark_id == match.recorded_landmark_id) || !this->reconstruction.merge_landmark(match.recorded_landmark_id, match.landmark_id)) {
+                continue;
+            }
+            ++fused;
+            for (feature::tracker::tracker::track* const t : this->all_point_tracks()) {
+                if (t->landmark_id == match.landmark_id) {
+                    t->landmark_id = match.recorded_landmark_id;
+                }
+            }
+            for (mapping::loop_closure::record& record : records) {
+                if (record.landmark_id == match.landmark_id) {
+                    record.landmark_id = match.recorded_landmark_id;
+                }
+            }
+        }
+        return fused;
+    }
+
+    // A loop in the relative graph is one more transform, from the current keyframe into the one it returned to. The
+    // landmarks are fused, the regions around both keyframes adjusted with it, and the map's view embedded from the
+    // current keyframe, which brings the far side of the loop into agreement with it; the rest of the graph is unchanged.
+    bool close_loop_relative(const int keyframe_id, const mapping::loop_closure::result& loop, std::vector<mapping::loop_closure::record>& records) {
+        this->relative_graph_.synchronise(this->reconstruction, this->keyframes_with_submaps());
+        const int link = this->relative_graph_.add_loop(loop.keyframe_id, keyframe_id, loop.relative);
+        if (link < 0) {
+            core::logger::log(core::logger::level::warn, "Loop %d -> %d not closed, a keyframe is not in the relative graph.", keyframe_id, loop.keyframe_id);
+            return false;
+        }
+        const bool joining = this->submap_of(keyframe_id) != this->submap_of(loop.keyframe_id);
+        const size_t fused = this->fuse_loop_landmarks(loop, records);
+        this->verified_loops.push_back({ keyframe_id, loop, fused });
+        if (joining) {
+            this->join_submap(keyframe_id);
+        }
+        this->adjust_relative(keyframe_id, { keyframe_id, loop.keyframe_id }, { link });
+        this->update_anchored_frames();
+        this->refit_anchored_frames();
+        core::logger::log(core::logger::level::note, "Loop %d -> %d closed in the relative graph, %zu landmarks fused, scale across it %.4f.", keyframe_id, loop.keyframe_id, fused, this->relative_graph_.links[static_cast<size_t>(link)].transform.scale());
         return true;
     }
 
@@ -986,6 +1023,39 @@ private:
     size_t keyframes_inserted_ = 0;
     size_t keyframes_since_global_adjustment_ = 0;
     int last_keyframe_id_ = 0;
+
+    mapping::relative_graph relative_graph_;
+    constexpr static const int relative_adjustment_rounds = 50;
+
+    bool relative_adjustment() const {
+        return this->frontend.adjustment == mapping::frame::settings::adjustment_kind::relative;
+    }
+
+    // The keyframes in the map, ascending, with their submaps.
+    std::vector<std::pair<int, size_t>> keyframes_with_submaps() const {
+        std::vector<std::pair<int, size_t>> keyframes;
+        keyframes.reserve(this->keyframe_ids_.size());
+        for (const int id : this->keyframe_ids_) {
+            if (this->reconstruction.frames.count(id) != 0) {
+                keyframes.push_back({ id, this->submap_of(id) });
+            }
+        }
+        std::sort(keyframes.begin(), keyframes.end());
+        return keyframes;
+    }
+
+    // Brings the relative graph up to date, adjusts it around the seeds and embeds its view of the map from the root.
+    void adjust_relative(const int root, const std::vector<int>& seeds, const std::vector<int>& fresh_links) {
+        this->relative_graph_.synchronise(this->reconstruction, this->keyframes_with_submaps());
+        const mapping::relative_graph::summary summary = this->relative_graph_.adjust(this->reconstruction, seeds, fresh_links, slam::relative_adjustment_rounds);
+        this->relative_graph_.embed(this->reconstruction, root);
+        for (const int landmark_id : summary.adjusted_points) {
+            const std::unordered_map<int, mapping::point>::iterator landmark = this->reconstruction.landmarks.find(landmark_id);
+            if (landmark != this->reconstruction.landmarks.end()) {
+                this->reconstruction.estimate_landmark_uncertainty(landmark->second);
+            }
+        }
+    }
 
     struct anchored_observation final {
         int landmark_id;
@@ -2073,6 +2143,13 @@ public:
     }
 
     void finalise() {
+        if (this->relative_adjustment()) {
+            // The graph's view only agrees with its transforms near the frame it was embedded from, so relax it into one
+            // that agrees everywhere before the whole map is adjusted.
+            this->relative_graph_.synchronise(this->reconstruction, this->keyframes_with_submaps());
+            this->relative_graph_.relax(this->reconstruction, 50);
+            this->update_anchored_frames();
+        }
         this->reconstruction.optimise(0, false, 200, true);
         this->reanchor_corrected();
         this->update_anchored_frames();
@@ -2129,6 +2206,7 @@ public:
         mapping::frame& frame_added = this->reconstruction.frames.at(frame_id);
 
         this->loop_closure_.set_hamming_scale(this->frontend.descriptor_distance_scale());
+        this->loop_closure_.set_covisible_revisits(!this->relative_adjustment());
         this->reconstruction.line_ray_angle_degrees = this->frontend.line_angle;
         this->reconstruction.solver_strategy = this->frontend.solver;
         this->reconstruction.solver_precision = this->frontend.solver_precision;
@@ -2779,11 +2857,17 @@ public:
             }
             broad_ba_window = math::max(broad_ba_window, 10);
         }
-        this->reconstruction.optimise(broad_ba_window, false, 50, true);
-        const bool globally_adjusted = (this->frontend.global_adjustment_keyframes > 0) && (this->keyframes_since_global_adjustment_ >= static_cast<size_t>(this->frontend.global_adjustment_keyframes));
-        if (globally_adjusted) {
-            this->reconstruction.optimise(0, false, 20, true);
-            this->keyframes_since_global_adjustment_ = 0;
+        bool globally_adjusted = false;
+        if (this->relative_adjustment()) {
+            this->adjust_relative(frame_current.id, { frame_current.id }, {});
+        }
+        else {
+            this->reconstruction.optimise(broad_ba_window, false, 50, true);
+            globally_adjusted = (this->frontend.global_adjustment_keyframes > 0) && (this->keyframes_since_global_adjustment_ >= static_cast<size_t>(this->frontend.global_adjustment_keyframes));
+            if (globally_adjusted) {
+                this->reconstruction.optimise(0, false, 20, true);
+                this->keyframes_since_global_adjustment_ = 0;
+            }
         }
         this->reanchor_corrected();
         this->reconstruction.cull();

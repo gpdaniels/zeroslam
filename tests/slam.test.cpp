@@ -747,7 +747,7 @@ static void test_predict_constant_velocity() {
     }
 }
 
-static void test_loop_closure(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer, const mapping::frame::settings::association_kind association = mapping::frame::settings::association_kind::klt) {
+static void test_loop_closure(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer, const mapping::frame::settings::association_kind association = mapping::frame::settings::association_kind::klt, const mapping::frame::settings::adjustment_kind adjustment = mapping::frame::settings::adjustment_kind::absolute) {
     constexpr static const int approach_frames = 8;
     constexpr static const int circle_frames = 72;
     constexpr static const int overlap_frames = 18;
@@ -767,6 +767,7 @@ static void test_loop_closure(const int width, const int height, const math::mat
     slam system;
     system.frontend.association = association;
     system.frontend.track_collision_distance = 0.0f;
+    system.frontend.adjustment = adjustment;
     for (const math::se3<double>& pose : trajectory) {
         image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
         renderer.render_frame(pose, intrinsics, frame);
@@ -775,6 +776,22 @@ static void test_loop_closure(const int width, const int height, const math::mat
 
     REQUIRE(system.state() == slam::tracking_state::tracking);
     REQUIRE(!system.verified_loops.empty());
+    if (adjustment == mapping::frame::settings::adjustment_kind::relative) {
+        // Every keyframe is a frame of the graph, and the loop is a similarity in it besides the chain.
+        const mapping::relative_graph& graph = system.relative_graph();
+        size_t keyframes = 0;
+        for (const int keyframe_id : system.keyframe_ids()) {
+            keyframes += system.reconstruction.frames.count(keyframe_id);
+        }
+        REQUIRE(graph.nodes.size() <= keyframes);
+        REQUIRE(graph.nodes.size() + 1 >= keyframes);
+        size_t loops = 0;
+        for (const mapping::relative_graph::link& joined : graph.links) {
+            loops += static_cast<size_t>(((joined.parent >= 0) && joined.similarity) ? 1 : 0);
+        }
+        REQUIRE(loops >= 1);
+        REQUIRE(!graph.points.empty());
+    }
 
     system.finalise();
     double furthest = 0.0;
@@ -857,7 +874,7 @@ static void test_relocalisation(const int width, const int height, const math::m
     }
 }
 
-static void test_submap_join(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {
+static void test_submap_join(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer, const mapping::frame::settings::adjustment_kind adjustment = mapping::frame::settings::adjustment_kind::absolute) {
     std::vector<math::se3<double>> outward;
     for (int i = 0; i < 24; i++) {
         outward.push_back({ math::so3<double>::rotation(0, 0, 0), { { i * 0.5, 0, 0 } } });
@@ -870,6 +887,7 @@ static void test_submap_join(const int width, const int height, const math::matr
 
     slam system;
     system.frontend.track_collision_distance = 0.0f;
+    system.frontend.adjustment = adjustment;
     for (const math::se3<double>& pose : outward) {
         image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
         renderer.render_frame(pose, intrinsics, frame);
@@ -1150,6 +1168,8 @@ int main(int argc, char* argv[]) {
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::both);
     test_relocalisation(width, height, intrinsics, renderer);
     test_submap_join(width, height, intrinsics, renderer);
+    test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::klt, mapping::frame::settings::adjustment_kind::relative);
+    test_submap_join(width, height, intrinsics, renderer, mapping::frame::settings::adjustment_kind::relative);
     test_lines(width, height, intrinsics, renderer);
     test_rotation_only(width, height, intrinsics, renderer);
 

@@ -120,7 +120,8 @@ The `process` and `regression` tools pass any setting through with `--config key
 | `line_pose` | `off` | Use the line landmarks in pose estimation (with `lines=on`). |
 | `line_angle` | `off` | Drop a line observation seen within this many degrees of end on (below `89`), or `off`. |
 | `culling` | `on` | Cull redundant keyframes. |
-| `global_adjustment` | `10` | Run a global adjustment every this many inserted keyframes, or `off`. |
+| `global_adjustment` | `10` | Run a global adjustment every this many inserted keyframes (with `adjustment=absolute`), or `off`. |
+| `adjustment` | `absolute` | How the map is adjusted as keyframes arrive. `absolute` adjusts the world poses of a window of the newest keyframes, with a global adjustment every `global_adjustment` keyframes and a pose graph at each loop closure. `relative` is adaptive relative bundle adjustment (Sibley, Mei, Reid and Newman, RSS 2009): the keyframes are joined by relative transforms, with a similarity for each loop, each landmark is held in one keyframe's frame, and a new keyframe solves only the region whose reprojection errors it changes, so the adjustment stays local however large the map grows, at a loop closure too. It is faster, but without the periodic global adjustments a monocular map drifts further in scale, so `absolute` is the default. |
 | `depth` | `inverse` | Landmark parameterisation, `inverse` anchored inverse depth or `xyz`. |
 | `budget` | `free` | `fixed` caps each pyramid level at its share of the feature budget, `free` lets the distributor keep more. |
 | `damping` | `off` | Halve a klt step that reverses the previous one, damping oscillation. |
@@ -184,6 +185,8 @@ The SLAM output (`trajectory.txt` from `zeroslam process`, `zeroslam_pose_struct
 The map's world frame is the frame of the first posed camera, the initialisation anchor: the first pose is the identity, so the world starts out with x right, y down and z along the first view. It is not gravity aligned and has no heading.
 Frames before initialisation completes, and frames dropped while tracking is lost, have no pose.
 A monocular map also has no metric scale: one unit starts out as the initialisation baseline (bundle adjustment then moves it), and a submap started after tracking is lost has a scale of its own until a loop closure joins it to the map.
+With `adjustment=relative` the map has no fixed world frame while it is built: after each keyframe the poses and landmarks are written out from the newest keyframe through the graph of relative transforms, so the newest poses agree with the map around them, but the world origin moves from keyframe to keyframe, and parts of the map far apart in the graph, such as the two ends of a long loop, need not agree with each other.
+Finalising relaxes the graph into one map that agrees with all of its transforms as well as it can, with the initialisation anchor back at the identity, before the last global adjustment.
 
 An estimate and a ground truth therefore differ by a rigid pin of the first pose (`T_gt(first) * inverse(T_estimate(first))`) plus a scale.
 That pin, at the fitted scale, is what `zeroslam gui` draws by default (`Scale To Truth` on, `Align To Truth` off; the fitted rotation is the optional extra and unticking the scale shows the map in its own units), and `zeroslam evaluate` fits a Sim(3) anchored on the first pose (`--first`, the default) or on the centroids (`--centroid`).

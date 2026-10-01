@@ -196,7 +196,7 @@ int main(int argc, char* argv[]) {
         REQUIRE(std::strstr(buffer.data(), "outliers=3\n") != nullptr);
         REQUIRE(std::strstr(buffer.data(), "anchor=affine_illumination\n") != nullptr);
         REQUIRE(std::strstr(buffer.data(), "anchor_refresh=0.75\n") != nullptr);
-        const char* const wavelet = "flow=wavelet\nwavelet_window=3\nwavelet_levels=5\nwavelet_robust=on\nwavelet_undecimated=on\nwavelet_seed=klt_fallback\nline_pose=on\nline_angle=25\nsolver=square_root\nsolver_precision=single\nglobal_adjustment=10\n";
+        const char* const wavelet = "flow=wavelet\nwavelet_window=3\nwavelet_levels=5\nwavelet_robust=on\nwavelet_undecimated=on\nwavelet_seed=klt_fallback\nline_pose=on\nline_angle=25\nsolver=square_root\nsolver_precision=single\nglobal_adjustment=10\nadjustment=relative\n";
         REQUIRE(zeroslam_set_configuration(system, wavelet, static_cast<int>(std::strlen(wavelet))) == zeroslam_return_success);
         REQUIRE(zeroslam_get_configuration(system, nullptr, &length) == zeroslam_return_failure_insufficient_data_length);
         buffer.assign(static_cast<size_t>(length), '\0');
@@ -213,11 +213,12 @@ int main(int argc, char* argv[]) {
         REQUIRE(std::strstr(buffer.data(), "solver=square_root\n") != nullptr);
         REQUIRE(std::strstr(buffer.data(), "solver_precision=single\n") != nullptr);
         REQUIRE(std::strstr(buffer.data(), "global_adjustment=10\n") != nullptr);
-        const char* const bad_wavelet[9] = { "flow=phase\n", "wavelet_window=0\n", "wavelet_levels=9\n", "wavelet_seed=maybe\n", "line_pose=yes\n", "line_angle=90\n", "solver=sparse\n", "solver_precision=half\n", "global_adjustment=0\n" };
-        for (int index = 0; index < 9; ++index) {
+        REQUIRE(std::strstr(buffer.data(), "\nadjustment=relative\n") != nullptr);
+        const char* const bad_wavelet[10] = { "flow=phase\n", "wavelet_window=0\n", "wavelet_levels=9\n", "wavelet_seed=maybe\n", "line_pose=yes\n", "line_angle=90\n", "solver=sparse\n", "solver_precision=half\n", "global_adjustment=0\n", "adjustment=global\n" };
+        for (int index = 0; index < 10; ++index) {
             REQUIRE(zeroslam_set_configuration(system, bad_wavelet[index], static_cast<int>(std::strlen(bad_wavelet[index]))) == zeroslam_return_failure_invalid_configuration);
         }
-        const char* const wavelet_off = "flow=intensity\nwavelet_robust=off\nwavelet_undecimated=off\nwavelet_seed=rest\nline_pose=off\nline_angle=off\nsolver=dense_schur\nsolver_precision=double\nglobal_adjustment=off\n";
+        const char* const wavelet_off = "flow=intensity\nwavelet_robust=off\nwavelet_undecimated=off\nwavelet_seed=rest\nline_pose=off\nline_angle=off\nsolver=dense_schur\nsolver_precision=double\nglobal_adjustment=off\nadjustment=absolute\n";
         REQUIRE(zeroslam_set_configuration(system, wavelet_off, static_cast<int>(std::strlen(wavelet_off))) == zeroslam_return_success);
         capacity = length;
         REQUIRE(zeroslam_get_configuration(system, buffer.data(), &capacity) == zeroslam_return_success);
@@ -228,6 +229,7 @@ int main(int argc, char* argv[]) {
         REQUIRE(std::strstr(buffer.data(), "solver=dense_schur\n") != nullptr);
         REQUIRE(std::strstr(buffer.data(), "solver_precision=double\n") != nullptr);
         REQUIRE(std::strstr(buffer.data(), "global_adjustment=off\n") != nullptr);
+        REQUIRE(std::strstr(buffer.data(), "\nadjustment=absolute\n") != nullptr);
 
         const char* const collisions_off = "collisions=off\nanchor=off\nanchor_refresh=off\n";
         REQUIRE(zeroslam_set_configuration(system, collisions_off, static_cast<int>(std::strlen(collisions_off))) == zeroslam_return_success);

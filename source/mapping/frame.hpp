@@ -91,6 +91,14 @@ namespace mapping {
             optimisation::factor_graph::precision solver_precision = optimisation::factor_graph::precision::double_precision;
             bool cull_keyframes = true;
             int global_adjustment_keyframes = 10;
+            // How the map is adjusted as keyframes arrive: absolute, a window of world poses with periodic global adjustments
+            // and a pose graph at each loop, or relative, an adaptive region of a graph of relative transforms (see
+            // mapping::relative_graph) where a loop is one more transform.
+            enum class adjustment_kind {
+                absolute,
+                relative
+            };
+            adjustment_kind adjustment = adjustment_kind::absolute;
             bool inverse_depth = true;
             bool fixed_budget = false;
             int pose_outlier_limit = 0;

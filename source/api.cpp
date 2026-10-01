@@ -120,6 +120,7 @@ namespace {
     constexpr static const char configuration_key_solver_precision[] = "solver_precision";
     constexpr static const char configuration_key_culling[] = "culling";
     constexpr static const char configuration_key_global_adjustment[] = "global_adjustment";
+    constexpr static const char configuration_key_adjustment[] = "adjustment";
     constexpr static const char configuration_key_depth[] = "depth";
     constexpr static const char configuration_key_budget[] = "budget";
     constexpr static const char configuration_key_damping[] = "damping";
@@ -194,7 +195,7 @@ namespace {
         return std::snprintf(
             buffer,
             capacity,
-            "%s=%d\n%s=%s\n%s=%.9g\n%s=%s\n%s=%.9g\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n",
+            "%s=%d\n%s=%s\n%s=%.9g\n%s=%s\n%s=%.9g\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n",
             configuration_key_verbosity,
             core::logger::get_verbosity(),
             configuration_key_detector,
@@ -221,6 +222,8 @@ namespace {
             frontend.cull_keyframes ? "on" : "off",
             configuration_key_global_adjustment,
             &global_adjustment[0],
+            configuration_key_adjustment,
+            (frontend.adjustment == mapping::frame::settings::adjustment_kind::relative) ? "relative" : "absolute",
             configuration_key_depth,
             frontend.inverse_depth ? "inverse" : "xyz",
             configuration_key_budget,
@@ -653,6 +656,17 @@ namespace {
                 }
                 else if (token_equals(value, value_length, "automatic")) {
                     frontend.solver = optimisation::factor_graph::strategy::automatic;
+                }
+                else {
+                    return false;
+                }
+            }
+            else if (token_equals(line, key_length, configuration_key_adjustment)) {
+                if (token_equals(value, value_length, "absolute")) {
+                    frontend.adjustment = mapping::frame::settings::adjustment_kind::absolute;
+                }
+                else if (token_equals(value, value_length, "relative")) {
+                    frontend.adjustment = mapping::frame::settings::adjustment_kind::relative;
                 }
                 else {
                     return false;
