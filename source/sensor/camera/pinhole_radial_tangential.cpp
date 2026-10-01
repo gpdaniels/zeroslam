@@ -19,13 +19,104 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "core/assert.hpp"
 #include "math/math.hpp"
 
+namespace {
+    double evaluate_polynomial(const double* const coefficients, const size_t degree, const double value) {
+        double result = coefficients[degree];
+        for (size_t index = degree; index > 0; --index) {
+            result = (result * value) + coefficients[index - 1];
+        }
+        return result;
+    }
+
+    // The roots above lower and up to upper where the polynomial changes sign or reaches zero, in increasing order.
+    // The roots of the derivative split the range into monotonic pieces, each holds at most one root, found by bisection.
+    size_t polynomial_roots(const double* const coefficients, size_t degree, const double lower, const double upper, double* const roots) {
+        while ((degree > 0) && (coefficients[degree] == 0.0)) {
+            --degree;
+        }
+        if (degree == 0) {
+            return 0;
+        }
+        double bounds[8];
+        size_t bounds_count = 0;
+        bounds[bounds_count++] = lower;
+        if (degree > 1) {
+            double derivative[6];
+            for (size_t index = 1; index <= degree; ++index) {
+                derivative[index - 1] = static_cast<double>(index) * coefficients[index];
+            }
+            double critical[6];
+            const size_t critical_count = polynomial_roots(&derivative[0], degree - 1, lower, upper, &critical[0]);
+            for (size_t index = 0; index < critical_count; ++index) {
+                if (critical[index] < upper) {
+                    bounds[bounds_count++] = critical[index];
+                }
+            }
+        }
+        bounds[bounds_count++] = upper;
+        size_t count = 0;
+        for (size_t index = 1; index < bounds_count; ++index) {
+            double below = bounds[index - 1];
+            double above = bounds[index];
+            const double value_below = evaluate_polynomial(coefficients, degree, below);
+            const double value_above = evaluate_polynomial(coefficients, degree, above);
+            if (value_above == 0.0) {
+                roots[count++] = above;
+                continue;
+            }
+            if ((value_below == 0.0) || ((value_below < 0.0) == (value_above < 0.0))) {
+                continue;
+            }
+            const bool rising = (value_above > 0.0);
+            for (size_t iteration = 0; iteration < 256; ++iteration) {
+                const double middle = 0.5 * (below + above);
+                if (!(middle > below) || !(middle < above)) {
+                    break;
+                }
+                if ((evaluate_polynomial(coefficients, degree, middle) > 0.0) == rising) {
+                    above = middle;
+                }
+                else {
+                    below = middle;
+                }
+            }
+            roots[count++] = above;
+        }
+        return count;
+    }
+
+    // The first u past zero where the polynomial, one at zero, stops being positive, infinite when it never does.
+    double first_non_positive(const double* const coefficients, const size_t degree) {
+        // A radius of a million is within a microradian of ninety degrees, so any fold further out is never seen.
+        const double search_limit = 1.0e12;
+        double roots[6];
+        const size_t count = polynomial_roots(coefficients, degree, 0.0, search_limit, &roots[0]);
+        return (count > 0) ? roots[0] : math::inf<double>();
+    }
+
+    // The squared radius u = r * r where the radial distortion r * N(u) / D(u) first stops increasing, infinite when it never does.
+    // Its derivative has the sign of N * D + 2 * u * (N' * D - N * D'), and it also ends at a pole, where D reaches zero.
+    double fold_radius_squared(const double* const radial_k) {
+        const double numerator[4] = { 1.0, radial_k[0], radial_k[1], radial_k[2] };
+        const double denominator[4] = { 1.0, radial_k[3], radial_k[4], radial_k[5] };
+        double derivative[7] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        for (size_t i = 0; i < 4; ++i) {
+            for (size_t j = 0; j < 4; ++j) {
+                derivative[i + j] += (1.0 + (2.0 * static_cast<double>(i)) - (2.0 * static_cast<double>(j))) * numerator[i] * denominator[j];
+            }
+        }
+        return math::min(first_non_positive(&derivative[0], 6), first_non_positive(&denominator[0], 3));
+    }
+}
+
 namespace sensor::camera {
     template <typename type>
     pinhole_radial_tangential<type>::pinhole_radial_tangential()
         : focal_lengths{ type(1), type(1) }
         , centre_points{ type(0.5), type(0.5) }
         , radial_k{ type(0), type(0), type(0), type(0), type(0), type(0) }
-        , tangential_p{ type(0), type(0) } {
+        , tangential_p{ type(0), type(0) }
+        , maximum_radius_squared(math::inf<type>()) {
     }
 
     template <typename type>
@@ -61,6 +152,15 @@ namespace sensor::camera {
         this->radial_k[3] = parameters[9];
         this->radial_k[4] = parameters[10];
         this->radial_k[5] = parameters[11];
+        const double radial_k_as_double[6] = {
+            static_cast<double>(this->radial_k[0]),
+            static_cast<double>(this->radial_k[1]),
+            static_cast<double>(this->radial_k[2]),
+            static_cast<double>(this->radial_k[3]),
+            static_cast<double>(this->radial_k[4]),
+            static_cast<double>(this->radial_k[5])
+        };
+        this->maximum_radius_squared = static_cast<type>(fold_radius_squared(&radial_k_as_double[0]));
         return true;
     }
 
@@ -97,6 +197,10 @@ namespace sensor::camera {
         const type yy = y * y;
         const type xy = x * y;
         const type r2 = xx + yy;
+        // Past the fold the distortion maps points from outside the field of view back into the image.
+        if (r2 > this->maximum_radius_squared) {
+            return false;
+        }
         const type numerator = type(1.0) + r2 * (this->radial_k[0] + r2 * (this->radial_k[1] + r2 * this->radial_k[2]));
         const type denominator = type(1.0) + r2 * (this->radial_k[3] + r2 * (this->radial_k[4] + r2 * this->radial_k[5]));
         if (!(denominator > type(1.0e-12)) && !(denominator < -type(1.0e-12))) {
@@ -154,6 +258,13 @@ namespace sensor::camera {
         bool converged = false;
         undistorted_xy[0] = distorted_xy[0];
         undistorted_xy[1] = distorted_xy[1];
+        // Every iterate must lie inside the fold, where the solution is unique, so start there too.
+        const type start_squared = undistorted_xy[0] * undistorted_xy[0] + undistorted_xy[1] * undistorted_xy[1];
+        if (start_squared > this->maximum_radius_squared) {
+            const type shrink = type(0.5) * math::sqrt(this->maximum_radius_squared / start_squared);
+            undistorted_xy[0] *= shrink;
+            undistorted_xy[1] *= shrink;
+        }
         type jacobian_distortion[2 * 2] = { type(1.0), type(0.0), type(0.0), type(1.0) };
         for (size_t iteration = 0; iteration < pinhole_radial_tangential::maximum_undistortion_iterations; ++iteration) {
             type redistorted_xy[2];
@@ -177,6 +288,10 @@ namespace sensor::camera {
             undistorted_xy[1] += (jacobian_distortion[0] * error[1] - jacobian_distortion[2] * error[0]) * determinant_inverse;
         }
         if (!converged) {
+            return false;
+        }
+        // The last step is not distorted again, so check it stayed inside the fold.
+        if ((undistorted_xy[0] * undistorted_xy[0] + undistorted_xy[1] * undistorted_xy[1]) > this->maximum_radius_squared) {
             return false;
         }
         if (jacobian_undistortion != nullptr) {

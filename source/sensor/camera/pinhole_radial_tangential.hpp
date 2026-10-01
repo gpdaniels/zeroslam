@@ -35,6 +35,8 @@ namespace sensor::camera {
         type centre_points[2];
         type radial_k[6];
         type tangential_p[2];
+        // Past this squared radius the radial distortion folds back, so points there are rejected, infinite when it never folds.
+        type maximum_radius_squared;
 
     public:
         pinhole_radial_tangential();
