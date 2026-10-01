@@ -27,7 +27,7 @@ namespace geometry::triangulation {
         const math::matrix<type, 3, 4>& rhs_pose,
         math::matrix<type, 3, 1>& result
     ) {
-        // The depth along the left ray follows from one row of rhs_ray x (R lhs_ray depth + t) = 0, choosing the better conditioned row.
+        // The depth along the left ray follows from one row of rhs_ray x (R lhs_ray depth + t) = 0, the better conditioned of its x and y rows; both vanish when the two rays lie in the rhs camera's xy-plane.
         const math::matrix<type, 3, 3> lhs_rotation = math::get_block<type, 3, 3>(lhs_pose, 0, 0);
         const math::matrix<type, 3, 1> lhs_translation = math::get_block<type, 3, 1>(lhs_pose, 0, 3);
         const math::matrix<type, 3, 3> rhs_rotation = math::get_block<type, 3, 3>(rhs_pose, 0, 0);

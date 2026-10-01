@@ -213,6 +213,20 @@ namespace geometry {
             matrix_vt[0][2] = essential[2][2] * normalisation;
         }
 
+        // Off the essential manifold a row is not quite orthogonal to the null vector, nor are the images of the right vectors to each other, so both pairs are orthogonalised to keep the rotations orthonormal.
+        const type row_projection = matrix_vt[0][0] * matrix_vt[2][0] + matrix_vt[0][1] * matrix_vt[2][1] + matrix_vt[0][2] * matrix_vt[2][2];
+        for (size_t i = 0; i < 3; ++i) {
+            matrix_vt[0][i] -= row_projection * matrix_vt[2][i];
+        }
+        const type row_norm_squared = matrix_vt[0][0] * matrix_vt[0][0] + matrix_vt[0][1] * matrix_vt[0][1] + matrix_vt[0][2] * matrix_vt[0][2];
+        if (!(row_norm_squared > type(0))) {
+            return false;
+        }
+        const type row_normalisation = type(1) / math::sqrt(row_norm_squared);
+        for (size_t i = 0; i < 3; ++i) {
+            matrix_vt[0][i] *= row_normalisation;
+        }
+
         matrix_vt[1][0] = matrix_vt[2][1] * matrix_vt[0][2] - matrix_vt[2][2] * matrix_vt[0][1];
         matrix_vt[1][1] = matrix_vt[2][2] * matrix_vt[0][0] - matrix_vt[2][0] * matrix_vt[0][2];
         matrix_vt[1][2] = matrix_vt[2][0] * matrix_vt[0][1] - matrix_vt[2][1] * matrix_vt[0][0];
@@ -224,12 +238,24 @@ namespace geometry {
         matrix_u[1][1] = essential[1][0] * matrix_vt[1][0] + essential[1][1] * matrix_vt[1][1] + essential[1][2] * matrix_vt[1][2];
         matrix_u[2][1] = essential[2][0] * matrix_vt[1][0] + essential[2][1] * matrix_vt[1][1] + essential[2][2] * matrix_vt[1][2];
 
-        const type column_0_normalisation = type(1) / math::sqrt(matrix_u[0][0] * matrix_u[0][0] + matrix_u[1][0] * matrix_u[1][0] + matrix_u[2][0] * matrix_u[2][0]);
-        const type column_1_normalisation = type(1) / math::sqrt(matrix_u[0][1] * matrix_u[0][1] + matrix_u[1][1] * matrix_u[1][1] + matrix_u[2][1] * matrix_u[2][1]);
-
+        const type column_0_norm_squared = matrix_u[0][0] * matrix_u[0][0] + matrix_u[1][0] * matrix_u[1][0] + matrix_u[2][0] * matrix_u[2][0];
+        if (!(column_0_norm_squared > type(0))) {
+            return false;
+        }
+        const type column_0_normalisation = type(1) / math::sqrt(column_0_norm_squared);
         matrix_u[0][0] *= column_0_normalisation;
         matrix_u[1][0] *= column_0_normalisation;
         matrix_u[2][0] *= column_0_normalisation;
+
+        const type column_projection = matrix_u[0][1] * matrix_u[0][0] + matrix_u[1][1] * matrix_u[1][0] + matrix_u[2][1] * matrix_u[2][0];
+        matrix_u[0][1] -= column_projection * matrix_u[0][0];
+        matrix_u[1][1] -= column_projection * matrix_u[1][0];
+        matrix_u[2][1] -= column_projection * matrix_u[2][0];
+        const type column_1_norm_squared = matrix_u[0][1] * matrix_u[0][1] + matrix_u[1][1] * matrix_u[1][1] + matrix_u[2][1] * matrix_u[2][1];
+        if (!(column_1_norm_squared > type(0))) {
+            return false;
+        }
+        const type column_1_normalisation = type(1) / math::sqrt(column_1_norm_squared);
         matrix_u[0][1] *= column_1_normalisation;
         matrix_u[1][1] *= column_1_normalisation;
         matrix_u[2][1] *= column_1_normalisation;

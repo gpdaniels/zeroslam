@@ -16,6 +16,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "geometry/sampson.hpp"
 
+#include "math/math.hpp"
+
 namespace geometry {
     template <typename type>
     type sampson<type>::distance_squared(
@@ -29,6 +31,10 @@ namespace geometry {
         const math::matrix<type, 3, 1> epipolar_rhs = math::transpose(epipolar) * rhs_point;
         const type constraint = (rhs_point[0] * epipolar_lhs[0]) + (rhs_point[1] * epipolar_lhs[1]) + (rhs_point[2] * epipolar_lhs[2]);
         const type gradient_squared = (epipolar_lhs[0] * epipolar_lhs[0]) + (epipolar_lhs[1] * epipolar_lhs[1]) + (epipolar_rhs[0] * epipolar_rhs[0]) + (epipolar_rhs[1] * epipolar_rhs[1]);
+        // A correspondence at both epipoles constrains nothing, it is infinitely far rather than 0 / 0.
+        if (!(gradient_squared > type(0))) {
+            return math::inf<type>();
+        }
         return (constraint * constraint) / gradient_squared;
     }
 

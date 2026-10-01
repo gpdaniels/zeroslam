@@ -28,8 +28,17 @@ namespace geometry::triangulation {
         const math::matrix<type, 3, 4>& rhs_pose,
         math::matrix<type, 3, 1>& result
     ) {
+        // The system is built in the lhs camera, [I | 0] and [R | t] with R = R_rhs R_lhs^T and t = t_rhs - R t_lhs, so its conditioning does not depend on how far the cameras are from the world origin.
+        const math::matrix<type, 3, 3> lhs_rotation = math::get_block<type, 3, 3>(lhs_pose, 0, 0);
+        const math::matrix<type, 3, 1> lhs_translation = math::get_block<type, 3, 1>(lhs_pose, 0, 3);
+        const math::matrix<type, 3, 3> lhs_rotation_transpose = math::transpose(lhs_rotation);
+        const math::matrix<type, 3, 3> rotation = math::get_block<type, 3, 3>(rhs_pose, 0, 0) * lhs_rotation_transpose;
+        const math::matrix<type, 3, 1> translation = math::get_block<type, 3, 1>(rhs_pose, 0, 3) - (rotation * lhs_translation);
+        const math::matrix<type, 3, 4> lhs_relative_pose{ { { type(1), type(0), type(0), type(0) }, { type(0), type(1), type(0), type(0) }, { type(0), type(0), type(1), type(0) } } };
+        const math::matrix<type, 3, 4> rhs_relative_pose{ { { rotation[0][0], rotation[0][1], rotation[0][2], translation[0] }, { rotation[1][0], rotation[1][1], rotation[1][2], translation[1] }, { rotation[2][0], rotation[2][1], rotation[2][2], translation[2] } } };
+
         type matrix_a[4][4];
-        if (!linear_least_squares::rows(lhs_ray, lhs_pose, &matrix_a[0][0], &matrix_a[1][0]) || !linear_least_squares::rows(rhs_ray, rhs_pose, &matrix_a[2][0], &matrix_a[3][0])) {
+        if (!linear_least_squares::rows(lhs_ray, lhs_relative_pose, &matrix_a[0][0], &matrix_a[1][0]) || !linear_least_squares::rows(rhs_ray, rhs_relative_pose, &matrix_a[2][0], &matrix_a[3][0])) {
             return false;
         }
 
@@ -59,9 +68,8 @@ namespace geometry::triangulation {
             }
         }
 
-        result[0] = point_homography[0] / point_homography[3];
-        result[1] = point_homography[1] / point_homography[3];
-        result[2] = point_homography[2] / point_homography[3];
+        const math::matrix<type, 3, 1> lhs_point{ { point_homography[0] / point_homography[3], point_homography[1] / point_homography[3], point_homography[2] / point_homography[3] } };
+        result = lhs_rotation_transpose * (lhs_point - lhs_translation);
 
         return true;
     }

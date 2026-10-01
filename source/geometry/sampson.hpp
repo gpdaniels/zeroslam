@@ -21,7 +21,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "math/matrix.hpp"
 
 namespace geometry {
-    // First order approximation of the squared geometric distance of a correspondence from the epipolar constraint rhs^T M lhs = 0, for an essential or fundamental matrix M.
+    // First order approximation of the squared geometric distance of a correspondence from the epipolar constraint rhs^T M lhs = 0, for an essential or fundamental matrix M, in the units of the points (normalised image units for an essential matrix); infinite at both epipoles.
+    // With isotropic noise of sigma on each coordinate of both points it is sigma^2 times a chi-squared variable of one degree of freedom at the true matrix, a mean of sigma^2.
     template <typename type>
     class sampson final {
     public:

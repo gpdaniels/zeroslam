@@ -21,7 +21,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "math/matrix.hpp"
 
 namespace geometry::triangulation {
-    // Poses are 3 by 4 world to camera transforms [R | t]; rays are bearings in camera coordinates of any length or direction, normalised points are rays with unit depth.
+    // Poses are 3 by 4 world to camera transforms [R | t]; rays are bearings in camera coordinates of any length or sign, normalised points are rays with unit depth.
+    // The depth comes from the x and y rows of rhs_ray x (R lhs_ray depth + t) = 0 alone, so it fails when the rhs ray and the rotated lhs ray both lie in the rhs camera's xy-plane; linear_least_squares takes rays of any direction.
     template <typename type>
     class direct final {
     public:

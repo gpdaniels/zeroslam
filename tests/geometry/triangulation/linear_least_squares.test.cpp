@@ -216,6 +216,33 @@ int main(int argc, char* argv[]) {
         REQUIRE(backwards > 100);
     }
 
+    // Far from the world origin the precision relative to the depth does not fall.
+    {
+        core::random_pcg random(0x5eed0015ull);
+        const double offsets[3] = { 0.0, 1.0e3, 1.0e5 };
+        for (const double offset : offsets) {
+            double worst = 0.0;
+            for (int trial = 0; trial < 64; ++trial) {
+                const math::matrix<double, 3, 3> lhs_rotation = math::so3<double>::rotation(random.get_random(-0.5, 0.5), random.get_random(-0.5, 0.5), random.get_random(-0.5, 0.5)).get_matrix();
+                const math::matrix<double, 3, 3> rhs_rotation = math::so3<double>::rotation(random.get_random(-0.5, 0.5), random.get_random(-0.5, 0.5), random.get_random(-0.5, 0.5)).get_matrix();
+                const math::matrix<double, 3, 1> lhs_centre{ { (0.6 * offset) + random.get_random(-1.0, 1.0), (-0.8 * offset) + random.get_random(-1.0, 1.0), (0.3 * offset) + random.get_random(-1.0, 1.0) } };
+                const math::matrix<double, 3, 1> rhs_centre = lhs_centre + math::matrix<double, 3, 1>{ { random.get_random(-1.0, 1.0), random.get_random(-1.0, 1.0), random.get_random(-0.3, 0.3) } };
+                const math::matrix<double, 3, 1> in_lhs_camera{ { random.get_random(-1.0, 1.0), random.get_random(-1.0, 1.0), random.get_random(3.0, 8.0) } };
+                const math::matrix<double, 3, 1> world = lhs_centre + (math::transpose(lhs_rotation) * in_lhs_camera);
+                const math::matrix<double, 3, 4> lhs_pose = make_pose(lhs_rotation, -(lhs_rotation * lhs_centre));
+                const math::matrix<double, 3, 4> rhs_pose = make_pose(rhs_rotation, -(rhs_rotation * rhs_centre));
+                const math::matrix<double, 3, 1> rhs_camera = transform(rhs_pose, world);
+                if (rhs_camera[2] < 0.5) {
+                    continue;
+                }
+                math::matrix<double, 3, 1> result;
+                REQUIRE(geometry::triangulation::linear_least_squares<double>::triangulate(transform(lhs_pose, world), lhs_pose, rhs_camera, rhs_pose, result));
+                worst = math::max(worst, std::sqrt((result - world).get_length_squared() / (world - lhs_centre).get_length_squared()));
+            }
+            REQUIRE(worst < 1e-9);
+        }
+    }
+
     // Single precision.
     {
         core::random_pcg random(0x5eed0012ull);

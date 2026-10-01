@@ -227,6 +227,47 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Slightly off the essential manifold the rotations stay orthonormal, and one candidate stays close to the true pose.
+    {
+        core::random_pcg random(0x5eed0400ull);
+        const double perturbations[2] = { 1e-6, 1e-3 };
+        for (const double perturbation : perturbations) {
+            for (int trial = 0; trial < 32; ++trial) {
+                const math::matrix<double, 3, 3> rotation = make_rotation(random, 1.0);
+                math::matrix<double, 3, 1> translation = make_translation(random, 1.0);
+                translation = translation * (1.0 / std::sqrt(translation.get_length_squared()));
+                math::matrix<double, 3, 3> essential;
+                geometry::essential<double>::from_poses(rotation, translation, essential);
+                essential = essential * (1.0 / std::sqrt(2.0));
+                for (size_t row = 0; row < 3; ++row) {
+                    for (size_t col = 0; col < 3; ++col) {
+                        essential[row][col] += perturbation * random.get_random(-1.0, 1.0);
+                    }
+                }
+                math::matrix<double, 3, 3> rotations[4];
+                math::matrix<double, 3, 1> translations[4];
+                REQUIRE(geometry::essential<double>::decompose(essential, rotations, translations) == 4);
+                size_t matching = 0;
+                for (size_t solution = 0; solution < 4; ++solution) {
+                    const math::matrix<double, 3, 3> orthogonality = math::transpose(rotations[solution]) * rotations[solution];
+                    for (size_t row = 0; row < 3; ++row) {
+                        for (size_t col = 0; col < 3; ++col) {
+                            REQUIRE(std::abs(orthogonality[row][col] - ((row == col) ? 1.0 : 0.0)) < 1e-12);
+                        }
+                    }
+                    const math::matrix<double, 3, 3>& r = rotations[solution];
+                    const double determinant = r[0][0] * (r[1][1] * r[2][2] - r[2][1] * r[1][2]) - r[0][1] * (r[1][0] * r[2][2] - r[1][2] * r[2][0]) + r[0][2] * (r[1][0] * r[2][1] - r[1][1] * r[2][0]);
+                    REQUIRE(std::abs(determinant - 1.0) < 1e-12);
+                    REQUIRE(std::abs(translations[solution].get_length_squared() - 1.0) < 1e-12);
+                    if (matches_pose(rotations[solution], translations[solution], rotation, translation, 1e2 * perturbation)) {
+                        ++matching;
+                    }
+                }
+                REQUIRE(matching == 1);
+            }
+        }
+    }
+
     // Epipoles are the translation directions.
     {
         core::random_pcg random(0x5eed000bull);

@@ -21,7 +21,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "math/matrix.hpp"
 
 namespace geometry::triangulation {
-    // Poses are 3 by 4 world to camera transforms [R | t]; rays are bearings in camera coordinates of any length or direction, normalised points are rays with unit depth.
+    // Poses are 3 by 4 world to camera transforms [R | t] with R a rotation; rays are bearings in camera coordinates of any length or direction, normalised points are rays with unit depth; the system is solved in the lhs camera, so precision does not depend on the distance from the world origin.
     template <typename type>
     class linear_least_squares final {
     public:

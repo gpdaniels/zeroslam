@@ -81,6 +81,19 @@ int main(int argc, char* argv[]) {
         REQUIRE(is_value_approx(geometry::sampson<double>::distance_squared(math::transpose(essential), rhs_near, lhs), distance_near, 1e-9));
     }
 
+    // A correspondence at both epipoles has a zero gradient: it is infinitely far rather than 0 / 0.
+    {
+        const math::matrix<double, 3, 3> forward{ { { 0.0, -1.0, 0.0 }, { 1.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 } } };
+        const math::matrix<double, 2, 1> epipole{ { 0.0, 0.0 } };
+        const double distance = geometry::sampson<double>::distance_squared(forward, epipole, epipole);
+        REQUIRE(std::isinf(distance));
+        REQUIRE(distance > 0.0);
+        const math::matrix<float, 3, 3> forward_float{ { { 0.0f, -1.0f, 0.0f }, { 1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f } } };
+        const math::matrix<float, 2, 1> epipole_float{ { 0.0f, 0.0f } };
+        REQUIRE(std::isinf(geometry::sampson<float>::distance_squared(forward_float, epipole_float, epipole_float)));
+        REQUIRE(std::isinf(geometry::sampson<double>::distance_squared(math::matrix<double, 3, 3>::zero(), epipole, epipole)));
+    }
+
     // Single precision.
     {
         const math::matrix<float, 3, 3> essential{ { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, -1.0f }, { 0.0f, 1.0f, 0.0f } } };
