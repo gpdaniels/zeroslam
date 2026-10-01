@@ -132,15 +132,16 @@ namespace mapping {
             });
             kps.resize(static_cast<size_t>(prune_score_count));
 
-            core::sort::quick(kps.data(), kps.size(), [](const feature::point& lhs, const feature::point& rhs) {
+            std::sort(kps.begin(), kps.end(), [](const feature::point& lhs, const feature::point& rhs) {
                 return lhs.y == rhs.y ? lhs.x < rhs.x : lhs.y < rhs.y;
             });
+
             std::vector<feature::point> features_suppressed(kps.size());
             const size_t suppressed_count = feature::suppressor::fast::suppress(kps.data(), kps.size(), image_grey.get_rows(), features_suppressed.data());
             features_suppressed.resize(suppressed_count);
             kps = std::move(features_suppressed);
 
-            core::sort::quick(kps.data(), kps.size(), [](const feature::point& lhs, const feature::point& rhs) {
+            std::sort(kps.begin(), kps.end(), [](const feature::point& lhs, const feature::point& rhs) {
                 if (lhs.response != rhs.response) {
                     return lhs.response > rhs.response;
                 }

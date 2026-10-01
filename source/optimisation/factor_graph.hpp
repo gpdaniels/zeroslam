@@ -78,7 +78,7 @@ namespace optimisation {
         std::vector<edge*> edges;
         std::unordered_set<vertex*> vertex_set;
         std::unordered_set<edge*> edge_set;
-        std::unordered_multimap<vertex*, edge*> vertex_to_edge;
+        std::unordered_map<vertex*, std::vector<edge*>> vertex_to_edge;
 
     public:
         constexpr static const int maximum_landmark_dimensions = 6;

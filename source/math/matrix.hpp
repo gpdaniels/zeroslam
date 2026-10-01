@@ -21,6 +21,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "core/assert.hpp"
 #include "math/math.hpp"
 
+#include <cstring>
+
 namespace {
     using size_t = decltype(sizeof(0));
     template <bool condition, typename type_true, typename type_false>
@@ -226,54 +228,91 @@ namespace math {
     private:
         size_t matrix_rows;
         size_t matrix_cols;
-        type* matrix_data;
+        type* matrix_data_large;
+        static constexpr size_t small_size = 16;
+        type matrix_data_small[small_size];
+
+    private:
+        constexpr type* matrix_data() {
+            return this->matrix_data_large != nullptr ? this->matrix_data_large : this->matrix_data_small;
+        }
+
+        constexpr const type* matrix_data() const {
+            return this->matrix_data_large != nullptr ? this->matrix_data_large : this->matrix_data_small;
+        }
+
+        void alloc() {
+            if (this->matrix_rows * this->matrix_cols > small_size) {
+                this->matrix_data_large = new type[this->matrix_rows * this->matrix_cols];
+            }
+        }
+
+        void dealloc() {
+            if (this->matrix_data_large != nullptr) {
+                delete[] this->matrix_data_large;
+                this->matrix_data_large = nullptr;
+            }
+        }
 
     public:
         ~matrix() {
-            delete[] matrix_data;
+            dealloc();
         }
 
         constexpr matrix()
             : matrix_rows(0)
             , matrix_cols(0)
-            , matrix_data(nullptr) {
+            , matrix_data_large(nullptr) {
         }
 
         matrix(size_t rows, size_t cols)
             : matrix_rows(rows)
             , matrix_cols(cols)
-            , matrix_data(new type[rows * cols]) {
+            , matrix_data_large(nullptr) {
+            alloc();
         }
 
         matrix(const matrix& other)
             : matrix_rows(other.matrix_rows)
             , matrix_cols(other.matrix_cols)
-            , matrix_data(new type[other.size()]) {
+            , matrix_data_large(nullptr) {
+            alloc();
+            type* this_p = this->matrix_data();
+            const type* other_p = other.matrix_data();
             for (size_t i = 0; i < this->size(); ++i) {
-                this->matrix_data[i] = other.matrix_data[i];
+                this_p[i] = other_p[i];
             }
         }
 
         constexpr matrix(matrix&& other)
             : matrix_rows(other.matrix_rows)
             , matrix_cols(other.matrix_cols)
-            , matrix_data(other.matrix_data) {
+            , matrix_data_large(other.matrix_data_large) {
+            if (other.matrix_data_large == nullptr) {
+                std::memcpy(this->matrix_data_small, other.matrix_data_small, sizeof(other.matrix_data_small));
+            }
             other.matrix_rows = 0;
             other.matrix_cols = 0;
-            other.matrix_data = nullptr;
+            other.matrix_data_large = nullptr;
         }
 
         const matrix& operator=(const matrix& other) {
             if (&other == this)
                 return *this;
             if (this->size() != other.size()) {
-                delete[] this->matrix_data;
-                this->matrix_data = new type[other.size()];
+                dealloc();
+                this->matrix_rows = other.matrix_rows;
+                this->matrix_cols = other.matrix_cols;
+                alloc();
             }
-            this->matrix_rows = other.matrix_rows;
-            this->matrix_cols = other.matrix_cols;
+            else {
+                this->matrix_rows = other.matrix_rows;
+                this->matrix_cols = other.matrix_cols;
+            }
+            type* this_p = this->matrix_data();
+            const type* other_p = other.matrix_data();
             for (size_t i = 0; i < this->size(); ++i) {
-                this->matrix_data[i] = other.matrix_data[i];
+                this_p[i] = other_p[i];
             }
             return *this;
         }
@@ -283,13 +322,24 @@ namespace math {
                 return *this;
             const size_t temp_rows = this->matrix_rows;
             const size_t temp_cols = this->matrix_cols;
-            type* temp_data = this->matrix_data;
+
+            if (other.matrix_data_large == nullptr && this->matrix_data_large != nullptr) {
+                std::memcpy(this->matrix_data_small, other.matrix_data_small, sizeof(other.matrix_data_small));
+            }
+            else if (other.matrix_data_large == nullptr && this->matrix_data_large == nullptr) {
+                type scratch[small_size];
+                std::memcpy(scratch, other.matrix_data_small, sizeof(other.matrix_data_small));
+                std::memcpy(other.matrix_data_small, this->matrix_data_small, sizeof(other.matrix_data_small));
+                std::memcpy(this->matrix_data_small, scratch, sizeof(other.matrix_data_small));
+            }
+
+            type* temp_data = this->matrix_data_large;
             this->matrix_rows = other.matrix_rows;
             this->matrix_cols = other.matrix_cols;
-            this->matrix_data = other.matrix_data;
+            this->matrix_data_large = other.matrix_data_large;
             other.matrix_rows = temp_rows;
             other.matrix_cols = temp_cols;
-            other.matrix_data = temp_data;
+            other.matrix_data_large = temp_data;
             return *this;
         }
 
@@ -297,9 +347,12 @@ namespace math {
         matrix(size_t rows, size_t cols, const type* values)
             : matrix_rows(rows)
             , matrix_cols(cols)
-            , matrix_data(new type[this->size()]) {
+            , matrix_data_large(nullptr) {
+            alloc();
+
+            type* p = this->matrix_data();
             for (size_t i = 0; i < this->size(); ++i) {
-                this->matrix_data[i] = values[i];
+                p[i] = values[i];
             }
         }
 
@@ -311,10 +364,13 @@ namespace math {
         matrix(const type (&values)[value_rows][value_cols]) {
             this->matrix_rows = value_rows;
             this->matrix_cols = value_cols;
-            this->matrix_data = new type[value_rows * value_cols];
+            this->matrix_data_large = nullptr;
+            alloc();
+
+            type* p = this->matrix_data();
             for (size_t r = 0; r < value_rows; ++r) {
                 for (size_t c = 0; c < value_cols; ++c) {
-                    this->matrix_data[r * value_cols + c] = values[r][c];
+                    p[r * value_cols + c] = values[r][c];
                 }
             }
         }
@@ -322,16 +378,19 @@ namespace math {
     public:
         static inline matrix zero(size_t rows, size_t cols) {
             matrix<type, 0, 0> result(rows, cols);
+
+            type* p = result.matrix_data();
             for (size_t i = 0; i < result.size(); ++i) {
-                result.matrix_data[i] = 0;
+                p[i] = 0;
             }
             return result;
         }
 
         static inline matrix identity(size_t rows, size_t cols) {
             matrix<type, 0, 0> result = matrix<type, 0, 0>::zero(rows, cols);
+            type* p = result.matrix_data();
             for (size_t i = 0; i < math::min(rows, cols); ++i) {
-                result.matrix_data[i * cols + i] = 1;
+                p[i * cols + i] = 1;
             }
             return result;
         }
@@ -346,11 +405,11 @@ namespace math {
         }
 
         constexpr const type* data() const {
-            return this->matrix_data;
+            return this->matrix_data();
         }
 
         constexpr type* data() {
-            return this->matrix_data;
+            return this->matrix_data();
         }
 
         constexpr size_t size() const {
@@ -360,8 +419,9 @@ namespace math {
     public:
         constexpr type get_length_squared() const {
             type length_squared = 0;
+            const type* p = this->matrix_data();
             for (size_t i = 0; i < this->size(); ++i) {
-                length_squared += this->matrix_data[i] * this->matrix_data[i];
+                length_squared += p[i] * p[i];
             }
             return length_squared;
         }
@@ -369,25 +429,25 @@ namespace math {
     public:
         constexpr const type* operator[](size_t index) const {
             ASSERT(index < this->matrix_rows, "Row index out of bounds.");
-            return &this->matrix_data[index * this->matrix_cols];
+            return &this->matrix_data()[index * this->matrix_cols];
         }
 
         constexpr type* operator[](size_t index) {
             ASSERT(index < this->matrix_rows, "Row index out of bounds.");
-            return &this->matrix_data[index * this->matrix_cols];
+            return &this->matrix_data()[index * this->matrix_cols];
         }
 
     public:
         constexpr const type& operator()(size_t index_row, size_t index_col) const {
             ASSERT(index_row < this->matrix_rows, "Row index must be less than the height of the matrix.");
             ASSERT(index_col < this->matrix_cols, "Column index must be less than the width of the matrix.");
-            return this->matrix_data[index_row * this->matrix_cols + index_col];
+            return this->matrix_data()[index_row * this->matrix_cols + index_col];
         }
 
         constexpr type& operator()(size_t index_row, size_t index_col) {
             ASSERT(index_row < this->matrix_rows, "Row index must be less than the height of the matrix.");
             ASSERT(index_col < this->matrix_cols, "Column index must be less than the width of the matrix.");
-            return this->matrix_data[index_row * this->matrix_cols + index_col];
+            return this->matrix_data()[index_row * this->matrix_cols + index_col];
         }
     };
 
