@@ -563,5 +563,197 @@ int main(int argc, char* argv[]) {
         REQUIRE(math::solve_lower_upper<test_type>(&matrix[0][0], &rhs[0], width, height, &solution[0]) == false);
     }
 
+    // The pivot tolerance is relative, so well conditioned matrices factorise and solve at any scale.
+    {
+        core::random_pcg rng;
+        constexpr static const int n = 10;
+        const double scales[] = { 0x1p-900, 1e-300, 1e-12, 1e-9, 1e-6, 1e-4, 1.0, 1e6, 1e12, 1e300 };
+        for (const double scale : scales) {
+            for (int trial = 0; trial < 200; ++trial) {
+                double matrix[n * n];
+                double scale_max = 0.0;
+                for (int i = 0; i < n * n; ++i) {
+                    matrix[i] = scale * ((2.0 * rng.get_random_exclusive_top()) - 1.0);
+                    scale_max = std::fmax(scale_max, std::abs(matrix[i]));
+                }
+                double matrix_l[n * n];
+                double matrix_u[n * n];
+                double matrix_p[n * n];
+                REQUIRE(math::decompose_lower_upper<double>(&matrix[0], n, n, &matrix_l[0], &matrix_u[0], &matrix_p[0]));
+                double rhs[n];
+                for (int i = 0; i < n; ++i) {
+                    rhs[i] = (2.0 * rng.get_random_exclusive_top()) - 1.0;
+                }
+                double solution[n];
+                REQUIRE(math::solve_lower_upper<double>(&matrix_l[0], &matrix_u[0], &matrix_p[0], &rhs[0], n, n, &solution[0]));
+                double solution_wrapped[n];
+                REQUIRE(math::solve_lower_upper<double>(&matrix[0], &rhs[0], n, n, &solution_wrapped[0]));
+                // The backward error, relative to the scale of the matrix and the solution, is at the rounding level.
+                double solution_max = 0.0;
+                for (int i = 0; i < n; ++i) {
+                    REQUIRE(solution_wrapped[i] == solution[i]);
+                    solution_max = std::fmax(solution_max, std::abs(solution[i]));
+                }
+                for (int i = 0; i < n; ++i) {
+                    double residual = -rhs[i];
+                    for (int j = 0; j < n; ++j) {
+                        residual += (matrix[i * n + j] / scale_max) * (solution[j] * scale_max);
+                    }
+                    REQUIRE(std::abs(residual) <= 1e-13 * std::fmax(1.0, solution_max * scale_max));
+                }
+            }
+        }
+    }
+
+    // Scaling by a power of two is exact, so it scales the upper matrix and leaves the lower and permutation matrices, and the decision, bit identical.
+    {
+        core::random_pcg rng;
+        constexpr static const int n = 8;
+        for (int trial = 0; trial < 200; ++trial) {
+            double matrix[n * n];
+            double matrix_scaled_down[n * n];
+            double matrix_scaled_up[n * n];
+            for (int i = 0; i < n * n; ++i) {
+                matrix[i] = (2.0 * rng.get_random_exclusive_top()) - 1.0;
+                matrix_scaled_down[i] = matrix[i] * 0x1p-60;
+                matrix_scaled_up[i] = matrix[i] * 0x1p+60;
+            }
+            double matrix_l[n * n];
+            double matrix_u[n * n];
+            double matrix_p[n * n];
+            REQUIRE(math::decompose_lower_upper<double>(&matrix[0], n, n, &matrix_l[0], &matrix_u[0], &matrix_p[0]));
+            const double* const scaled_matrices[2] = { &matrix_scaled_down[0], &matrix_scaled_up[0] };
+            const double scaled_factors[2] = { 0x1p-60, 0x1p+60 };
+            for (int s = 0; s < 2; ++s) {
+                double scaled_l[n * n];
+                double scaled_u[n * n];
+                double scaled_p[n * n];
+                REQUIRE(math::decompose_lower_upper<double>(scaled_matrices[s], n, n, &scaled_l[0], &scaled_u[0], &scaled_p[0]));
+                for (int i = 0; i < n * n; ++i) {
+                    REQUIRE(scaled_l[i] == matrix_l[i]);
+                    REQUIRE(scaled_p[i] == matrix_p[i]);
+                    REQUIRE(scaled_u[i] == matrix_u[i] * scaled_factors[s]);
+                }
+            }
+        }
+    }
+
+    // A rank deficient matrix is still rejected at any scale.
+    {
+        const double scales[] = { 1e-200, 1e-10, 1.0, 1e10, 1e200 };
+        for (const double scale : scales) {
+            const double matrix[3][3] = {
+                { 1.0 * scale, 2.0 * scale, 3.0 * scale },
+                { 2.0 * scale, 4.0 * scale, 6.0 * scale },
+                { 1.0 * scale, 1.0 * scale, 1.0 * scale }
+            };
+            double matrix_l[3][3];
+            double matrix_u[3][3];
+            double matrix_p[3][3];
+            REQUIRE(math::decompose_lower_upper<double>(&matrix[0][0], 3, 3, &matrix_l[0][0], &matrix_u[0][0], &matrix_p[0][0]) == false);
+            const double rhs[3] = { 1.0, 2.0, 3.0 };
+            double solution[3];
+            REQUIRE(math::solve_lower_upper<double>(&matrix[0][0], &rhs[0], 3, 3, &solution[0]) == false);
+        }
+    }
+
+    // A pivot at the rounding level of the largest entry is numerically zero, one just above it is not.
+    {
+        const double singular[2][2] = { { 1.0, 1.0 }, { 1.0, 1.0 + 0x1p-52 } };
+        const double regular[2][2] = { { 1.0, 1.0 }, { 1.0, 1.0 + 0x1p-40 } };
+        double matrix_l[2][2];
+        double matrix_u[2][2];
+        double matrix_p[2][2];
+        REQUIRE(math::decompose_lower_upper<double>(&singular[0][0], 2, 2, &matrix_l[0][0], &matrix_u[0][0], &matrix_p[0][0]) == false);
+        REQUIRE(math::decompose_lower_upper<double>(&regular[0][0], 2, 2, &matrix_l[0][0], &matrix_u[0][0], &matrix_p[0][0]));
+        const double rhs[2] = { 2.0, 2.0 + 0x1p-40 };
+        double solution[2];
+        REQUIRE(math::solve_lower_upper<double>(&matrix_l[0][0], &matrix_u[0][0], &matrix_p[0][0], &rhs[0], 2, 2, &solution[0]));
+        REQUIRE(is_value_equal(solution[0], 1.0));
+        REQUIRE(is_value_equal(solution[1], 1.0));
+
+        const float singular_float[2][2] = { { 1.0f, 1.0f }, { 1.0f, 1.0f + 0x1p-23f } };
+        const float regular_float[2][2] = { { 1.0f, 1.0f }, { 1.0f, 1.0f + 0x1p-16f } };
+        float matrix_l_float[2][2];
+        float matrix_u_float[2][2];
+        float matrix_p_float[2][2];
+        REQUIRE(math::decompose_lower_upper<float>(&singular_float[0][0], 2, 2, &matrix_l_float[0][0], &matrix_u_float[0][0], &matrix_p_float[0][0]) == false);
+        REQUIRE(math::decompose_lower_upper<float>(&regular_float[0][0], 2, 2, &matrix_l_float[0][0], &matrix_u_float[0][0], &matrix_p_float[0][0]));
+    }
+
+    // The solve tests the diagonals of the triangles it is given relative to their own scale.
+    {
+        const double matrix_l[2][2] = { { 1.0, 0.0 }, { 0.5, 1.0 } };
+        const double matrix_p[2][2] = { { 1.0, 0.0 }, { 0.0, 1.0 } };
+        const double small_u[2][2] = { { 2e-9, 1e-9 }, { 0.0, 3e-9 } };
+        const double tiny_diagonal_u[2][2] = { { 2.0, 1.0 }, { 0.0, 1e-17 } };
+        const double zero_diagonal_u[2][2] = { { 0.0, 1.0 }, { 0.0, 1.0 } };
+        const double rhs[2] = { 3e-9, 4e-9 };
+        double solution[2];
+        REQUIRE(math::solve_lower_upper<double>(&matrix_l[0][0], &small_u[0][0], &matrix_p[0][0], &rhs[0], 2, 2, &solution[0]));
+        REQUIRE(is_value_approx(solution[1], (4e-9 - (0.5 * 3e-9)) / 3e-9, 1e-12));
+        REQUIRE(is_value_approx(solution[0], (3e-9 - (1e-9 * solution[1])) / 2e-9, 1e-12));
+        REQUIRE(math::solve_lower_upper<double>(&matrix_l[0][0], &tiny_diagonal_u[0][0], &matrix_p[0][0], &rhs[0], 2, 2, &solution[0]) == false);
+        REQUIRE(math::solve_lower_upper<double>(&matrix_l[0][0], &zero_diagonal_u[0][0], &matrix_p[0][0], &rhs[0], 2, 2, &solution[0]) == false);
+        const double nan_l[2][2] = { { 1.0, 0.0 }, { 0.5, std::nan("") } };
+        REQUIRE(math::solve_lower_upper<double>(&nan_l[0][0], &small_u[0][0], &matrix_p[0][0], &rhs[0], 2, 2, &solution[0]) == false);
+        const double infinite_u[2][2] = { { 2.0, 1.0 }, { 0.0, HUGE_VAL } };
+        REQUIRE(math::solve_lower_upper<double>(&matrix_l[0][0], &infinite_u[0][0], &matrix_p[0][0], &rhs[0], 2, 2, &solution[0]) == false);
+    }
+
+    // A non-finite entry anywhere is rejected, including in the columns beyond the square part of a wide matrix.
+    {
+        const double non_finite_values[3] = { std::nan(""), HUGE_VAL, -HUGE_VAL };
+        for (const double non_finite_value : non_finite_values) {
+            for (int index = 0; index < 3 * 4; ++index) {
+                double matrix[3 * 4] = { 2.0, 1.0, 1.0, 5.0, 2.0, 1.0, 3.0, 6.0, 1.0, 3.0, 2.0, 7.0 };
+                matrix[index] = non_finite_value;
+                double matrix_l[3 * 3];
+                double matrix_u[3 * 4];
+                double matrix_p[3 * 3];
+                REQUIRE(math::decompose_lower_upper<double>(&matrix[0], 4, 3, &matrix_l[0], &matrix_u[0], &matrix_p[0]) == false);
+            }
+            for (int index = 0; index < 3 * 3; ++index) {
+                double matrix[3 * 3] = { 2.0, 1.0, 1.0, 2.0, 1.0, 3.0, 1.0, 3.0, 2.0 };
+                matrix[index] = non_finite_value;
+                const double rhs[3] = { 7.0, 13.0, 13.0 };
+                double solution[3];
+                REQUIRE(math::solve_lower_upper<double>(&matrix[0], &rhs[0], 3, 3, &solution[0]) == false);
+            }
+        }
+    }
+
+    // Systems too large for the wrapper's stack storage are solved the same way.
+    {
+        core::random_pcg rng;
+        const int sizes[] = { 16, 17, 24 };
+        for (const int n : sizes) {
+            double matrix[24 * 24];
+            double rhs[24];
+            for (int i = 0; i < n; ++i) {
+                for (int j = 0; j < n; ++j) {
+                    matrix[i * n + j] = (2.0 * rng.get_random_exclusive_top()) - 1.0;
+                }
+                rhs[i] = (2.0 * rng.get_random_exclusive_top()) - 1.0;
+            }
+            double matrix_l[24 * 24];
+            double matrix_u[24 * 24];
+            double matrix_p[24 * 24];
+            REQUIRE(math::decompose_lower_upper<double>(&matrix[0], n, n, &matrix_l[0], &matrix_u[0], &matrix_p[0]));
+            double solution[24];
+            REQUIRE(math::solve_lower_upper<double>(&matrix_l[0], &matrix_u[0], &matrix_p[0], &rhs[0], n, n, &solution[0]));
+            double solution_wrapped[24];
+            REQUIRE(math::solve_lower_upper<double>(&matrix[0], &rhs[0], n, n, &solution_wrapped[0]));
+            for (int i = 0; i < n; ++i) {
+                REQUIRE(solution_wrapped[i] == solution[i]);
+                double sum = 0.0;
+                for (int j = 0; j < n; ++j) {
+                    sum += matrix[i * n + j] * solution[j];
+                }
+                REQUIRE(is_value_approx(sum, rhs[i], 1e-9));
+            }
+        }
+    }
+
     return EXIT_SUCCESS;
 }

@@ -685,4 +685,85 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+
+    // A non-finite entry anywhere fails instead of looping forever in the balancing.
+    {
+        const double non_finite_values[3] = { HUGE_VAL, -HUGE_VAL, std::nan("") };
+        for (const double non_finite_value : non_finite_values) {
+            for (int index = 0; index < 9; ++index) {
+                double matrix[9] = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0 };
+                matrix[index] = non_finite_value;
+                double values[6];
+                double vectors[9];
+                REQUIRE((math::eigen_solver<double, true, true>(&matrix[0], 3, &values[0], &vectors[0]) == false));
+                REQUIRE((math::eigen_solver<double, false, false>(&matrix[0], 3, &values[0], nullptr) == false));
+            }
+        }
+        float matrix_float[4] = { 1.0f, HUGE_VALF, 3.0f, 4.0f };
+        float values_float[4];
+        float vectors_float[4];
+        REQUIRE((math::eigen_solver<float, true, true>(&matrix_float[0], 2, &values_float[0], &vectors_float[0]) == false));
+    }
+
+    // A finite matrix whose column sums overflow while its row sums do not also terminates, and its overflowing results are a failure.
+    {
+        const double matrix[9] = { 0.0, 1.0, 1.0, 1e308, 0.0, 1.0, 1e308, 1.0, 0.0 };
+        double values[6];
+        double vectors[9];
+        REQUIRE((math::eigen_solver<double, true, true>(&matrix[0], 3, &values[0], &vectors[0]) == false));
+    }
+
+    // Matrices larger than the stack storage, the second difference matrix has eigenvalues 2 - 2 cos(k pi / (n + 1)).
+    {
+        const int sizes[] = { 10, 16, 17, 30 };
+        for (const int n : sizes) {
+            double matrix[30 * 30] = {};
+            for (int i = 0; i < n; ++i) {
+                matrix[i * n + i] = 2.0;
+                if (i + 1 < n) {
+                    matrix[i * n + (i + 1)] = -1.0;
+                    matrix[(i + 1) * n + i] = -1.0;
+                }
+            }
+            double values[2 * 30];
+            double vectors[30 * 30];
+            REQUIRE((math::eigen_solver<double, true, true>(&matrix[0], n, &values[0], &vectors[0])));
+            for (int k = 0; k < n; ++k) {
+                const double expected = 2.0 - 2.0 * std::cos(static_cast<double>(k + 1) * 3.14159265358979323846 / static_cast<double>(n + 1));
+                REQUIRE(is_value_approx(values[2 * k + 0], expected, 1e-12));
+                REQUIRE(values[2 * k + 1] == 0.0);
+                double length_squared = 0.0;
+                for (int row = 0; row < n; ++row) {
+                    length_squared += vectors[row * n + k] * vectors[row * n + k];
+                }
+                REQUIRE(length_squared > 1e-6);
+                for (int row = 0; row < n; ++row) {
+                    double product = 0.0;
+                    for (int column = 0; column < n; ++column) {
+                        product += matrix[row * n + column] * vectors[column * n + k];
+                    }
+                    REQUIRE(std::abs(product - (values[2 * k + 0] * vectors[row * n + k])) <= 1e-10 * std::sqrt(length_squared));
+                }
+            }
+        }
+    }
+
+    // A cyclic shift larger than the stack storage has the n-th roots of unity as its eigenvalues.
+    {
+        constexpr static const int n = 20;
+        double matrix[n * n] = {};
+        for (int i = 0; i < n; ++i) {
+            matrix[i * n + ((i + 1) % n)] = 1.0;
+        }
+        double values[2 * n];
+        REQUIRE((math::eigen_solver<double, false, true>(&matrix[0], n, &values[0], nullptr)));
+        for (int k = 0; k < n; ++k) {
+            const double angle = 2.0 * 3.14159265358979323846 * static_cast<double>(k) / static_cast<double>(n);
+            bool found = false;
+            for (int i = 0; i < n; ++i) {
+                found = found || ((std::abs(values[2 * i + 0] - std::cos(angle)) < 1e-9) && (std::abs(values[2 * i + 1] - std::sin(angle)) < 1e-9));
+            }
+            REQUIRE(found);
+        }
+    }
 }

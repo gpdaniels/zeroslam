@@ -20,6 +20,20 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "math/math.hpp"
 
+#if defined(_MSC_VER)
+#pragma warning(push, 0)
+#endif
+
+#include <vector>
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
+namespace {
+    using size_t = decltype(sizeof(0));
+}
+
 namespace math {
     /// @brief  Computes all eigenvalues and eigenvectors of a general matrix.
     /// @tparam type The scalar/numeric type to use, normally float or double.
@@ -54,11 +68,37 @@ namespace math {
             }
         };
 
-        // Working arrays.
-        type* working_matrix = new type[static_cast<size_t>(size * size)]{};
-        complex_number* eigenvalues = new complex_number[static_cast<size_t>(size)];
-        type* scaling = new type[static_cast<size_t>(size)];
-        int* permutation = new int[static_cast<size_t>(size)];
+        // A non-finite entry poisons the iteration, and an infinite one stops the balancing from ever converging.
+        for (int index = 0; index < size * size; ++index) {
+            if (!math::isfinite(matrix[index])) {
+                return false;
+            }
+        }
+
+        // Working arrays, on the stack for small matrices and on the heap only for larger ones.
+        constexpr static const int stack_size = 16;
+        type working_matrix_stack[stack_size * stack_size];
+        complex_number eigenvalues_stack[stack_size];
+        type scaling_stack[stack_size];
+        int permutation_stack[stack_size];
+        std::vector<type> working_matrix_heap;
+        std::vector<complex_number> eigenvalues_heap;
+        std::vector<type> scaling_heap;
+        std::vector<int> permutation_heap;
+        type* working_matrix = &working_matrix_stack[0];
+        complex_number* eigenvalues = &eigenvalues_stack[0];
+        type* scaling = &scaling_stack[0];
+        int* permutation = &permutation_stack[0];
+        if (size > stack_size) {
+            working_matrix_heap.resize(static_cast<size_t>(size) * static_cast<size_t>(size));
+            eigenvalues_heap.resize(static_cast<size_t>(size));
+            scaling_heap.resize(static_cast<size_t>(size));
+            permutation_heap.resize(static_cast<size_t>(size));
+            working_matrix = working_matrix_heap.data();
+            eigenvalues = eigenvalues_heap.data();
+            scaling = scaling_heap.data();
+            permutation = permutation_heap.data();
+        }
 
         // Copy input matrix into working matrix.
         for (int row = 0; row < size; ++row) {
@@ -89,10 +129,10 @@ namespace math {
                     }
                 }
 
-                // Only balance if both row and column have non-zero elements.
+                // Only balance if both row and column have non-zero elements, and their sum did not overflow, as an infinite sum never balances.
                 // Note: Assuming `type` is a binary type and therefore its radix is 2.
                 // Note: This should be true for all standard float and double types.
-                if ((col_sum != type(0)) && (row_sum != type(0))) {
+                if ((col_sum != type(0)) && (row_sum != type(0)) && math::isfinite(col_sum + row_sum)) {
                     const type original_sum = col_sum + row_sum;
                     type scale_factor = 1;
                     type col_sum_scaled = col_sum;
@@ -111,10 +151,10 @@ namespace math {
                         col_sum_scaled /= 2 * 2;
                     }
 
-                    // Apply scaling if it provides sufficient improvement.
-                    if (((col_sum_scaled + row_sum) / scale_factor) < (type(0.95) * original_sum)) {
+                    // Apply scaling if it provides sufficient improvement, and neither the factor nor its inverse left the exponent range.
+                    const type inverse_scale = type(1) / scale_factor;
+                    if ((((col_sum_scaled + row_sum) / scale_factor) < (type(0.95) * original_sum)) && math::isfinite(scale_factor) && math::isfinite(inverse_scale)) {
                         converged = false;
-                        const type inverse_scale = type(1) / scale_factor;
                         scaling[row_index] *= scale_factor;
 
                         // Scale row elements.
@@ -300,10 +340,6 @@ namespace math {
                         // Case 3: No convergence - perform QR step.
                         else {
                             if (iteration_count == 30) {
-                                delete[] working_matrix;
-                                delete[] eigenvalues;
-                                delete[] scaling;
-                                delete[] permutation;
                                 return false;
                             }
 
@@ -645,6 +681,20 @@ namespace math {
             }
         }
 
+        // A finite matrix large enough to overflow in the iteration gives non-finite results, which are a failure rather than an answer.
+        for (int i = 0; i < size; ++i) {
+            if (!math::isfinite(eigenvalues[i].real) || !math::isfinite(eigenvalues[i].imaginary)) {
+                return false;
+            }
+        }
+        if constexpr (extract_eigenvectors) {
+            for (int i = 0; i < size * size; ++i) {
+                if (!math::isfinite(eigenvectors[i])) {
+                    return false;
+                }
+            }
+        }
+
         // Optionally sort eigenvalues (and corresponding eigenvectors).
         if constexpr (sort_results) {
             for (int i = 0; i < size - 1; ++i) {
@@ -675,12 +725,6 @@ namespace math {
             eigenvalues_complex[i * 2 + 0] = eigenvalues[i].real;
             eigenvalues_complex[i * 2 + 1] = eigenvalues[i].imaginary;
         }
-
-        // Clean up heap allocations.
-        delete[] working_matrix;
-        delete[] eigenvalues;
-        delete[] scaling;
-        delete[] permutation;
 
         return true;
     }

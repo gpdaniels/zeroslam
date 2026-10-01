@@ -63,6 +63,65 @@ static inline double random_signed(core::random_pcg& rng) {
     return (static_cast<double>(rng.get_random_raw() % 2000000u) / 1000000.0) - 1.0;
 }
 
+// Inverts D1 * M * D2 for a well conditioned M and diagonal scalings D1 and D2 spanning 10^-range to 10^range, which must
+// succeed and match D2^-1 * M^-1 * D1^-1, and rejects the same scalings of a rank deficient matrix.
+template <size_t size>
+static void check_scaled_inverse(core::random_pcg& rng, const double range) {
+    for (int trial = 0; trial < 200; ++trial) {
+        math::matrix<double, size, size> base;
+        for (size_t i = 0; i < size; ++i) {
+            for (size_t j = 0; j < size; ++j) {
+                base[i][j] = random_signed(rng) + ((i == j) ? static_cast<double>(size) : 0.0);
+            }
+        }
+        double row_scale[size];
+        double column_scale[size];
+        for (size_t i = 0; i < size; ++i) {
+            row_scale[i] = std::pow(10.0, range * random_signed(rng));
+            column_scale[i] = std::pow(10.0, range * random_signed(rng));
+        }
+        math::matrix<double, size, size> scaled;
+        for (size_t i = 0; i < size; ++i) {
+            for (size_t j = 0; j < size; ++j) {
+                scaled[i][j] = row_scale[i] * base[i][j] * column_scale[j];
+            }
+        }
+        math::matrix<double, size, size> base_inverse;
+        REQUIRE(invert(base, base_inverse));
+        double base_inverse_scale = 0.0;
+        for (size_t i = 0; i < size; ++i) {
+            for (size_t j = 0; j < size; ++j) {
+                base_inverse_scale = std::fmax(base_inverse_scale, std::abs(base_inverse[i][j]));
+            }
+        }
+        math::matrix<double, size, size> scaled_inverse;
+        REQUIRE(invert(scaled, scaled_inverse));
+        for (size_t i = 0; i < size; ++i) {
+            for (size_t j = 0; j < size; ++j) {
+                const double unscaled = scaled_inverse[i][j] * column_scale[i] * row_scale[j];
+                REQUIRE(std::abs(unscaled - base_inverse[i][j]) <= 1e-12 * base_inverse_scale);
+            }
+        }
+
+        // The last row is the sum of the others, which the scalings only perturb at the rounding level.
+        math::matrix<double, size, size> deficient = base;
+        for (size_t j = 0; j < size; ++j) {
+            deficient[size - 1][j] = 0.0;
+            for (size_t i = 0; i + 1 < size; ++i) {
+                deficient[size - 1][j] += base[i][j];
+            }
+        }
+        for (size_t i = 0; i < size; ++i) {
+            for (size_t j = 0; j < size; ++j) {
+                deficient[i][j] = row_scale[i] * deficient[i][j] * column_scale[j];
+            }
+        }
+        math::matrix<double, size, size> deficient_inverse;
+        REQUIRE(!invert(deficient, deficient_inverse));
+        REQUIRE(deficient_inverse == (math::matrix<double, size, size>::zero()));
+    }
+}
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
@@ -291,6 +350,35 @@ int main(int argc, char* argv[]) {
             REQUIRE(m2[0][2] == 5);
             REQUIRE(m2[1][2] == 6);
         }
+        // Row and column vectors, where operator[] returns an element rather than a row.
+        {
+            const math::matrix<double, 3, 1> column = { { 1.0, 2.0, 3.0 } };
+            const math::matrix<double, 1, 3> row = transpose(column);
+            REQUIRE(row.rows() == 1);
+            REQUIRE(row.cols() == 3);
+            REQUIRE(row[0] == 1.0);
+            REQUIRE(row[1] == 2.0);
+            REQUIRE(row[2] == 3.0);
+            REQUIRE(row(0, 2) == 3.0);
+            const math::matrix<double, 3, 1> column_again = transpose(row);
+            REQUIRE(column_again == column);
+            const math::matrix<double, 1, 1> product = row * column;
+            REQUIRE(product[0] == 14.0);
+            const math::matrix<double, 3, 3> outer = column * row;
+            REQUIRE(outer[2][1] == 6.0);
+            const math::matrix<float, 1, 1> single = { { 5.0f } };
+            REQUIRE(transpose(single)[0] == 5.0f);
+            const math::matrix<int, 1, 2> integer_row = transpose(math::matrix<int, 2, 1>({ { 7, 8 } }));
+            REQUIRE(integer_row(0, 1) == 8);
+            math::matrix<double, 0, 0> dynamic_column(3, 1);
+            dynamic_column(0, 0) = 1.0;
+            dynamic_column(1, 0) = 2.0;
+            dynamic_column(2, 0) = 3.0;
+            const math::matrix<double, 0, 0> dynamic_row = transpose(dynamic_column);
+            REQUIRE(dynamic_row.rows() == 1);
+            REQUIRE(dynamic_row.cols() == 3);
+            REQUIRE(dynamic_row(0, 1) == 2.0);
+        }
     }
 
     {
@@ -385,6 +473,82 @@ int main(int argc, char* argv[]) {
             math::matrix<double, 4, 4> result;
             REQUIRE(!invert(m, result));
             REQUIRE(are_values_approx(result.data(), math::matrix<double, 4, 4>::zero().data(), 4 * 4, 1e-6));
+        }
+        // The singularity test is independent of the scale of the rows and the columns.
+        {
+            core::random_pcg rng;
+            check_scaled_inverse<2>(rng, 8.0);
+            check_scaled_inverse<3>(rng, 8.0);
+            check_scaled_inverse<4>(rng, 8.0);
+            check_scaled_inverse<6>(rng, 8.0);
+        }
+        // Graded diagonal matrices are exactly invertible.
+        {
+            const math::matrix<double, 2, 2> m2 = { { { 1e-10, 0.0 }, { 0.0, 1e10 } } };
+            const math::matrix<double, 3, 3> m3 = { { { 1e-10, 0.0, 0.0 }, { 0.0, 1.0, 0.0 }, { 0.0, 0.0, 1e10 } } };
+            const math::matrix<double, 4, 4> m4 = { { { 1e-10, 0.0, 0.0, 0.0 }, { 0.0, 1.0, 0.0, 0.0 }, { 0.0, 0.0, 1e10, 0.0 }, { 0.0, 0.0, 0.0, 1e-20 } } };
+            math::matrix<double, 2, 2> r2;
+            math::matrix<double, 3, 3> r3;
+            math::matrix<double, 4, 4> r4;
+            REQUIRE(invert(m2, r2));
+            REQUIRE(invert(m3, r3));
+            REQUIRE(invert(m4, r4));
+            REQUIRE(r2[0][0] == 1e10);
+            REQUIRE(r2[1][1] == 1e-10);
+            REQUIRE(r3[0][0] == 1e10);
+            REQUIRE(r3[1][1] == 1.0);
+            REQUIRE(r3[2][2] == 1e-10);
+            REQUIRE(r4[0][0] == 1e10);
+            REQUIRE(r4[1][1] == 1.0);
+            REQUIRE(r4[2][2] == 1e-10);
+            REQUIRE(r4[3][3] == 1e20);
+        }
+        // The normal matrix of an affine fit to uncentred pixel positions, 50 points in a 40 pixel window at (620, 460).
+        {
+            core::random_pcg rng;
+            math::matrix<double, 3, 3> normal = math::matrix<double, 3, 3>::zero();
+            math::matrix<double, 3, 1> rhs = math::matrix<double, 3, 1>::zero();
+            const double parameters[3] = { 1.01, 0.02, 3.5 };
+            for (int i = 0; i < 50; ++i) {
+                const double x = 600.0 + (40.0 * rng.get_random_exclusive_top());
+                const double y = 440.0 + (40.0 * rng.get_random_exclusive_top());
+                const double weight = 0.5 + (0.5 * rng.get_random_exclusive_top());
+                const double phi[3] = { x, y, 1.0 };
+                const double target = (parameters[0] * x) + (parameters[1] * y) + parameters[2];
+                for (size_t row = 0; row < 3; ++row) {
+                    for (size_t column = 0; column < 3; ++column) {
+                        normal[row][column] += weight * phi[row] * phi[column];
+                    }
+                    rhs[row] += weight * phi[row] * target;
+                }
+            }
+            math::matrix<double, 3, 3> normal_inverse;
+            REQUIRE(invert(normal, normal_inverse));
+            const math::matrix<double, 3, 1> solution = normal_inverse * rhs;
+            REQUIRE(std::abs(solution[0] - parameters[0]) < 1e-6);
+            REQUIRE(std::abs(solution[1] - parameters[1]) < 1e-6);
+            REQUIRE(std::abs(solution[2] - parameters[2]) < 1e-3);
+        }
+        // Non-finite entries are never invertible.
+        {
+            const double non_finite_values[3] = { HUGE_VAL, -HUGE_VAL, std::nan("") };
+            for (const double non_finite_value : non_finite_values) {
+                for (size_t index = 0; index < 16; ++index) {
+                    math::matrix<double, 2, 2> m2 = { { { 2.0, 1.0 }, { 1.0, 3.0 } } };
+                    math::matrix<double, 3, 3> m3 = { { { 2.0, 1.0, 0.0 }, { 1.0, 3.0, 1.0 }, { 0.0, 1.0, 4.0 } } };
+                    math::matrix<double, 4, 4> m4 = math::matrix<double, 4, 4>::identity();
+                    m2.data()[index % 4] = non_finite_value;
+                    m3.data()[index % 9] = non_finite_value;
+                    m4.data()[index] = non_finite_value;
+                    math::matrix<double, 2, 2> r2;
+                    math::matrix<double, 3, 3> r3;
+                    math::matrix<double, 4, 4> r4;
+                    REQUIRE(!invert(m2, r2));
+                    REQUIRE(!invert(m3, r3));
+                    REQUIRE(!invert(m4, r4));
+                    REQUIRE(r4 == (math::matrix<double, 4, 4>::zero()));
+                }
+            }
         }
     }
 

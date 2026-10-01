@@ -56,7 +56,12 @@ namespace math {
             }
 
             std::size_t operator()(const block_key& k) const {
-                return ((std::hash<type_lhs>()(k.first) ^ (std::hash<type_rhs>()(k.second) << 1)) >> 1);
+                // Combine the two hashes without discarding any bit of either, a shift of the combination would collide neighbouring keys.
+                // The odd golden ratio multiplier, taken to the width of size_t, spreads the first so small grids of indices never collide.
+                constexpr const std::size_t multiplier = static_cast<std::size_t>(0x9E3779B97F4A7C15ull & static_cast<unsigned long long int>(static_cast<std::size_t>(-1)));
+                const std::size_t hash_first = std::hash<type_lhs>()(k.first);
+                const std::size_t hash_second = std::hash<type_rhs>()(k.second);
+                return (hash_first * multiplier) + hash_second;
             }
         };
 

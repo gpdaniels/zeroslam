@@ -89,6 +89,9 @@ namespace math {
         constexpr bool operator!=(const se3& rhs) const;
         constexpr se3 operator*(const se3& rhs) const;
         constexpr math::matrix<type, 3, 1> operator*(const math::matrix<type, 3, 1>& point) const;
+
+    private:
+        static math::matrix<type, 3, 3> left_jacobian_coupling(const math::matrix<type, 3, 1>& omega, const math::matrix<type, 3, 1>& upsilon);
     };
 
     template <typename type>
@@ -118,6 +121,24 @@ namespace math {
         constexpr bool operator!=(const sim3& rhs) const;
         constexpr sim3 operator*(const sim3& rhs) const;
         constexpr math::matrix<type, 3, 1> operator*(const math::matrix<type, 3, 1>& point) const;
+
+    private:
+        // The translation of exp is W * upsilon with W = c * I + a * omega_hat + b * omega_hat^2, the derivatives are by u = theta^2 and by sigma.
+        struct translation_terms {
+            type a;
+            type b;
+            type c;
+            type a_u;
+            type b_u;
+            type a_sigma;
+            type b_sigma;
+            type c_sigma;
+        };
+
+        template <bool with_derivatives>
+        static constexpr translation_terms translation_coefficients(type sigma, type theta);
+        static constexpr void translation_inverse_coefficients(const translation_terms& terms, type theta_squared, type& inverse_a, type& inverse_b, type& inverse_c);
+        static void left_jacobian_blocks(const math::matrix<type, 7, 1>& omega_upsilon_sigma, translation_terms& terms, math::matrix<type, 3, 3>& coupling, math::matrix<type, 3, 1>& sigma_column);
     };
 }
 
@@ -338,11 +359,30 @@ namespace math {
         const math::matrix<type, 3, 3> omega_hat = { { { 0, -omega[2], omega[1] },
                                                        { omega[2], 0, -omega[0] },
                                                        { -omega[1], omega[0], 0 } } };
-        if (theta_squared < 1e-6 * 1e-6) {
-            return math::matrix<type, 3, 3>::identity() + (0.5 * omega_hat) + ((1.0 / 6.0) * (omega_hat * omega_hat));
+        // Both coefficients are evaluated without cancellation, (1 - cos(theta)) / theta^2 in its half angle form, and
+        // (theta - sin(theta)) / theta^3 by its series below one radian.
+        type first = 0.5;
+        type second = type(1) / type(6);
+        if (theta_squared > 0) {
+            const type theta = math::sqrt(theta_squared);
+            const type half_sinc = math::sin(0.5 * theta) / (0.5 * theta);
+            first = 0.5 * half_sinc * half_sinc;
+            if (theta_squared < 1) {
+                second = type(1.0 / 121645100408832000.0);
+                second = type(1.0 / 355687428096000.0) - (theta_squared * second);
+                second = type(1.0 / 1307674368000.0) - (theta_squared * second);
+                second = type(1.0 / 6227020800.0) - (theta_squared * second);
+                second = type(1.0 / 39916800.0) - (theta_squared * second);
+                second = type(1.0 / 362880.0) - (theta_squared * second);
+                second = type(1.0 / 5040.0) - (theta_squared * second);
+                second = type(1.0 / 120.0) - (theta_squared * second);
+                second = type(1.0 / 6.0) - (theta_squared * second);
+            }
+            else {
+                second = (theta - math::sin(theta)) / (theta_squared * theta);
+            }
         }
-        const type theta = math::sqrt(theta_squared);
-        return math::matrix<type, 3, 3>::identity() + (((1 - math::cos(theta)) / (theta_squared)) * omega_hat) + (((theta - math::sin(theta)) / (theta_squared * theta)) * (omega_hat * omega_hat));
+        return math::matrix<type, 3, 3>::identity() + (first * omega_hat) + (second * (omega_hat * omega_hat));
     }
 
     template <typename type>
@@ -510,30 +550,79 @@ namespace math {
     }
 
     template <typename type>
-    math::matrix<type, 6, 6> se3<type>::left_jacobian(const math::matrix<type, 6, 1>& omega_upsilon) {
-        math::matrix<type, 6, 6> result = math::matrix<type, 6, 6>::identity();
-        math::matrix<type, 6, 6> adjoint = math::matrix<type, 6, 6>::zero();
-
-        const math::matrix<type, 3, 3> omega_hat = { { { 0, -omega_upsilon[2], omega_upsilon[1] },
-                                                       { omega_upsilon[2], 0, -omega_upsilon[0] },
-                                                       { -omega_upsilon[1], omega_upsilon[0], 0 } } };
-        const math::matrix<type, 3, 3> upsilon_hat = { { { 0, -omega_upsilon[5], omega_upsilon[4] },
-                                                         { omega_upsilon[5], 0, -omega_upsilon[3] },
-                                                         { -omega_upsilon[4], omega_upsilon[3], 0 } } };
-        for (size_t i = 0; i < 3; ++i) {
-            for (size_t j = 0; j < 3; ++j) {
-                adjoint[i][j] = omega_hat[i][j];
-                adjoint[i + 3][j] = upsilon_hat[i][j];
-                adjoint[i + 3][j + 3] = omega_hat[i][j];
+    math::matrix<type, 3, 3> se3<type>::left_jacobian_coupling(const math::matrix<type, 3, 1>& omega, const math::matrix<type, 3, 1>& upsilon) {
+        // Barfoot's Q, the lower left block of the se3 left jacobian, with the coefficients (theta - sin(theta)) / theta^3,
+        // (theta^2 + 2 cos(theta) - 2) / (2 theta^4) and (2 theta - 3 sin(theta) + theta cos(theta)) / (2 theta^5) evaluated by their series
+        // below one radian, where the closed forms cancel.
+        const type theta_squared = omega.get_length_squared();
+        type first = 0;
+        type second = 0;
+        type third = 0;
+        if (theta_squared < 1) {
+            // The inverse factorials 1 / (k + 3)! for k = 0 to 18.
+            const type inverse_factorials[19] = {
+                type(1.0 / 6.0),
+                type(1.0 / 24.0),
+                type(1.0 / 120.0),
+                type(1.0 / 720.0),
+                type(1.0 / 5040.0),
+                type(1.0 / 40320.0),
+                type(1.0 / 362880.0),
+                type(1.0 / 3628800.0),
+                type(1.0 / 39916800.0),
+                type(1.0 / 479001600.0),
+                type(1.0 / 6227020800.0),
+                type(1.0 / 87178291200.0),
+                type(1.0 / 1307674368000.0),
+                type(1.0 / 20922789888000.0),
+                type(1.0 / 355687428096000.0),
+                type(1.0 / 6402373705728000.0),
+                type(1.0 / 121645100408832000.0),
+                type(1.0 / 2432902008176640000.0),
+                type(1.0 / 51090942171709440000.0)
+            };
+            for (size_t k = 9; k-- > 0;) {
+                first = inverse_factorials[(2 * k)] - (theta_squared * first);
+                second = inverse_factorials[(2 * k) + 1] - (theta_squared * second);
+                third = (static_cast<type>(k + 1) * inverse_factorials[(2 * k) + 2]) - (theta_squared * third);
             }
         }
-        math::matrix<type, 6, 6> adjoint_power = adjoint;
-        type factorial = 1.0;
-        for (size_t n = 1; n < 20; ++n) {
-            factorial *= static_cast<type>(n + 1);
-            result = result + (adjoint_power * (1.0 / factorial));
-            if (n < 19)
-                adjoint_power = adjoint_power * adjoint;
+        else {
+            const type theta = math::sqrt(theta_squared);
+            const type sin_theta = math::sin(theta);
+            const type cos_theta = math::cos(theta);
+            first = (theta - sin_theta) / (theta_squared * theta);
+            second = (theta_squared + (2 * cos_theta) - 2) / (2 * theta_squared * theta_squared);
+            third = ((2 * theta) - (3 * sin_theta) + (theta * cos_theta)) / (2 * theta_squared * theta_squared * theta);
+        }
+        const math::matrix<type, 3, 3> omega_hat = { { { 0, -omega[2], omega[1] },
+                                                       { omega[2], 0, -omega[0] },
+                                                       { -omega[1], omega[0], 0 } } };
+        const math::matrix<type, 3, 3> upsilon_hat = { { { 0, -upsilon[2], upsilon[1] },
+                                                         { upsilon[2], 0, -upsilon[0] },
+                                                         { -upsilon[1], upsilon[0], 0 } } };
+        const math::matrix<type, 3, 3> omega_upsilon = omega_hat * upsilon_hat;
+        const math::matrix<type, 3, 3> upsilon_omega = upsilon_hat * omega_hat;
+        const math::matrix<type, 3, 3> omega_upsilon_omega = omega_upsilon * omega_hat;
+        return (type(0.5) * upsilon_hat) +
+               (first * (omega_upsilon + upsilon_omega + omega_upsilon_omega)) +
+               (second * ((omega_hat * omega_upsilon) + (upsilon_omega * omega_hat) - (type(3) * omega_upsilon_omega))) +
+               (third * ((omega_upsilon_omega * omega_hat) + (omega_hat * omega_upsilon_omega)));
+    }
+
+    template <typename type>
+    math::matrix<type, 6, 6> se3<type>::left_jacobian(const math::matrix<type, 6, 1>& omega_upsilon) {
+        const math::matrix<type, 3, 1> omega = { { omega_upsilon[0], omega_upsilon[1], omega_upsilon[2] } };
+        const math::matrix<type, 3, 1> upsilon = { { omega_upsilon[3], omega_upsilon[4], omega_upsilon[5] } };
+        const math::matrix<type, 3, 3> rotation_jacobian = so3<type>::left_jacobian(omega);
+        const math::matrix<type, 3, 3> coupling = se3<type>::left_jacobian_coupling(omega, upsilon);
+        math::matrix<type, 6, 6> result = math::matrix<type, 6, 6>::zero();
+        for (size_t i = 0; i < 3; ++i) {
+            for (size_t j = 0; j < 3; ++j) {
+                result[i][j] = rotation_jacobian[i][j];
+                result[i + 3][j] = coupling[i][j];
+                result[i + 3][j + 3] = rotation_jacobian[i][j];
+            }
         }
         return result;
     }
@@ -541,14 +630,9 @@ namespace math {
     template <typename type>
     math::matrix<type, 6, 6> se3<type>::left_jacobian_inverse(const math::matrix<type, 6, 1>& omega_upsilon) {
         const math::matrix<type, 3, 1> omega = { { omega_upsilon[0], omega_upsilon[1], omega_upsilon[2] } };
+        const math::matrix<type, 3, 1> upsilon = { { omega_upsilon[3], omega_upsilon[4], omega_upsilon[5] } };
         const math::matrix<type, 3, 3> rotation_jacobian_inverse = so3<type>::left_jacobian_inverse(omega);
-        const math::matrix<type, 6, 6> jacobian = left_jacobian(omega_upsilon);
-        math::matrix<type, 3, 3> coupling_block;
-        for (size_t i = 0; i < 3; ++i) {
-            for (size_t j = 0; j < 3; ++j) {
-                coupling_block[i][j] = jacobian[i + 3][j];
-            }
-        }
+        const math::matrix<type, 3, 3> coupling_block = se3<type>::left_jacobian_coupling(omega, upsilon);
         const math::matrix<type, 3, 3> inverse_coupling_block = -(rotation_jacobian_inverse * coupling_block * rotation_jacobian_inverse);
         math::matrix<type, 6, 6> result = math::matrix<type, 6, 6>::zero();
         for (size_t i = 0; i < 3; ++i) {
@@ -666,49 +750,147 @@ namespace math {
     }
 
     template <typename type>
+    template <bool with_derivatives>
+    constexpr typename sim3<type>::translation_terms sim3<type>::translation_coefficients(const type sigma, const type theta) {
+        // W = int_0^1 exp(sigma * t) * exp(t * omega_hat) dt = c * I + a * omega_hat + b * omega_hat^2. With z = sigma + i * theta and
+        // phi(z) = (exp(z) - 1) / z these are c = phi(sigma), a = Im(phi(z)) / theta and b = (phi(sigma) - Re(phi(z))) / theta^2, all smooth
+        // in sigma and u = theta^2, so each form below avoids cancelling terms. The derivatives are only computed when asked for.
+        const type theta_squared = theta * theta;
+        const type inverse_factorials[21] = {
+            type(1.0),
+            type(1.0 / 2.0),
+            type(1.0 / 6.0),
+            type(1.0 / 24.0),
+            type(1.0 / 120.0),
+            type(1.0 / 720.0),
+            type(1.0 / 5040.0),
+            type(1.0 / 40320.0),
+            type(1.0 / 362880.0),
+            type(1.0 / 3628800.0),
+            type(1.0 / 39916800.0),
+            type(1.0 / 479001600.0),
+            type(1.0 / 6227020800.0),
+            type(1.0 / 87178291200.0),
+            type(1.0 / 1307674368000.0),
+            type(1.0 / 20922789888000.0),
+            type(1.0 / 355687428096000.0),
+            type(1.0 / 6402373705728000.0),
+            type(1.0 / 121645100408832000.0),
+            type(1.0 / 2432902008176640000.0),
+            type(1.0 / 51090942171709440000.0)
+        };
+        translation_terms terms = {};
+        if ((sigma * sigma) + theta_squared <= 1) {
+            // Horner's rule on phi(z) = sum_k z^k / (k + 1)!, tracking Re(phi(z)), Im(phi(z)) / theta and the difference to phi(sigma) over theta^2,
+            // and their derivatives by u and by sigma.
+            type series_c = inverse_factorials[20];
+            type series_real = inverse_factorials[20];
+            type series_a = 0;
+            type series_b = 0;
+            type real_u = 0;
+            type real_sigma = 0;
+            for (size_t k = 20; k-- > 0;) {
+                const type next_b = (sigma * series_b) + series_a;
+                const type next_a = series_real + (sigma * series_a);
+                const type next_real = inverse_factorials[k] + (sigma * series_real) - (theta_squared * series_a);
+                if constexpr (with_derivatives) {
+                    const type next_b_u = (sigma * terms.b_u) + terms.a_u;
+                    const type next_a_u = real_u + (sigma * terms.a_u);
+                    const type next_real_u = (sigma * real_u) - series_a - (theta_squared * terms.a_u);
+                    const type next_b_sigma = series_b + (sigma * terms.b_sigma) + terms.a_sigma;
+                    const type next_a_sigma = real_sigma + series_a + (sigma * terms.a_sigma);
+                    const type next_real_sigma = series_real + (sigma * real_sigma) - (theta_squared * terms.a_sigma);
+                    terms.c_sigma = series_c + (sigma * terms.c_sigma);
+                    terms.b_u = next_b_u;
+                    terms.a_u = next_a_u;
+                    real_u = next_real_u;
+                    terms.b_sigma = next_b_sigma;
+                    terms.a_sigma = next_a_sigma;
+                    real_sigma = next_real_sigma;
+                }
+                series_c = inverse_factorials[k] + (sigma * series_c);
+                series_b = next_b;
+                series_a = next_a;
+                series_real = next_real;
+            }
+            terms.a = series_a;
+            terms.b = series_b;
+            terms.c = series_c;
+            return terms;
+        }
+        // Outside the unit circle the closed forms are rearranged so that none of their terms cancel, using the half angle form of
+        // (1 - cos(theta)) / theta^2, and series for the derivatives of it and of sin(theta) / theta below one radian.
+        const type scale = math::exp(sigma);
+        if (math::abs(sigma) <= 1) {
+            type series_c = inverse_factorials[20];
+            for (size_t k = 20; k-- > 0;) {
+                if constexpr (with_derivatives) {
+                    terms.c_sigma = series_c + (sigma * terms.c_sigma);
+                }
+                series_c = inverse_factorials[k] + (sigma * series_c);
+            }
+            terms.c = series_c;
+        }
+        else {
+            terms.c = (scale - 1) / sigma;
+            if constexpr (with_derivatives) {
+                terms.c_sigma = (scale - terms.c) / sigma;
+            }
+        }
+        type sinc = 1;
+        type half_angle = 0.5;
+        if (theta > 0) {
+            sinc = math::sin(theta) / theta;
+            const type half_sinc = math::sin(0.5 * theta) / (0.5 * theta);
+            half_angle = 0.5 * half_sinc * half_sinc;
+        }
+        const type modulus_squared = (sigma * sigma) + theta_squared;
+        terms.a = ((sigma * ((scale * sinc) - terms.c)) + (scale * theta_squared * half_angle)) / modulus_squared;
+        terms.b = (terms.c + (scale * ((sigma * half_angle) - sinc))) / modulus_squared;
+        if constexpr (with_derivatives) {
+            type sinc_u = 0;
+            type half_angle_u = 0;
+            if (theta_squared < 1) {
+                for (size_t j = 9; j-- > 0;) {
+                    sinc_u = -(static_cast<type>(j + 1) * inverse_factorials[(2 * j) + 2]) - (theta_squared * sinc_u);
+                    half_angle_u = -(static_cast<type>(j + 1) * inverse_factorials[(2 * j) + 3]) - (theta_squared * half_angle_u);
+                }
+            }
+            else {
+                sinc_u = (math::cos(theta) - sinc) / (2 * theta_squared);
+                half_angle_u = (sinc - (2 * half_angle)) / (2 * theta_squared);
+            }
+            terms.a_u = ((sigma * scale * sinc_u) + (scale * half_angle) + (scale * theta_squared * half_angle_u) - terms.a) / modulus_squared;
+            terms.b_u = ((scale * ((sigma * half_angle_u) - sinc_u)) - terms.b) / modulus_squared;
+            terms.a_sigma = (((scale * sinc) - terms.c) + (sigma * ((scale * sinc) - terms.c_sigma)) + (scale * theta_squared * half_angle) - (2 * sigma * terms.a)) / modulus_squared;
+            terms.b_sigma = (terms.c_sigma + (scale * ((sigma * half_angle) - sinc)) + (scale * half_angle) - (2 * sigma * terms.b)) / modulus_squared;
+        }
+        return terms;
+    }
+
+    template <typename type>
+    constexpr void sim3<type>::translation_inverse_coefficients(const translation_terms& terms, const type theta_squared, type& inverse_a, type& inverse_b, type& inverse_c) {
+        // The inverse of W is in the same algebra, as omega_hat^3 = -theta^2 * omega_hat. The denominator is |phi(z)|^2, which only vanishes
+        // for z = 2 * pi * k * i beyond the angles a logarithm returns.
+        const type real = terms.c - (theta_squared * terms.b);
+        const type modulus_squared = (real * real) + (theta_squared * terms.a * terms.a);
+        inverse_c = type(1) / terms.c;
+        inverse_a = -terms.a / modulus_squared;
+        inverse_b = ((terms.a * terms.a) - (terms.b * real)) / (terms.c * modulus_squared);
+    }
+
+    template <typename type>
     sim3<type> sim3<type>::exp(const math::matrix<type, 7, 1>& omega_upsilon_sigma) {
         const math::matrix<type, 3, 1> omega = { { omega_upsilon_sigma[0], omega_upsilon_sigma[1], omega_upsilon_sigma[2] } };
         const math::matrix<type, 3, 1> upsilon = { { omega_upsilon_sigma[3], omega_upsilon_sigma[4], omega_upsilon_sigma[5] } };
         const type sigma = omega_upsilon_sigma[6];
-        const type scale = math::exp(sigma);
         const type theta = math::sqrt(omega.get_length_squared());
         const math::matrix<type, 3, 3> omega_hat = { { { 0, -omega[2], omega[1] },
                                                        { omega[2], 0, -omega[0] },
                                                        { -omega[1], omega[0], 0 } } };
-        const math::matrix<type, 3, 3> omega_hat_squared = omega_hat * omega_hat;
-        type a, b, c;
-        if (math::abs(sigma) < 1e-6) {
-            c = 1 + (0.5 * sigma) + ((sigma * sigma) / 6);
-            if (math::abs(theta) < 1e-6) {
-                a = 0.5 + (sigma / 3) + ((sigma * sigma) / 8);
-                b = (type(1) / type(6)) + (sigma / 8) + ((sigma * sigma) / 20);
-            }
-            else {
-                const type theta_squared = theta * theta;
-                const type sin_theta = math::sin(theta);
-                const type cos_theta = math::cos(theta);
-                a = ((1 - cos_theta) / theta_squared) + (sigma * ((sin_theta - (theta * cos_theta)) / (theta_squared * theta)));
-                b = ((theta - sin_theta) / (theta_squared * theta)) + (sigma * (((0.5 * theta_squared) + 1 - cos_theta - (theta * sin_theta)) / (theta_squared * theta_squared)));
-            }
-        }
-        else {
-            c = (scale - 1) / sigma;
-            if (math::abs(theta) < 1e-6) {
-                const type sigma_squared = sigma * sigma;
-                a = ((sigma - 1) * scale + 1) / sigma_squared;
-                b = (scale * 0.5 * sigma_squared + scale - 1 - sigma * scale) / (sigma_squared * sigma);
-            }
-            else {
-                const type theta_squared = theta * theta;
-                const type scale_sin_theta = scale * math::sin(theta);
-                const type scale_cos_theta = scale * math::cos(theta);
-                const type theta_squared_plus_sigma_squared = theta_squared + sigma * sigma;
-                a = (scale_sin_theta * sigma + (1 - scale_cos_theta) * theta) / (theta * theta_squared_plus_sigma_squared);
-                b = (c - ((scale_cos_theta - 1) * sigma + scale_sin_theta * theta) / (theta_squared_plus_sigma_squared)) * 1 / (theta_squared);
-            }
-        }
-        const math::matrix<type, 3, 3> w = a * omega_hat + b * omega_hat_squared + c * math::matrix<type, 3, 3>::identity();
-        return { { so3<type>::exp(omega), w * upsilon }, scale };
+        const translation_terms terms = sim3<type>::translation_coefficients<false>(sigma, theta);
+        const math::matrix<type, 3, 3> w = terms.a * omega_hat + terms.b * (omega_hat * omega_hat) + terms.c * math::matrix<type, 3, 3>::identity();
+        return { { so3<type>::exp(omega), w * upsilon }, math::exp(sigma) };
     }
 
     template <typename type>
@@ -719,102 +901,104 @@ namespace math {
         const math::matrix<type, 3, 3> omega_hat = { { { 0, -omega[2], omega[1] },
                                                        { omega[2], 0, -omega[0] },
                                                        { -omega[1], omega[0], 0 } } };
-        const math::matrix<type, 3, 3> omega_hat_squared = omega_hat * omega_hat;
-        const type scale_squared = this->scale_scalar * this->scale_scalar;
-        const type theta_squared = theta * theta;
-        const type sin_theta = math::sin(theta);
-        const type cos_theta = math::cos(theta);
-        type a, b, c;
-        if (math::abs(sigma * sigma) < 1e-6) {
-            c = 1 - (0.5 * sigma) + ((sigma * sigma) / 12);
-            if (math::abs(theta_squared) < 1e-6) {
-                a = -0.5 + (sigma / 6);
-                b = type(1) / type(12);
-            }
-            else {
-                a = -0.5 + (sigma * ((theta - sin_theta) / ((2 * theta) * (1 - cos_theta))));
-                b = (theta * sin_theta + 2 * cos_theta - 2) / (2 * theta_squared * (cos_theta - 1));
-            }
-        }
-        else {
-            c = sigma / (this->scale_scalar - 1);
-            if (math::abs(theta_squared) < 1e-6) {
-                a = (-sigma * this->scale_scalar + this->scale_scalar - 1) / ((this->scale_scalar - 1) * (this->scale_scalar - 1));
-                b = (scale_squared * sigma - 2 * scale_squared + this->scale_scalar * sigma + 2 * this->scale_scalar) / (2 * (scale_squared * this->scale_scalar) - 6 * scale_squared + 6 * this->scale_scalar - 2);
-            }
-            else {
-                const type s_sin_theta = this->scale_scalar * sin_theta;
-                const type s_cos_theta = this->scale_scalar * cos_theta;
-                a = (theta * s_cos_theta - theta - sigma * s_sin_theta) / (theta * (scale_squared - 2 * s_cos_theta + 1));
-                b = -this->scale_scalar *
-                    (theta * s_sin_theta - theta * sin_theta + sigma * s_cos_theta - this->scale_scalar * sigma + sigma * cos_theta - sigma) /
-                    (theta_squared * ((scale_squared * this->scale_scalar) - 2 * this->scale_scalar * s_cos_theta - scale_squared + 2 * s_cos_theta + this->scale_scalar - 1));
-            }
-        }
-        const math::matrix<type, 3, 3> w_inv = a * omega_hat + b * omega_hat_squared + c * math::matrix<type, 3, 3>::identity();
+        // Inverting exp's own W makes log the exact inverse of the translation that exp computes.
+        const translation_terms terms = sim3<type>::translation_coefficients<false>(sigma, theta);
+        type inverse_a = 0;
+        type inverse_b = 0;
+        type inverse_c = 0;
+        sim3<type>::translation_inverse_coefficients(terms, theta * theta, inverse_a, inverse_b, inverse_c);
+        const math::matrix<type, 3, 3> w_inv = inverse_a * omega_hat + inverse_b * (omega_hat * omega_hat) + inverse_c * math::matrix<type, 3, 3>::identity();
         const math::matrix<type, 3, 1> upsilon = w_inv * this->transformation_se3.translation();
         return { { omega[0], omega[1], omega[2], upsilon[0], upsilon[1], upsilon[2], sigma } };
     }
 
     template <typename type>
-    math::matrix<type, 7, 7> sim3<type>::left_jacobian(const math::matrix<type, 7, 1>& omega_upsilon_sigma) {
-        math::matrix<type, 7, 7> result = math::matrix<type, 7, 7>::identity();
-        math::matrix<type, 7, 7> adjoint = math::matrix<type, 7, 7>::zero();
-
+    void sim3<type>::left_jacobian_blocks(const math::matrix<type, 7, 1>& omega_upsilon_sigma, translation_terms& terms, math::matrix<type, 3, 3>& coupling, math::matrix<type, 3, 1>& sigma_column) {
+        // The left jacobian is [J, 0, 0; Q, W, s; 0, 0, 1], with J the so3 left jacobian and W the translation matrix of exp. As
+        // exp(xi + delta) = exp(jacobian * delta) * exp(xi), its translation t = W * upsilon gives Q = dt / d omega + t^ * J and s = dt / d sigma - t.
+        const math::matrix<type, 3, 1> omega = { { omega_upsilon_sigma[0], omega_upsilon_sigma[1], omega_upsilon_sigma[2] } };
+        const math::matrix<type, 3, 1> upsilon = { { omega_upsilon_sigma[3], omega_upsilon_sigma[4], omega_upsilon_sigma[5] } };
         const type sigma = omega_upsilon_sigma[6];
-        const math::matrix<type, 3, 3> omega_hat = { { { 0, -omega_upsilon_sigma[2], omega_upsilon_sigma[1] },
-                                                       { omega_upsilon_sigma[2], 0, -omega_upsilon_sigma[0] },
-                                                       { -omega_upsilon_sigma[1], omega_upsilon_sigma[0], 0 } } };
-        const math::matrix<type, 3, 3> upsilon_hat = { { { 0, -omega_upsilon_sigma[5], omega_upsilon_sigma[4] },
-                                                         { omega_upsilon_sigma[5], 0, -omega_upsilon_sigma[3] },
-                                                         { -omega_upsilon_sigma[4], omega_upsilon_sigma[3], 0 } } };
+        terms = sim3<type>::translation_coefficients<true>(sigma, math::sqrt(omega.get_length_squared()));
+        const math::matrix<type, 3, 1> omega_upsilon = { { (omega[1] * upsilon[2]) - (omega[2] * upsilon[1]),
+                                                           (omega[2] * upsilon[0]) - (omega[0] * upsilon[2]),
+                                                           (omega[0] * upsilon[1]) - (omega[1] * upsilon[0]) } };
+        const math::matrix<type, 3, 1> omega_omega_upsilon = { { (omega[1] * omega_upsilon[2]) - (omega[2] * omega_upsilon[1]),
+                                                                 (omega[2] * omega_upsilon[0]) - (omega[0] * omega_upsilon[2]),
+                                                                 (omega[0] * omega_upsilon[1]) - (omega[1] * omega_upsilon[0]) } };
+        const math::matrix<type, 3, 1> translation = (terms.c * upsilon) + (terms.a * omega_upsilon) + (terms.b * omega_omega_upsilon);
+        const math::matrix<type, 3, 3> translation_hat = { { { 0, -translation[2], translation[1] },
+                                                             { translation[2], 0, -translation[0] },
+                                                             { -translation[1], translation[0], 0 } } };
+        const type omega_dot_upsilon = (omega[0] * upsilon[0]) + (omega[1] * upsilon[1]) + (omega[2] * upsilon[2]);
+        // The derivative of a * (omega x upsilon) + b * (omega x (omega x upsilon)) by omega, where a and b depend on omega through u = |omega|^2.
+        coupling = translation_hat * so3<type>::left_jacobian(omega);
         for (size_t i = 0; i < 3; ++i) {
             for (size_t j = 0; j < 3; ++j) {
-                adjoint[i][j] = omega_hat[i][j];
-                adjoint[i + 3][j] = upsilon_hat[i][j];
-                adjoint[i + 3][j + 3] = omega_hat[i][j];
+                type derivative = terms.b * ((omega[i] * upsilon[j]) - (2 * upsilon[i] * omega[j]) + ((i == j) ? omega_dot_upsilon : type(0)));
+                derivative += 2 * ((terms.a_u * omega_upsilon[i]) + (terms.b_u * omega_omega_upsilon[i])) * omega[j];
+                coupling[i][j] += derivative;
             }
-            adjoint[i + 3][i + 3] += sigma;
-            adjoint[i + 3][6] = -omega_upsilon_sigma[3 + i];
         }
-        math::matrix<type, 7, 7> adjoint_power = adjoint;
-        type factorial = 1.0;
-        for (size_t n = 1; n < 20; ++n) {
-            factorial *= static_cast<type>(n + 1);
-            result = result + (adjoint_power * (1.0 / factorial));
-            if (n < 19)
-                adjoint_power = adjoint_power * adjoint;
+        coupling[0][1] += terms.a * upsilon[2];
+        coupling[0][2] -= terms.a * upsilon[1];
+        coupling[1][0] -= terms.a * upsilon[2];
+        coupling[1][2] += terms.a * upsilon[0];
+        coupling[2][0] += terms.a * upsilon[1];
+        coupling[2][1] -= terms.a * upsilon[0];
+        sigma_column = ((terms.c_sigma - terms.c) * upsilon) + ((terms.a_sigma - terms.a) * omega_upsilon) + ((terms.b_sigma - terms.b) * omega_omega_upsilon);
+    }
+
+    template <typename type>
+    math::matrix<type, 7, 7> sim3<type>::left_jacobian(const math::matrix<type, 7, 1>& omega_upsilon_sigma) {
+        const math::matrix<type, 3, 1> omega = { { omega_upsilon_sigma[0], omega_upsilon_sigma[1], omega_upsilon_sigma[2] } };
+        translation_terms terms = {};
+        math::matrix<type, 3, 3> coupling;
+        math::matrix<type, 3, 1> sigma_column;
+        sim3<type>::left_jacobian_blocks(omega_upsilon_sigma, terms, coupling, sigma_column);
+        const math::matrix<type, 3, 3> rotation_jacobian = so3<type>::left_jacobian(omega);
+        const math::matrix<type, 3, 3> omega_hat = { { { 0, -omega[2], omega[1] },
+                                                       { omega[2], 0, -omega[0] },
+                                                       { -omega[1], omega[0], 0 } } };
+        const math::matrix<type, 3, 3> w = terms.a * omega_hat + terms.b * (omega_hat * omega_hat) + terms.c * math::matrix<type, 3, 3>::identity();
+        math::matrix<type, 7, 7> result = math::matrix<type, 7, 7>::zero();
+        for (size_t i = 0; i < 3; ++i) {
+            for (size_t j = 0; j < 3; ++j) {
+                result[i][j] = rotation_jacobian[i][j];
+                result[i + 3][j] = coupling[i][j];
+                result[i + 3][j + 3] = w[i][j];
+            }
+            result[i + 3][6] = sigma_column[i];
         }
+        result[6][6] = 1.0;
         return result;
     }
 
     template <typename type>
     math::matrix<type, 7, 7> sim3<type>::left_jacobian_inverse(const math::matrix<type, 7, 1>& omega_upsilon_sigma) {
+        // The inverse of [J, 0, 0; Q, W, s; 0, 0, 1] is [J^-1, 0, 0; -W^-1 * Q * J^-1, W^-1, -W^-1 * s; 0, 0, 1].
         const math::matrix<type, 3, 1> omega = { { omega_upsilon_sigma[0], omega_upsilon_sigma[1], omega_upsilon_sigma[2] } };
-        const math::matrix<type, 3, 3> rotation_jacobian_inverse = so3<type>::left_jacobian_inverse(omega);
-        const math::matrix<type, 7, 7> jacobian = left_jacobian(omega_upsilon_sigma);
-        math::matrix<type, 3, 3> coupling_block;
-        math::matrix<type, 3, 3> scaled_rotation_block;
+        translation_terms terms = {};
+        math::matrix<type, 3, 3> coupling;
         math::matrix<type, 3, 1> sigma_column;
-        for (size_t i = 0; i < 3; ++i) {
-            for (size_t j = 0; j < 3; ++j) {
-                coupling_block[i][j] = jacobian[i + 3][j];
-                scaled_rotation_block[i][j] = jacobian[i + 3][j + 3];
-            }
-            sigma_column[i] = jacobian[i + 3][6];
-        }
-        math::matrix<type, 3, 3> scaled_rotation_block_inverse;
-        const bool invertible = math::invert(scaled_rotation_block, scaled_rotation_block_inverse);
-        ASSERT(invertible, "The scaled rotation block of the sim3 left jacobian must be invertible.");
-        static_cast<void>(invertible);
-        const math::matrix<type, 3, 3> inverse_coupling_block = -(scaled_rotation_block_inverse * coupling_block * rotation_jacobian_inverse);
-        const math::matrix<type, 3, 1> inverse_sigma_column = -(scaled_rotation_block_inverse * sigma_column);
+        sim3<type>::left_jacobian_blocks(omega_upsilon_sigma, terms, coupling, sigma_column);
+        const math::matrix<type, 3, 3> rotation_jacobian_inverse = so3<type>::left_jacobian_inverse(omega);
+        type inverse_a = 0;
+        type inverse_b = 0;
+        type inverse_c = 0;
+        sim3<type>::translation_inverse_coefficients(terms, omega.get_length_squared(), inverse_a, inverse_b, inverse_c);
+        const math::matrix<type, 3, 3> omega_hat = { { { 0, -omega[2], omega[1] },
+                                                       { omega[2], 0, -omega[0] },
+                                                       { -omega[1], omega[0], 0 } } };
+        const math::matrix<type, 3, 3> w_inv = inverse_a * omega_hat + inverse_b * (omega_hat * omega_hat) + inverse_c * math::matrix<type, 3, 3>::identity();
+        const math::matrix<type, 3, 3> inverse_coupling = -(w_inv * coupling * rotation_jacobian_inverse);
+        const math::matrix<type, 3, 1> inverse_sigma_column = -(w_inv * sigma_column);
         math::matrix<type, 7, 7> result = math::matrix<type, 7, 7>::zero();
         for (size_t i = 0; i < 3; ++i) {
             for (size_t j = 0; j < 3; ++j) {
                 result[i][j] = rotation_jacobian_inverse[i][j];
-                result[i + 3][j] = inverse_coupling_block[i][j];
-                result[i + 3][j + 3] = scaled_rotation_block_inverse[i][j];
+                result[i + 3][j] = inverse_coupling[i][j];
+                result[i + 3][j + 3] = w_inv[i][j];
             }
             result[i + 3][6] = inverse_sigma_column[i];
         }

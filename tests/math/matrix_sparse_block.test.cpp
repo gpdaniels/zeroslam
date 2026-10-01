@@ -324,4 +324,45 @@ int main(int argc, char* argv[]) {
             REQUIRE(is_value_approx(big_product(row, 7), 0.0));
         }
     }
+
+    // The key hash keeps every bit of both indices, blocks (2m, j) and (2m + 1, j) used to collide.
+    {
+        using key_type = math::sparse_block<2, 2>::block_key<size_t, size_t>;
+        const key_type hasher = { 0, 0 };
+        constexpr static const size_t grid = 64;
+        static std::size_t hashes[grid * grid];
+        for (size_t row = 0; row < grid; ++row) {
+            for (size_t col = 0; col < grid; ++col) {
+                hashes[row * grid + col] = hasher({ row, col });
+            }
+        }
+        for (size_t row = 0; row + 1 < grid; row += 2) {
+            for (size_t col = 0; col < grid; ++col) {
+                REQUIRE(hashes[row * grid + col] != hashes[(row + 1) * grid + col]);
+            }
+        }
+        size_t collisions = 0;
+        for (size_t lhs = 0; lhs < grid * grid; ++lhs) {
+            for (size_t rhs = lhs + 1; rhs < grid * grid; ++rhs) {
+                collisions += (hashes[lhs] == hashes[rhs]) ? 1u : 0u;
+            }
+        }
+        REQUIRE(collisions == 0);
+
+        // A block per key in a grid is found again, and each keeps its own value.
+        math::sparse_block<2, 2> sparse(2 * grid, 2 * grid);
+        for (size_t row = 0; row < grid; ++row) {
+            for (size_t col = 0; col < grid; ++col) {
+                math::matrix<double, 2, 2> block = math::matrix<double, 2, 2>::zero();
+                block(0, 0) = static_cast<double>((row * grid) + col);
+                sparse.blocks()[{ row, col }] = block;
+            }
+        }
+        REQUIRE(sparse.blocks().size() == grid * grid);
+        for (size_t row = 0; row < grid; ++row) {
+            for (size_t col = 0; col < grid; ++col) {
+                REQUIRE(sparse(2 * row, 2 * col) == static_cast<double>((row * grid) + col));
+            }
+        }
+    }
 }

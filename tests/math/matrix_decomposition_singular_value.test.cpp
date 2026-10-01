@@ -637,4 +637,130 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+
+    // Matrices whose squares overflow or underflow, where the norms used to be unscaled sums of squares.
+    {
+        core::random_pcg rng;
+        double base[9];
+        for (int i = 0; i < 9; ++i) {
+            base[i] = (2.0 * rng.get_random_exclusive_top()) - 1.0;
+        }
+        double base_u[9];
+        double base_s[9];
+        double base_vt[9];
+        REQUIRE(math::decompose_singular_value(&base[0], 3, 3, &base_u[0], &base_s[0], &base_vt[0]));
+        const double scales[] = { 1e155, 1e-155, 1e160, 1e-160, 1e300, 1e-300 };
+        for (const double scale : scales) {
+            double scaled[9];
+            for (int i = 0; i < 9; ++i) {
+                scaled[i] = base[i] * scale;
+            }
+            check_decomposition(&scaled[0], 3, 3, 1e-13);
+            double u[9];
+            double s[9];
+            double vt[9];
+            REQUIRE(math::decompose_singular_value(&scaled[0], 3, 3, &u[0], &s[0], &vt[0]));
+            for (int i = 0; i < 3; ++i) {
+                REQUIRE(is_value_approx(s[i * 3 + i] / scale, base_s[i * 3 + i], 1e-13));
+            }
+        }
+        // Subnormal entries are only as precise as they are stored, but still decompose.
+        double subnormal[9];
+        for (int i = 0; i < 9; ++i) {
+            subnormal[i] = base[i] * 1e-310;
+        }
+        check_decomposition(&subnormal[0], 3, 3, 1e-11);
+
+        // Scaling by a power of two outside the range is exact, so the factors are bit identical and the singular values scale exactly.
+        const double power_scales[] = { 0x1p+600, 0x1p-600, 0x1p+1000, 0x1p-1000 };
+        for (const double scale : power_scales) {
+            double scaled[9];
+            for (int i = 0; i < 9; ++i) {
+                scaled[i] = base[i] * scale;
+            }
+            double u[9];
+            double s[9];
+            double vt[9];
+            REQUIRE(math::decompose_singular_value(&scaled[0], 3, 3, &u[0], &s[0], &vt[0]));
+            for (int i = 0; i < 9; ++i) {
+                REQUIRE(u[i] == base_u[i]);
+                REQUIRE(vt[i] == base_vt[i]);
+                REQUIRE(s[i] == base_s[i] * scale);
+            }
+        }
+    }
+
+    // Graded matrices, with rows and columns of very different scales, keep orthogonal factors and reproduce the input.
+    {
+        core::random_pcg rng;
+        const int sizes[] = { 3, 9, 65 };
+        const double ranges[] = { 50.0, 100.0, 150.0 };
+        for (const int n : sizes) {
+            for (const double range : ranges) {
+                double graded[65 * 65];
+                double row_scale[65];
+                double column_scale[65];
+                for (int i = 0; i < n; ++i) {
+                    row_scale[i] = std::pow(10.0, range * ((2.0 * rng.get_random_exclusive_top()) - 1.0));
+                    column_scale[i] = std::pow(10.0, range * ((2.0 * rng.get_random_exclusive_top()) - 1.0));
+                }
+                for (int i = 0; i < n; ++i) {
+                    for (int j = 0; j < n; ++j) {
+                        graded[i * n + j] = row_scale[i] * column_scale[j] * ((2.0 * rng.get_random_exclusive_top()) - 1.0);
+                    }
+                }
+                check_decomposition(&graded[0], n, n, 1e-12);
+            }
+        }
+        const int n = 65;
+        double graded_rows[65 * 65];
+        double graded_columns[65 * 65];
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                graded_rows[i * n + j] = std::pow(10.0, -300.0 + ((600.0 * i) / (n - 1))) * ((2.0 * rng.get_random_exclusive_top()) - 1.0);
+                graded_columns[i * n + j] = std::pow(10.0, -300.0 + ((600.0 * j) / (n - 1))) * ((2.0 * rng.get_random_exclusive_top()) - 1.0);
+            }
+        }
+        check_decomposition(&graded_rows[0], n, n, 1e-12);
+        check_decomposition(&graded_columns[0], n, n, 1e-12);
+        double wide[5 * 70];
+        for (int i = 0; i < 5; ++i) {
+            for (int j = 0; j < 70; ++j) {
+                wide[i * 70 + j] = std::pow(10.0, -200.0 + ((400.0 * j) / 69.0)) * ((2.0 * rng.get_random_exclusive_top()) - 1.0);
+            }
+        }
+        check_decomposition(&wide[0], 70, 5, 1e-12);
+        check_decomposition(&wide[0], 5, 70, 1e-12);
+    }
+
+    // Single precision has the same protection against its narrower range.
+    {
+        core::random_pcg rng;
+        const float scales[] = { 1e30f, 1e-30f, 1e20f, 1e-20f };
+        for (const float scale : scales) {
+            float matrix[9];
+            for (int i = 0; i < 9; ++i) {
+                matrix[i] = scale * static_cast<float>((2.0 * rng.get_random_exclusive_top()) - 1.0);
+            }
+            float u[9];
+            float s[9];
+            float vt[9];
+            REQUIRE(math::decompose_singular_value(&matrix[0], 3, 3, &u[0], &s[0], &vt[0]));
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j < 3; ++j) {
+                    double dot_u = 0.0;
+                    double dot_v = 0.0;
+                    double product = 0.0;
+                    for (int k = 0; k < 3; ++k) {
+                        dot_u += static_cast<double>(u[i * 3 + k]) * static_cast<double>(u[j * 3 + k]);
+                        dot_v += static_cast<double>(vt[i * 3 + k]) * static_cast<double>(vt[j * 3 + k]);
+                        product += static_cast<double>(u[i * 3 + k]) * static_cast<double>(s[k * 3 + k]) * static_cast<double>(vt[k * 3 + j]);
+                    }
+                    REQUIRE(std::abs(dot_u - ((i == j) ? 1.0 : 0.0)) < 1e-5);
+                    REQUIRE(std::abs(dot_v - ((i == j) ? 1.0 : 0.0)) < 1e-5);
+                    REQUIRE(std::abs(product - static_cast<double>(matrix[i * 3 + j])) < 1e-5 * static_cast<double>(scale));
+                }
+            }
+        }
+    }
 }

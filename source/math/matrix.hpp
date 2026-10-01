@@ -618,7 +618,7 @@ namespace math {
         matrix<type, cols, rows> result(value.cols(), value.rows());
         for (size_t i = 0; i < value.rows(); ++i) {
             for (size_t j = 0; j < value.cols(); ++j) {
-                result[j][i] = value[i][j];
+                result(j, i) = value(i, j);
             }
         }
         return result;
@@ -634,28 +634,48 @@ namespace math {
         // Generic NxN inversion using Gauss-Jordan.
         matrix<type, size, size> working(value);
         matrix<type, size, size> augmented = matrix<type, size, size>::identity(value.rows(), value.cols());
-        // Pivots must be significant relative to the scale of the matrix elements, otherwise the matrix is treated as singular.
-        type scale = 0;
+        // Pivots are chosen and tested as if each row were scaled to a largest element of one (scaled partial pivoting),
+        // and must be significant relative to the largest element of their column, otherwise the matrix is treated as singular.
+        // This makes the decision independent of the scale of the rows and the columns.
+        using scale_type = typename conditional_type<(size == 0), matrix<type, 0, 0>, matrix<type, size, 1>>::type;
+        scale_type row_scale(value.rows(), 1);
+        scale_type column_tolerance(value.cols(), 1);
         for (size_t i = 0; i < value.rows(); ++i) {
+            type scale = 0;
             for (size_t j = 0; j < value.cols(); ++j) {
+                if (!math::isfinite(value[i][j])) {
+                    out = matrix<type, size, size>::zero(size, size);
+                    return false;
+                }
                 scale = math::max(scale, math::abs(value[i][j]));
             }
+            if (!(scale > 0)) {
+                out = matrix<type, size, size>::zero(size, size);
+                return false;
+            }
+            row_scale(i, 0) = scale;
         }
-        const type epsilon = scale * static_cast<type>(1e-12);
+        for (size_t j = 0; j < value.cols(); ++j) {
+            type scale = 0;
+            for (size_t i = 0; i < value.rows(); ++i) {
+                scale = math::max(scale, math::abs(value[i][j]) / row_scale(i, 0));
+            }
+            column_tolerance(j, 0) = scale * static_cast<type>(1e-12);
+        }
         // Forward elimination, moving down the diagonal from top left to bottom right.
         for (size_t i = 0; i < value.cols() - 1; ++i) {
-            // Select the pivot row, this is the row with the largest element in the current column below the current row.
+            // Select the pivot row, this is the row with the largest scaled element in the current column below the current row.
             size_t pivot_row_index = i;
-            type pivot_scale = math::abs(working[i][i]);
+            type pivot_scale = math::abs(working[i][i]) / row_scale(i, 0);
             for (size_t j = i + 1; j < value.rows(); ++j) {
-                const type potential_pivot_scale = math::abs(working[j][i]);
+                const type potential_pivot_scale = math::abs(working[j][i]) / row_scale(j, 0);
                 if (potential_pivot_scale > pivot_scale) {
                     pivot_row_index = j;
                     pivot_scale = potential_pivot_scale;
                 }
             }
             // If there is no valid pivot there is no valid inverse, note this comparison is also false for NaN values.
-            if (!(pivot_scale > epsilon)) {
+            if (!(pivot_scale > column_tolerance(i, 0))) {
                 out = matrix<type, size, size>::zero(size, size);
                 return false;
             }
@@ -669,6 +689,9 @@ namespace math {
                     augmented[i][j] = augmented[pivot_row_index][j];
                     augmented[pivot_row_index][j] = swap_value;
                 }
+                const type swap_scale = row_scale(i, 0);
+                row_scale(i, 0) = row_scale(pivot_row_index, 0);
+                row_scale(pivot_row_index, 0) = swap_scale;
             }
             // Eliminate all numbers below the diagonal.
             for (size_t j = i + 1; j < value.rows(); ++j) {
@@ -682,7 +705,7 @@ namespace math {
             }
         }
         // Check the final pivot, which is not covered by the forward elimination loop, note this comparison is also false for NaN values.
-        if (!(math::abs(working[value.rows() - 1][value.cols() - 1]) > epsilon)) {
+        if (!((math::abs(working[value.rows() - 1][value.cols() - 1]) / row_scale(value.rows() - 1, 0)) > column_tolerance(value.cols() - 1, 0))) {
             out = matrix<type, size, size>::zero(size, size);
             return false;
         }
@@ -727,16 +750,15 @@ namespace math {
         return true;
     }
 
+    // The closed form inverses need a determinant that keeps a significant part of the magnitude of its terms, the sum of the
+    // absolute values of its products. Scaling a row or a column scales the determinant and every one of its terms alike, so the
+    // test is independent of the scale of the rows and the columns. Note the comparison is also false for NaN values.
+
     template <typename type>
     inline bool invert(const matrix<type, 2, 2>& value, matrix<type, 2, 2>& out) {
         const type determinant = (value[0][0] * value[1][1]) - (value[0][1] * value[1][0]);
-        type scale = 0;
-        for (size_t i = 0; i < 2; ++i) {
-            for (size_t j = 0; j < 2; ++j) {
-                scale = math::max(scale, math::abs(value[i][j]));
-            }
-        }
-        if (!(math::abs(determinant) > scale * scale * static_cast<type>(1e-12))) {
+        const type determinant_magnitude = math::abs(value[0][0] * value[1][1]) + math::abs(value[0][1] * value[1][0]);
+        if (!(math::abs(determinant) > determinant_magnitude * static_cast<type>(1e-12))) {
             out = matrix<type, 2, 2>::zero();
             return false;
         }
@@ -750,13 +772,9 @@ namespace math {
     inline bool invert(const matrix<type, 3, 3>& value, matrix<type, 3, 3>& out) {
         const type determinant =
             +value[0][0] * (value[1][1] * value[2][2] - value[2][1] * value[1][2]) - value[0][1] * (value[1][0] * value[2][2] - value[1][2] * value[2][0]) + value[0][2] * (value[1][0] * value[2][1] - value[1][1] * value[2][0]);
-        type scale = 0;
-        for (size_t i = 0; i < 3; ++i) {
-            for (size_t j = 0; j < 3; ++j) {
-                scale = math::max(scale, math::abs(value[i][j]));
-            }
-        }
-        if (!(math::abs(determinant) > scale * scale * scale * static_cast<type>(1e-12))) {
+        const type determinant_magnitude =
+            math::abs(value[0][0]) * (math::abs(value[1][1] * value[2][2]) + math::abs(value[2][1] * value[1][2])) + math::abs(value[0][1]) * (math::abs(value[1][0] * value[2][2]) + math::abs(value[1][2] * value[2][0])) + math::abs(value[0][2]) * (math::abs(value[1][0] * value[2][1]) + math::abs(value[1][1] * value[2][0]));
+        if (!(math::abs(determinant) > determinant_magnitude * static_cast<type>(1e-12))) {
             out = matrix<type, 3, 3>::zero();
             return false;
         }

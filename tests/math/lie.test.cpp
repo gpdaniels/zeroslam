@@ -16,6 +16,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "math/lie.hpp"
 
+#include "core/random_pcg.hpp"
+
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
@@ -23,6 +25,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -55,6 +58,115 @@ static inline bool are_values_approx(const array_type& lhs, const array_type& rh
         }
     }
     return true;
+}
+
+// The references are evaluated in long double, which only has extra precision on some platforms.
+constexpr static const bool long_double_is_extended = std::numeric_limits<long double>::digits > std::numeric_limits<double>::digits;
+
+// Reference (1 - cos(theta)) / theta^2 and (theta - sin(theta)) / theta^3.
+static void reference_rotation_coefficients(const long double theta, long double& first, long double& second) {
+    first = 0.5L;
+    second = 1.0L / 6.0L;
+    if (theta == 0.0L) {
+        return;
+    }
+    const long double half_sinc = std::sin(0.5L * theta) / (0.5L * theta);
+    first = 0.5L * half_sinc * half_sinc;
+    if (theta >= 1.0L) {
+        second = (theta - std::sin(theta)) / (theta * theta * theta);
+        return;
+    }
+    long double term = 1.0L / 6.0L;
+    second = 0.0L;
+    for (int k = 0; k < 40; ++k) {
+        second += term;
+        term *= -(theta * theta) / (static_cast<long double>((2 * k) + 4) * static_cast<long double>((2 * k) + 5));
+    }
+}
+
+// Reference coefficients of the sim3 translation W = c * I + a * omega_hat + b * omega_hat^2, summing the series of phi(z) = (exp(z) - 1) / z
+// term by term, with z = sigma + i * theta, z^k = p + i * theta * q and r = (sigma^k - p) / theta^2.
+static void reference_translation_coefficients(const long double sigma, const long double theta, long double& a, long double& b, long double& c) {
+    long double p = 1.0L;
+    long double q = 0.0L;
+    long double r = 0.0L;
+    long double sigma_power = 1.0L;
+    long double factorial = 1.0L;
+    a = 0.0L;
+    b = 0.0L;
+    c = 0.0L;
+    for (int k = 0; k < 150; ++k) {
+        factorial *= static_cast<long double>(k + 1);
+        c += sigma_power / factorial;
+        a += q / factorial;
+        b += r / factorial;
+        const long double next_p = (sigma * p) - (theta * theta * q);
+        const long double next_q = p + (sigma * q);
+        const long double next_r = (sigma * r) + q;
+        p = next_p;
+        q = next_q;
+        r = next_r;
+        sigma_power *= sigma;
+    }
+}
+
+// The left jacobian as the series sum_n ad^n / (n + 1)! of the adjoint, in long double and with enough terms to converge for angles up to pi.
+template <size_t size>
+static void reference_left_jacobian(const math::matrix<double, size, 1>& tangent, long double (&result)[size][size]) {
+    long double adjoint[size][size] = {};
+    const long double omega[3] = { static_cast<long double>(tangent[0]), static_cast<long double>(tangent[1]), static_cast<long double>(tangent[2]) };
+    const long double upsilon[3] = { static_cast<long double>(tangent[3]), static_cast<long double>(tangent[4]), static_cast<long double>(tangent[5]) };
+    const long double omega_hat[3][3] = { { 0.0L, -omega[2], omega[1] }, { omega[2], 0.0L, -omega[0] }, { -omega[1], omega[0], 0.0L } };
+    const long double upsilon_hat[3][3] = { { 0.0L, -upsilon[2], upsilon[1] }, { upsilon[2], 0.0L, -upsilon[0] }, { -upsilon[1], upsilon[0], 0.0L } };
+    for (size_t i = 0; i < 3; ++i) {
+        for (size_t j = 0; j < 3; ++j) {
+            adjoint[i][j] = omega_hat[i][j];
+            adjoint[i + 3][j] = upsilon_hat[i][j];
+            adjoint[i + 3][j + 3] = omega_hat[i][j];
+        }
+        if constexpr (size == 7) {
+            adjoint[i + 3][i + 3] += static_cast<long double>(tangent[6]);
+            adjoint[i + 3][6] = -upsilon[i];
+        }
+    }
+    long double power[size][size];
+    for (size_t i = 0; i < size; ++i) {
+        for (size_t j = 0; j < size; ++j) {
+            result[i][j] = (i == j) ? 1.0L : 0.0L;
+            power[i][j] = adjoint[i][j];
+        }
+    }
+    long double factorial = 1.0L;
+    for (int n = 1; n < 60; ++n) {
+        factorial *= static_cast<long double>(n + 1);
+        long double next[size][size];
+        for (size_t i = 0; i < size; ++i) {
+            for (size_t j = 0; j < size; ++j) {
+                result[i][j] += power[i][j] / factorial;
+                next[i][j] = 0.0L;
+                for (size_t k = 0; k < size; ++k) {
+                    next[i][j] += power[i][k] * adjoint[k][j];
+                }
+            }
+        }
+        for (size_t i = 0; i < size; ++i) {
+            for (size_t j = 0; j < size; ++j) {
+                power[i][j] = next[i][j];
+            }
+        }
+    }
+}
+
+static math::matrix<double, 3, 1> random_unit_axis(core::random_pcg& rng) {
+    math::matrix<double, 3, 1> axis;
+    double length_squared = 0.0;
+    do {
+        for (size_t i = 0; i < 3; ++i) {
+            axis[i] = (2.0 * rng.get_random_exclusive_top()) - 1.0;
+        }
+        length_squared = axis.get_length_squared();
+    } while ((length_squared < 0.01) || (length_squared > 1.0));
+    return axis * (1.0 / std::sqrt(length_squared));
 }
 
 int main(int argc, char* argv[]) {
@@ -1286,6 +1398,178 @@ int main(int argc, char* argv[]) {
         const math::matrix<double, 4, 1> round_trip = math::so3<double>(stretched.get_matrix() * stretch).get_quaternion();
         REQUIRE(std::abs(round_trip.get_length_squared() - 1.0) < 1e-12);
         REQUIRE(std::abs(stretched.normalised().get_quaternion().get_length_squared() - 1.0) < 1e-12);
+    }
+
+    // The so3 left jacobian matches a long double reference at every angle, including just above the former series switch.
+    {
+        core::random_pcg rng;
+        const double angles[] = { 0.0, 1e-9, 1e-7, 1e-6, 1.1e-6, 2e-6, 1e-5, 1e-4, 1e-3, 1e-2, 0.1, 0.5, 0.99, 1.0, 1.01, 2.0, 3.0, 3.14159 };
+        for (const double angle : angles) {
+            for (int trial = 0; trial < 8; ++trial) {
+                const math::matrix<double, 3, 1> omega = random_unit_axis(rng) * angle;
+                const math::matrix<double, 3, 3> jacobian = math::so3<double>::left_jacobian(omega);
+                long double first = 0.0L;
+                long double second = 0.0L;
+                reference_rotation_coefficients(std::sqrt(static_cast<long double>(omega.get_length_squared())), first, second);
+                const long double omega_hat[3][3] = { { 0.0L, -static_cast<long double>(omega[2]), static_cast<long double>(omega[1]) },
+                                                      { static_cast<long double>(omega[2]), 0.0L, -static_cast<long double>(omega[0]) },
+                                                      { -static_cast<long double>(omega[1]), static_cast<long double>(omega[0]), 0.0L } };
+                for (size_t i = 0; i < 3; ++i) {
+                    for (size_t j = 0; j < 3; ++j) {
+                        long double omega_hat_squared = 0.0L;
+                        for (size_t k = 0; k < 3; ++k) {
+                            omega_hat_squared += omega_hat[i][k] * omega_hat[k][j];
+                        }
+                        const long double identity = (i == j) ? 1.0L : 0.0L;
+                        const long double expected = identity + (first * omega_hat[i][j]) + (second * omega_hat_squared);
+                        const long double scale = identity + std::abs(first * omega_hat[i][j]) + std::abs(second * omega_hat_squared);
+                        REQUIRE(std::abs(static_cast<long double>(jacobian[i][j]) - expected) <= 2e-15L * scale);
+                    }
+                }
+            }
+        }
+    }
+
+    // The sim3 exponential matches a long double reference, across the scales and angles of the former series switches and either side of the unit circle.
+    {
+        core::random_pcg rng;
+        const long double tolerance = long_double_is_extended ? 4e-15L : 1e-13L;
+        const double magnitudes[] = { 0.0, 1e-9, 1e-7, 1e-6, 1.1e-6, 2e-6, 1e-5, 1e-4, 1e-3, 1e-2, 0.1, 0.6, 0.8, 0.8000001, 0.99, 1.0, 1.01, 2.0, 3.0 };
+        const double signs[2] = { 1.0, -1.0 };
+        for (const double sigma_magnitude : magnitudes) {
+            for (const double sigma_sign : signs) {
+                for (const double theta : magnitudes) {
+                    const double sigma = sigma_sign * sigma_magnitude;
+                    const math::matrix<double, 3, 1> omega = random_unit_axis(rng) * theta;
+                    const math::matrix<double, 3, 1> upsilon = random_unit_axis(rng) * (0.5 + rng.get_random_exclusive_top());
+                    const math::sim3<double> similarity = math::sim3<double>::exp({ { omega[0], omega[1], omega[2], upsilon[0], upsilon[1], upsilon[2], sigma } });
+                    REQUIRE(similarity.scale() == math::exp(sigma));
+                    REQUIRE(similarity.transformation().rotation() == math::so3<double>::exp(omega));
+                    long double a = 0.0L;
+                    long double b = 0.0L;
+                    long double c = 0.0L;
+                    const long double theta_exact = std::sqrt(static_cast<long double>(omega.get_length_squared()));
+                    reference_translation_coefficients(static_cast<long double>(sigma), theta_exact, a, b, c);
+                    const long double omega_long[3] = { static_cast<long double>(omega[0]), static_cast<long double>(omega[1]), static_cast<long double>(omega[2]) };
+                    const long double upsilon_long[3] = { static_cast<long double>(upsilon[0]), static_cast<long double>(upsilon[1]), static_cast<long double>(upsilon[2]) };
+                    const long double cross[3] = { (omega_long[1] * upsilon_long[2]) - (omega_long[2] * upsilon_long[1]),
+                                                   (omega_long[2] * upsilon_long[0]) - (omega_long[0] * upsilon_long[2]),
+                                                   (omega_long[0] * upsilon_long[1]) - (omega_long[1] * upsilon_long[0]) };
+                    const long double double_cross[3] = { (omega_long[1] * cross[2]) - (omega_long[2] * cross[1]),
+                                                          (omega_long[2] * cross[0]) - (omega_long[0] * cross[2]),
+                                                          (omega_long[0] * cross[1]) - (omega_long[1] * cross[0]) };
+                    long double upsilon_scale = 0.0L;
+                    for (size_t i = 0; i < 3; ++i) {
+                        upsilon_scale = std::fmax(upsilon_scale, std::abs(upsilon_long[i]));
+                    }
+                    const long double scale = (std::abs(c) + (std::abs(a) * theta_exact) + (std::abs(b) * theta_exact * theta_exact)) * upsilon_scale;
+                    for (size_t i = 0; i < 3; ++i) {
+                        const long double expected = (c * upsilon_long[i]) + (a * cross[i]) + (b * double_cross[i]);
+                        REQUIRE(std::abs(static_cast<long double>(similarity.transformation().translation()[i]) - expected) <= tolerance * scale);
+                    }
+                }
+            }
+        }
+    }
+
+    // The sim3 logarithm inverts the exponential, including in the band between the former series switches.
+    {
+        core::random_pcg rng;
+        const double magnitudes[] = { 0.0, 1e-9, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 0.1, 1.0, 3.0 };
+        const double signs[2] = { 1.0, -1.0 };
+        double worst_upsilon = 0.0;
+        for (const double sigma_magnitude : magnitudes) {
+            for (const double sigma_sign : signs) {
+                for (const double theta : magnitudes) {
+                    for (int trial = 0; trial < 4; ++trial) {
+                        const double sigma = sigma_sign * sigma_magnitude;
+                        const math::matrix<double, 3, 1> omega = random_unit_axis(rng) * theta;
+                        const math::matrix<double, 3, 1> upsilon = random_unit_axis(rng) * (0.5 + rng.get_random_exclusive_top());
+                        const math::matrix<double, 7, 1> tangent = { { omega[0], omega[1], omega[2], upsilon[0], upsilon[1], upsilon[2], sigma } };
+                        const math::matrix<double, 7, 1> round_trip = math::sim3<double>::exp(tangent).log();
+                        double upsilon_scale = 0.0;
+                        for (size_t i = 0; i < 3; ++i) {
+                            upsilon_scale = std::fmax(upsilon_scale, std::abs(upsilon[i]));
+                        }
+                        for (size_t i = 0; i < 3; ++i) {
+                            REQUIRE(std::abs(round_trip[i] - tangent[i]) <= 1e-14 * theta);
+                            const double upsilon_error = std::abs(round_trip[i + 3] - tangent[i + 3]) / upsilon_scale;
+                            worst_upsilon = std::fmax(worst_upsilon, upsilon_error);
+                            REQUIRE(upsilon_error <= 1e-14);
+                        }
+                        // The scale is stored as exp(sigma), which near one resolves sigma only to its rounding.
+                        REQUIRE(std::abs(round_trip[6] - sigma) <= (1e-14 * std::abs(sigma)) + 2.3e-16);
+                    }
+                }
+            }
+        }
+        REQUIRE(worst_upsilon < 1e-14);
+
+        // And the exponential inverts the logarithm.
+        for (int trial = 0; trial < 200; ++trial) {
+            const math::so3<double> rotation = math::so3<double>::exp(random_unit_axis(rng) * (3.1 * rng.get_random_exclusive_top()));
+            const math::matrix<double, 3, 1> translation = random_unit_axis(rng) * (10.0 * rng.get_random_exclusive_top());
+            const double scale = std::exp((4.0 * rng.get_random_exclusive_top()) - 2.0);
+            const math::sim3<double> similarity(math::se3<double>(rotation, translation), scale);
+            const math::sim3<double> round_trip = math::sim3<double>::exp(similarity.log());
+            for (size_t i = 0; i < 3; ++i) {
+                REQUIRE(std::abs(round_trip.transformation().translation()[i] - translation[i]) <= 1e-14 * 10.0);
+            }
+            REQUIRE(std::abs(round_trip.scale() - scale) <= 1e-15 * scale);
+        }
+    }
+
+    // The closed form se3 and sim3 left jacobians and their inverses match the converged series, from zero angle to near pi and for scales up to e^+-1.
+    {
+        core::random_pcg rng;
+        const double angles[] = { 0.0, 1e-9, 1e-6, 1e-4, 1e-3, 1e-2, 0.1, 0.5, 0.99, 1.0, 1.01, 1.5, 2.0, 2.5, 3.0, 3.1, 3.14 };
+        const double sigmas[] = { 0.0, 1e-9, -1e-9, 1e-6, -1e-6, 1e-3, -1e-3, 0.1, -0.1, 0.5, -0.5, 0.9, -0.9, 1.0, -1.0 };
+        for (const double angle : angles) {
+            for (int trial = 0; trial < 4; ++trial) {
+                const math::matrix<double, 3, 1> omega = random_unit_axis(rng) * angle;
+                const math::matrix<double, 3, 1> upsilon = random_unit_axis(rng) * (0.2 + (2.0 * rng.get_random_exclusive_top()));
+                const math::matrix<double, 6, 1> pose_tangent = { { omega[0], omega[1], omega[2], upsilon[0], upsilon[1], upsilon[2] } };
+                long double pose_reference[6][6];
+                reference_left_jacobian(pose_tangent, pose_reference);
+                const math::matrix<double, 6, 6> pose_jacobian = math::se3<double>::left_jacobian(pose_tangent);
+                const math::matrix<double, 6, 6> pose_jacobian_inverse = math::se3<double>::left_jacobian_inverse(pose_tangent);
+                for (size_t i = 0; i < 6; ++i) {
+                    for (size_t j = 0; j < 6; ++j) {
+                        REQUIRE(std::abs(static_cast<long double>(pose_jacobian[i][j]) - pose_reference[i][j]) <= 1e-13L);
+                        long double product = 0.0L;
+                        for (size_t k = 0; k < 6; ++k) {
+                            product += static_cast<long double>(pose_jacobian_inverse[i][k]) * pose_reference[k][j];
+                        }
+                        REQUIRE(std::abs(product - ((i == j) ? 1.0L : 0.0L)) <= 1e-13L);
+                    }
+                }
+                for (const double sigma : sigmas) {
+                    const math::matrix<double, 7, 1> similarity_tangent = { { omega[0], omega[1], omega[2], upsilon[0], upsilon[1], upsilon[2], sigma } };
+                    long double similarity_reference[7][7];
+                    reference_left_jacobian(similarity_tangent, similarity_reference);
+                    const math::matrix<double, 7, 7> similarity_jacobian = math::sim3<double>::left_jacobian(similarity_tangent);
+                    const math::matrix<double, 7, 7> similarity_jacobian_inverse = math::sim3<double>::left_jacobian_inverse(similarity_tangent);
+                    for (size_t i = 0; i < 7; ++i) {
+                        for (size_t j = 0; j < 7; ++j) {
+                            REQUIRE(std::abs(static_cast<long double>(similarity_jacobian[i][j]) - similarity_reference[i][j]) <= 1e-13L);
+                            long double product = 0.0L;
+                            for (size_t k = 0; k < 7; ++k) {
+                                product += static_cast<long double>(similarity_jacobian_inverse[i][k]) * similarity_reference[k][j];
+                            }
+                            REQUIRE(std::abs(product - ((i == j) ? 1.0L : 0.0L)) <= 1e-13L);
+                        }
+                    }
+                    // Without a change of scale the similarity jacobian is the pose one.
+                    if (sigma == 0.0) {
+                        for (size_t i = 0; i < 6; ++i) {
+                            for (size_t j = 0; j < 6; ++j) {
+                                REQUIRE(std::abs(similarity_jacobian[i][j] - pose_jacobian[i][j]) <= 1e-14);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     return EXIT_SUCCESS;

@@ -20,6 +20,16 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "math/math.hpp"
 
+#if defined(_MSC_VER)
+#pragma warning(push, 0)
+#endif
+
+#include <vector>
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
 namespace {
     using size_t = decltype(sizeof(0));
 }
@@ -125,15 +135,85 @@ namespace math {
                 }
             };
 
+        // The entries are brought into [1 / range_limit, range_limit] by exact power of two steps, where no square or sum of squares in the
+        // norms and shifts can overflow. Sums of squares above norm_minimum lose nothing to underflow, smaller ones are recomputed scaled.
+        constexpr static const type range_limit = []() {
+            if constexpr (sizeof(type) <= sizeof(float)) {
+                return type(0x1p+50f);
+            }
+            else {
+                return type(0x1p+450);
+            }
+        }();
+        constexpr static const type range_step = []() {
+            if constexpr (sizeof(type) <= sizeof(float)) {
+                return type(0x1p+60f);
+            }
+            else {
+                return type(0x1p+500);
+            }
+        }();
+        constexpr static const type norm_minimum = []() {
+            if constexpr (sizeof(type) <= sizeof(float)) {
+                return type(0x1p-80f);
+            }
+            else {
+                return type(0x1p-800);
+            }
+        }();
+
+        // Helper function giving the reciprocal of the norm of a column or row from its sum of squares, or from its entries scaled by the
+        // largest when the squares underflow, as in a graded matrix. It is zero for a zero column, or one too small to invert, which is then not reflected.
+        constexpr static const auto norm_reciprocal =
+            [](const type* const __restrict values, const size_t stride, const size_t count, const type sum_of_squares) -> type {
+            if (sum_of_squares >= norm_minimum) {
+                return type(1) / math::sqrt(sum_of_squares);
+            }
+            type largest = type(0);
+            for (size_t index = 0; index < count; ++index) {
+                largest = math::max(largest, math::abs(values[index * stride]));
+            }
+            if (!(largest > type(0))) {
+                return type(0);
+            }
+            type scaled_sum_of_squares = type(0);
+            for (size_t index = 0; index < count; ++index) {
+                const type scaled = values[index * stride] / largest;
+                scaled_sum_of_squares += scaled * scaled;
+            }
+            const type reciprocal = type(1) / (largest * math::sqrt(scaled_sum_of_squares));
+            return math::isfinite(reciprocal) ? reciprocal : type(0);
+        };
+
         // Validate the input matrix size.
         if ((width == 0) || (height == 0)) {
             return false;
         }
 
         // Validate the input matrix contents. A non-finite value poisons the shift.
+        type largest_magnitude = type(0);
         for (size_t index = 0; index < width * height; ++index) {
             if (!math::isfinite(matrix_a[index])) {
                 return false;
+            }
+            largest_magnitude = math::max(largest_magnitude, math::abs(matrix_a[index]));
+        }
+
+        // Count the power of two steps that bring the largest entry into range, they are undone on the singular values.
+        type scale_step = type(1);
+        int scale_step_count = 0;
+        if (largest_magnitude > range_limit) {
+            scale_step = type(1) / range_step;
+            while (largest_magnitude > range_limit) {
+                largest_magnitude *= scale_step;
+                ++scale_step_count;
+            }
+        }
+        else if ((largest_magnitude > type(0)) && (largest_magnitude < (type(1) / range_limit))) {
+            scale_step = range_step;
+            while (largest_magnitude < (type(1) / range_limit)) {
+                largest_magnitude *= scale_step;
+                ++scale_step_count;
             }
         }
 
@@ -148,6 +228,9 @@ namespace math {
         }
         for (size_t index = 0; index < width * height; ++index) {
             matrix_s[index] = matrix_a[index];
+            for (int step = 0; step < scale_step_count; ++step) {
+                matrix_s[index] *= scale_step;
+            }
         }
         for (size_t y = 0; y < width; ++y) {
             for (size_t x = 0; x < width; ++x) {
@@ -171,11 +254,11 @@ namespace math {
         // Bi-diagonalisation.
         constexpr static const size_t house_vector_static_size = 64;
         type house_vector_storage[house_vector_static_size];
-        type* house_vector_heap = nullptr;
+        std::vector<type> house_vector_heap;
         type* house_vector = house_vector_storage;
         if (rows > house_vector_static_size) {
-            house_vector_heap = new type[rows];
-            house_vector = house_vector_heap;
+            house_vector_heap.resize(rows);
+            house_vector = house_vector_heap.data();
         }
         for (size_t column_index = 0; column_index < columns; ++column_index) {
             // Column Householder, zeroing the entries below the diagonal of this column.
@@ -183,18 +266,16 @@ namespace math {
                 const type lead_value = matrix_s[(column_index)*columns + (column_index)];
                 const type lead_magnitude = math::abs(lead_value);
 
-                type norm_reciprocal = type(0);
+                type sum_of_squares = type(0);
                 for (size_t row = column_index; row < rows; ++row) {
                     const type value = matrix_s[(row)*columns + (column_index)];
-                    norm_reciprocal += value * value;
+                    sum_of_squares += value * value;
                 }
-                if (norm_reciprocal > type(0)) {
-                    norm_reciprocal = type(1) / math::sqrt(norm_reciprocal);
-                }
+                const type column_norm_reciprocal = norm_reciprocal(&matrix_s[(column_index)*columns + (column_index)], columns, rows - column_index, sum_of_squares);
 
                 // An all-zero column needs no reflection, and gives the zero vector, so H = I.
-                const type house_alpha = (norm_reciprocal > type(0)) ? math::sqrt(type(1) + (lead_magnitude * norm_reciprocal)) : type(0);
-                const type house_beta = (house_alpha > type(0)) ? (norm_reciprocal / house_alpha) : type(0);
+                const type house_alpha = (column_norm_reciprocal > type(0)) ? math::sqrt(type(1) + (lead_magnitude * column_norm_reciprocal)) : type(0);
+                const type house_beta = (house_alpha > type(0)) ? (column_norm_reciprocal / house_alpha) : type(0);
                 const type tail_sign = (lead_value < type(0)) ? type(1) : type(-1);
 
                 house_vector[column_index] = -house_alpha;
@@ -232,17 +313,15 @@ namespace math {
                 const type lead_value = matrix_s[(column_index)*columns + (column_index + 1)];
                 const type lead_magnitude = math::abs(lead_value);
 
-                type norm_reciprocal = type(0);
+                type sum_of_squares = type(0);
                 for (size_t column = column_index + 1; column < columns; ++column) {
                     const type value = matrix_s[(column_index)*columns + (column)];
-                    norm_reciprocal += value * value;
+                    sum_of_squares += value * value;
                 }
-                if (norm_reciprocal > type(0)) {
-                    norm_reciprocal = type(1) / math::sqrt(norm_reciprocal);
-                }
+                const type row_norm_reciprocal = norm_reciprocal(&matrix_s[(column_index)*columns + (column_index + 1)], 1, columns - column_index - 1, sum_of_squares);
 
-                const type house_alpha = (norm_reciprocal > type(0)) ? math::sqrt(type(1) + (lead_magnitude * norm_reciprocal)) : type(0);
-                const type house_beta = (house_alpha > type(0)) ? (norm_reciprocal / house_alpha) : type(0);
+                const type house_alpha = (row_norm_reciprocal > type(0)) ? math::sqrt(type(1) + (lead_magnitude * row_norm_reciprocal)) : type(0);
+                const type house_beta = (house_alpha > type(0)) ? (row_norm_reciprocal / house_alpha) : type(0);
                 const type tail_sign = (lead_value < type(0)) ? type(1) : type(-1);
 
                 house_vector[column_index + 1] = -house_alpha;
@@ -271,8 +350,6 @@ namespace math {
                 }
             }
         }
-        delete[] house_vector_heap;
-        house_vector_heap = nullptr;
         house_vector = nullptr;
 
         // Diagonalisation.
@@ -404,6 +481,14 @@ namespace math {
         // - matrix_u and matrix_vt signs are swapped to maximise the number of positive signs.
 
         const size_t min_dimension = math::min(width, height);
+
+        // Undo the power of two steps on the singular values.
+        const type unscale_step = type(1) / scale_step;
+        for (size_t diag = 0; diag < min_dimension; ++diag) {
+            for (int step = 0; step < scale_step_count; ++step) {
+                matrix_s[diag * width + diag] *= unscale_step;
+            }
+        }
 
         for (size_t diag = 0; diag < min_dimension; ++diag) {
             const type sign_val = (matrix_s[diag * width + diag] < type(0)) ? type(-1) : type(1);
