@@ -49,7 +49,7 @@ namespace core {
         private:
             struct comparison final {
                 bool operator()(const queue* lhs, const queue* rhs) const {
-                    return (lhs->priority != rhs->priority) ? (lhs->priority < rhs->priority) : (lhs < rhs);
+                    return (lhs->priority != rhs->priority) ? (lhs->priority < rhs->priority) : std::less<const queue*>()(lhs, rhs);
                 }
             };
 
@@ -76,12 +76,53 @@ namespace core {
             bool finished() const;
         };
 
+        // The workers run while the pool is referenced, releasing the last reference joins them.
+        // On windows the pool destructor runs under the loader lock where it cannot join, so a dll releases every reference before it is unloaded.
+        class reference final {
+        public:
+            reference();
+            ~reference();
+            reference(const reference&) = delete;
+            reference(reference&&) = delete;
+            reference& operator=(const reference&) = delete;
+            reference& operator=(reference&&) = delete;
+        };
+
     private:
-        bool running;
+        // A parallel for, the caller and the workers claim chunks from the shared counter until it passes the count.
+        struct job final {
+            void (*const invoke)(const void*, size_t, size_t);
+            const void* const body;
+            const size_t count;
+            const size_t chunk;
+            std::atomic<size_t> next;
+            std::atomic<size_t> participants;
+            bool listed;
+
+            job(void (*const job_invoke)(const void*, size_t, size_t), const void* const job_body, const size_t job_count, const size_t job_chunk);
+            job(const job&) = delete;
+            job(job&&) = delete;
+            job& operator=(const job&) = delete;
+            job& operator=(job&&) = delete;
+
+            void run();
+        };
+
+    private:
+        const unsigned int requested_workers;
+        std::mutex lifetime_mutex;
+        size_t references;
         std::vector<std::thread> threads;
+        std::atomic<size_t> workers;
+        std::atomic<size_t> generation;
+        bool running;
+        size_t spinning;
+        size_t sleeping;
         std::mutex queue_mutex;
         std::condition_variable queue_available;
+        std::condition_variable job_finished;
         std::set<queue*, queue::comparison> queues;
+        std::vector<job*> jobs;
 
     private:
         explicit thread_pool(unsigned int thread_count);
@@ -92,8 +133,13 @@ namespace core {
         thread_pool& operator=(thread_pool&&) = delete;
 
         void thread_loop();
+        job* claimable_job();
+        void execute(job& work);
         void drain(queue& target);
+        void start();
         void join();
+        void acquire();
+        void release();
 
     public:
         static thread_pool& instance();
@@ -105,24 +151,27 @@ namespace core {
             if (count == 0) {
                 return;
             }
-            const size_t workers = this->thread_count() + 1;
-            const size_t chunk = (((count + workers - 1) / workers) < grain) ? grain : ((count + workers - 1) / workers);
-            if ((this->thread_count() == 0) || (chunk >= count)) {
+            const size_t threads_running = this->thread_count();
+            const size_t participants = threads_running + 1;
+            const size_t chunk = (((count + participants - 1) / participants) < grain) ? grain : ((count + participants - 1) / participants);
+            if ((threads_running == 0) || (chunk >= count)) {
                 for (size_t index = 0; index < count; ++index) {
                     body(index);
                 }
                 return;
             }
-            queue tasks(*this);
-            for (size_t begin = 0; begin < count; begin += chunk) {
-                const size_t end = ((begin + chunk) < count) ? (begin + chunk) : count;
-                tasks.push([&body, begin, end]() {
+            job work(
+                [](const void* const context, const size_t begin, const size_t end) {
+                    const function_type& target = *static_cast<const function_type*>(context);
                     for (size_t index = begin; index < end; ++index) {
-                        body(index);
+                        target(index);
                     }
-                });
-            }
-            tasks.drain();
+                },
+                &body,
+                count,
+                chunk
+            );
+            this->execute(work);
         }
     };
 }

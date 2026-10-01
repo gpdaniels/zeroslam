@@ -159,5 +159,51 @@ int main(int argc, char* argv[]) {
         REQUIRE(inner_total == 8 * 64);
     }
 
+    {
+        const size_t started = pool.thread_count();
+        {
+            core::thread_pool::reference first;
+            REQUIRE(pool.thread_count() == started);
+            {
+                core::thread_pool::reference second;
+                REQUIRE(pool.thread_count() == started);
+            }
+            REQUIRE(pool.thread_count() == started);
+        }
+        // Releasing the last reference joins the workers, the caller then does all the work.
+        REQUIRE(pool.thread_count() == 0);
+        std::atomic<int> total(0);
+        pool.parallel_for(100, 1, [&total](const size_t) {
+            ++total;
+        });
+        REQUIRE(total == 100);
+        {
+            core::thread_pool::queue tasks(pool);
+            for (int i = 0; i < 10; ++i) {
+                tasks.push([&total]() {
+                    ++total;
+                });
+            }
+            tasks.drain();
+            REQUIRE(tasks.finished());
+            REQUIRE(total == 110);
+        }
+        {
+            core::thread_pool::reference restarted;
+            REQUIRE(pool.thread_count() == started);
+            std::vector<std::atomic<int>> hits(1000);
+            for (std::atomic<int>& hit : hits) {
+                hit = 0;
+            }
+            pool.parallel_for(hits.size(), 1, [&hits](const size_t index) {
+                ++hits[index];
+            });
+            for (const std::atomic<int>& hit : hits) {
+                REQUIRE(hit == 1);
+            }
+        }
+        REQUIRE(pool.thread_count() == 0);
+    }
+
     return EXIT_SUCCESS;
 }

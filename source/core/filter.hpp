@@ -32,23 +32,22 @@ namespace core {
             size_t& features_count,
             const test_function_type test_function
         ) {
-            if (features_count == 0)
-                return;
-            type* front = features;
-            type* back = features + features_count - 1;
-            while (front <= back) {
-                if (test_function(*front)) {
-                    while ((back != front) && (test_function(*back))) {
-                        --back;
+            // The kept elements are those below end, so the last candidate is end - 1 and no index goes before the first element.
+            size_t front = 0;
+            size_t end = features_count;
+            while (front < end) {
+                if (test_function(features[front])) {
+                    while (((end - 1) != front) && (test_function(features[end - 1]))) {
+                        --end;
                     }
-                    if (back != front) {
-                        *front = static_cast<type&&>(*back);
+                    if ((end - 1) != front) {
+                        features[front] = static_cast<type&&>(features[end - 1]);
                     }
-                    --back;
+                    --end;
                 }
                 ++front;
             }
-            features_count = static_cast<size_t>(back + 1 - features);
+            features_count = end;
         }
     };
 }

@@ -92,6 +92,113 @@ int main(int argc, char* argv[]) {
             }
             REQUIRE(found);
         }
+        // Each removed element is replaced by the last kept one, so the order is fixed.
+        const feature::point expected_order[9] = {
+            { +1, +1, 0, 0, 0 },
+            { 0, +1, 0, 0, 0 },
+            { -1, +1, 0, 0, 0 },
+            { +1, 0, 0, 0, 0 },
+            { 0, 0, 0, 0, 0 },
+            { -1, 0, 0, 0, 0 },
+            { -1, -1, 0, 0, 0 },
+            { 0, -1, 0, 0, 0 },
+            { +1, -1, 0, 0, 0 }
+        };
+        for (size_t i = 0; i < prune_count; ++i) {
+            REQUIRE(features[i].x == expected_order[i].x);
+            REQUIRE(features[i].y == expected_order[i].y);
+        }
+    }
+
+    {
+        int values[1] = { 7 };
+        size_t count = 0;
+        int calls = 0;
+        core::filter::remove_if(&values[0], count, [&calls](const int) {
+            ++calls;
+            return true;
+        });
+        REQUIRE(count == 0);
+        REQUIRE(calls == 0);
+        REQUIRE(values[0] == 7);
+    }
+
+    {
+        int values[1] = { 7 };
+        size_t count = 1;
+        int calls = 0;
+        core::filter::remove_if(&values[0], count, [&calls](const int) {
+            ++calls;
+            return true;
+        });
+        REQUIRE(count == 0);
+        REQUIRE(calls == 1);
+    }
+
+    {
+        int values[1] = { 7 };
+        size_t count = 1;
+        int calls = 0;
+        core::filter::remove_if(&values[0], count, [&calls](const int) {
+            ++calls;
+            return false;
+        });
+        REQUIRE(count == 1);
+        REQUIRE(calls == 1);
+        REQUIRE(values[0] == 7);
+    }
+
+    {
+        int values[6] = { 1, 3, 5, 7, 9, 11 };
+        size_t count = 6;
+        int calls = 0;
+        core::filter::remove_if(&values[0], count, [&calls](const int) {
+            ++calls;
+            return true;
+        });
+        REQUIRE(count == 0);
+        REQUIRE(calls == 6);
+    }
+
+    {
+        int values[6] = { 2, 4, 6, 8, 10, 12 };
+        size_t count = 6;
+        int calls = 0;
+        core::filter::remove_if(&values[0], count, [&calls](const int) {
+            ++calls;
+            return false;
+        });
+        REQUIRE(count == 6);
+        REQUIRE(calls == 6);
+        for (size_t i = 0; i < 6; ++i) {
+            REQUIRE(values[i] == static_cast<int>(2 * (i + 1)));
+        }
+    }
+
+    {
+        int values[10] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+        size_t count = 10;
+        int calls = 0;
+        core::filter::remove_if(&values[0], count, [&calls](const int value) {
+            ++calls;
+            return (value % 2) != 0;
+        });
+        const int expected[5] = { 10, 2, 8, 4, 6 };
+        REQUIRE(count == 5);
+        REQUIRE(calls == 10);
+        for (size_t i = 0; i < count; ++i) {
+            REQUIRE(values[i] == expected[i]);
+        }
+    }
+
+    {
+        int values[5] = { 1, 1, 2, 1, 1 };
+        size_t count = 5;
+        core::filter::remove_if(&values[0], count, [](const int value) {
+            return value == 1;
+        });
+        REQUIRE(count == 1);
+        REQUIRE(values[0] == 2);
     }
 
     return EXIT_SUCCESS;
