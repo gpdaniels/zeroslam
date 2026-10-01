@@ -131,6 +131,10 @@ int main(int argc, char* argv[]) {
         }
         const math::se3<double> covisible_pose = current_pose;
         observe_records(covisible, covisible_pose);
+        // Without covisible revisits the drifted landmarks shared by id are not a loop.
+        closure.set_covisible_revisits(false);
+        REQUIRE(!closure.detect(40, covisible_pose, test_camera(), unconnected, covisible.data(), covisible.size()).found);
+        closure.set_covisible_revisits(true);
         const mapping::loop_closure::result result = closure.detect(40, covisible_pose, test_camera(), unconnected, covisible.data(), covisible.size());
         REQUIRE(result.found);
         REQUIRE(result.keyframe_id == 0);

@@ -92,7 +92,7 @@ namespace mapping {
             }
             const size_t shared_by_id = correspondences.size();
             if (covisible_candidate || (shared_by_id >= loop_closure::max_covisible_landmarks)) {
-                if (this->covisible_revisit_loop(keyframe_id, pose, camera, keyframe_records, candidate.keyframe_id, found->second, correspondences, pairs, pair_records, outcome)) {
+                if (this->covisible_revisits && this->covisible_revisit_loop(keyframe_id, pose, camera, keyframe_records, candidate.keyframe_id, found->second, correspondences, pairs, pair_records, outcome)) {
                     return outcome;
                 }
                 core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d not a material covisible revisit (%zu landmarks shared by id).", keyframe_id, candidate.keyframe_id, shared_by_id);
@@ -489,6 +489,10 @@ namespace mapping {
     void loop_closure::set_hamming_scale(const float scale) {
         this->hamming_scale = scale;
         this->recognition.set_distance_threshold(static_cast<unsigned int>((static_cast<float>(place_recognition::default_distance_threshold) * scale) + 0.5f));
+    }
+
+    void loop_closure::set_covisible_revisits(const bool enabled) {
+        this->covisible_revisits = enabled;
     }
 
     void loop_closure::remove_keyframe(const int keyframe_id) {
