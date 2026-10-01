@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -96,6 +97,73 @@ int main(int argc, char* argv[]) {
         graph.add(&frames[0], 2);
         graph.add(&frames[0], 2);
         REQUIRE(graph.weight(2, 1) == 2);
+    }
+
+    // Updating landmarks incrementally, as frames join and leave them and landmarks come and go, gives the graph a rebuild from scratch gives.
+    {
+        unsigned int state = 2463534242u;
+        const auto next = [&state](const unsigned int bound) {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            return state % bound;
+        };
+        std::vector<std::vector<int>> observers(60);
+        std::vector<bool> alive(observers.size(), false);
+        mapping::covisibility incremental;
+        for (int round = 0; round < 40; ++round) {
+            for (size_t landmark = 0; landmark < observers.size(); ++landmark) {
+                const unsigned int action = next(10);
+                if (!alive[landmark]) {
+                    if (action < 4) {
+                        alive[landmark] = true;
+                        observers[landmark].clear();
+                        const unsigned int count = 1 + next(4);
+                        for (unsigned int i = 0; i < count; ++i) {
+                            observers[landmark].push_back(static_cast<int>(next(12)));
+                        }
+                    }
+                }
+                else if (action == 0) {
+                    alive[landmark] = false;
+                }
+                else if ((action < 4) && !observers[landmark].empty()) {
+                    observers[landmark].erase(observers[landmark].begin() + static_cast<std::ptrdiff_t>(next(static_cast<unsigned int>(observers[landmark].size()))));
+                }
+                else if (action < 7) {
+                    // Frames can repeat and arrive out of order.
+                    observers[landmark].push_back(static_cast<int>(next(12)));
+                }
+            }
+            incremental.begin_update();
+            for (size_t landmark = 0; landmark < observers.size(); ++landmark) {
+                if (alive[landmark]) {
+                    incremental.update(static_cast<int>(landmark), observers[landmark].data(), observers[landmark].size());
+                }
+            }
+            incremental.end_update();
+            mapping::covisibility rebuilt;
+            for (size_t landmark = 0; landmark < observers.size(); ++landmark) {
+                if (alive[landmark]) {
+                    rebuilt.add(observers[landmark].data(), observers[landmark].size());
+                }
+            }
+            const std::vector<mapping::covisibility::edge> expected = rebuilt.edges();
+            const std::vector<mapping::covisibility::edge> found = incremental.edges();
+            REQUIRE(found.size() == expected.size());
+            for (size_t i = 0; (i < found.size()) && (i < expected.size()); ++i) {
+                REQUIRE(found[i].frame_a == expected[i].frame_a);
+                REQUIRE(found[i].frame_b == expected[i].frame_b);
+                REQUIRE(found[i].weight == expected[i].weight);
+            }
+            REQUIRE(incremental.num_frames() == rebuilt.num_frames());
+        }
+        incremental.remove(0);
+        incremental.remove(1000);
+        incremental.begin_update();
+        incremental.end_update();
+        REQUIRE(incremental.num_frames() == 0);
+        REQUIRE(incremental.edges().empty());
     }
 
     return EXIT_SUCCESS;

@@ -52,9 +52,12 @@ namespace mapping {
         unsigned int max_distance;
 
     public:
-        explicit place_recognition(const unsigned int distance_threshold = 40);
+        constexpr static const unsigned int default_distance_threshold = 40;
+
+        explicit place_recognition(const unsigned int distance_threshold = place_recognition::default_distance_threshold);
 
     public:
+        void set_distance_threshold(const unsigned int distance_threshold);
         void add_keyframe(const int keyframe_id, const feature::descriptor::binary<256>* const descriptors, const size_t descriptors_size);
         void remove_keyframe(const int keyframe_id);
         void clear();

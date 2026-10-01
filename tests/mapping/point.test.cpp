@@ -22,9 +22,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -106,6 +108,64 @@ int main(int argc, char* argv[]) {
         distant.anchor_at_infinity(math::matrix<double, 3, 3>::identity(), math::matrix<double, 3, 1>::zero(), { { 0.5, -0.25, 1.0 } });
         REQUIRE(distant.uncertainty == mapping::point::uncertainty_kind::unbounded);
         REQUIRE(std::abs(distant.depth_direction[2] - 1.0) < 1.0e-12);
+    }
+
+    // The running medoid matches the medoid recomputed from the whole history, last index winning ties, through and past a full history.
+    {
+        const auto brute_medoid = [](const std::vector<std::array<unsigned char, 32>>& history) {
+            size_t medoid = history.size() - 1;
+            unsigned int medoid_sum = 0xFFFFFFFFu;
+            for (size_t i = 0; i < history.size(); ++i) {
+                unsigned int sum = 0;
+                for (size_t j = 0; j < history.size(); ++j) {
+                    for (size_t index = 0; index < 32; ++index) {
+                        unsigned char difference = static_cast<unsigned char>(history[i][index] ^ history[j][index]);
+                        while (difference != 0) {
+                            sum += (difference & 1u);
+                            difference = static_cast<unsigned char>(difference >> 1);
+                        }
+                    }
+                }
+                if (sum <= medoid_sum) {
+                    medoid_sum = sum;
+                    medoid = i;
+                }
+            }
+            return medoid;
+        };
+        unsigned int state = 12345u;
+        const auto next = [&state]() {
+            state = (state * 1103515245u) + 12345u;
+            return static_cast<unsigned char>(state >> 16);
+        };
+        mapping::point p(9, { { 0.0, 0.0, 1.0 } }, { { 0.0, 0.0, 0.0 } });
+        unsigned char base[32] = {};
+        for (size_t index = 0; index < 32; ++index) {
+            base[index] = next();
+        }
+        for (size_t insert = 0; insert < 3 * mapping::point::descriptor_history_maximum; ++insert) {
+            unsigned char bytes[32] = {};
+            for (size_t index = 0; index < 32; ++index) {
+                // Mostly the base descriptor with a few flipped bits, and every seventh a duplicate so ties occur.
+                bytes[index] = ((insert % 7) == 3) ? base[index] : static_cast<unsigned char>(base[index] ^ (next() & next() & next()));
+            }
+            p.add_descriptor(&bytes[0]);
+            REQUIRE(p.descriptor_history.size() == ((insert + 1 < mapping::point::descriptor_history_maximum) ? insert + 1 : mapping::point::descriptor_history_maximum));
+            REQUIRE(p.descriptor_distance_sums.size() == p.descriptor_history.size());
+            const size_t medoid = brute_medoid(p.descriptor_history);
+            for (size_t index = 0; index < 32; ++index) {
+                REQUIRE(p.descriptor[index] == p.descriptor_history[medoid][index]);
+            }
+        }
+        // A history filled without the running sums is resynchronised on the next insert.
+        mapping::point copied(10, { { 0.0, 0.0, 1.0 } }, { { 0.0, 0.0, 0.0 } });
+        copied.descriptor_history = p.descriptor_history;
+        copied.add_descriptor(&base[0]);
+        REQUIRE(copied.descriptor_distance_sums.size() == copied.descriptor_history.size());
+        const size_t copied_medoid = brute_medoid(copied.descriptor_history);
+        for (size_t index = 0; index < 32; ++index) {
+            REQUIRE(copied.descriptor[index] == copied.descriptor_history[copied_medoid][index]);
+        }
     }
 
     return EXIT_SUCCESS;

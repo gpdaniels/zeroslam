@@ -39,13 +39,17 @@ namespace mapping {
     }
 
     loop_closure::result loop_closure::detect(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const covisibility& graph, const record* const keyframe_records, const size_t keyframe_records_size, const int submap_start_id) const {
-        result outcome;
-        outcome.found = false;
-        outcome.keyframe_id = -1;
-        outcome.correspondences = 0;
-        outcome.inliers = 0;
-        outcome.correction = math::sim3<double>::identity();
-        outcome.relative = math::sim3<double>::identity();
+        const auto unfound = []() {
+            result empty;
+            empty.found = false;
+            empty.keyframe_id = -1;
+            empty.correspondences = 0;
+            empty.inliers = 0;
+            empty.correction = math::sim3<double>::identity();
+            empty.relative = math::sim3<double>::identity();
+            return empty;
+        };
+        result outcome = unfound();
         if (keyframe_records_size == 0) {
             return outcome;
         }
@@ -55,8 +59,7 @@ namespace mapping {
             query[i] = keyframe_records[i].descriptor;
         }
         const std::vector<place_recognition::candidate> candidates = this->recognition.get_candidates(query.data(), query.size(), keyframe_id, loop_closure::max_candidates);
-        const keyframe* candidate_keyframe = nullptr;
-        int candidate_id = -1;
+        size_t verified = 0;
         for (const place_recognition::candidate& candidate : candidates) {
             if ((candidate.keyframe_id >= submap_start_id) && (candidate.keyframe_id > keyframe_id - loop_closure::min_keyframe_gap)) {
                 continue;
@@ -95,13 +98,26 @@ namespace mapping {
                 core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d not a material covisible revisit (%zu landmarks shared by id).", keyframe_id, candidate.keyframe_id, shared_by_id);
                 continue;
             }
-            candidate_id = candidate.keyframe_id;
-            candidate_keyframe = &found->second;
-            break;
+            // A candidate that fails verification leaves the next one in rank to be tried, so an alias ranked first cannot hide the true loop.
+            if (verified >= loop_closure::max_verified_candidates) {
+                break;
+            }
+            result attempt = unfound();
+            if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found->second, attempt)) {
+                return attempt;
+            }
+            // When nothing verifies, the counts reported are those of the best ranked candidate.
+            if (verified == 0) {
+                outcome.correspondences = attempt.correspondences;
+                outcome.inliers = attempt.inliers;
+            }
+            ++verified;
         }
-        if (candidate_keyframe == nullptr) {
-            return outcome;
-        }
+        return outcome;
+    }
+
+    bool loop_closure::verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::binary<256>>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const {
+        const keyframe* const candidate_keyframe = &candidate;
         const std::vector<record>& candidate_records = candidate_keyframe->records;
 
         std::unordered_map<int, size_t> recorded_by_landmark;
@@ -186,11 +202,11 @@ namespace mapping {
         outcome.correspondences = correspondences.size();
         if ((shared_by_id > 0) && (static_cast<double>(shared_by_id) >= loop_closure::max_covisible_fraction * static_cast<double>(correspondences.size()))) {
             core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d skipped, %zu of %zu correspondences shared by id.", keyframe_id, candidate_id, shared_by_id, correspondences.size());
-            return outcome;
+            return false;
         }
         if (correspondences.size() < 3) {
             core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d rejected, %zu shared landmarks (%zu by id).", keyframe_id, candidate_id, correspondences.size(), shared_by_id);
-            return outcome;
+            return false;
         }
 
         math::matrix<double, 3, 1> centroid = math::matrix<double, 3, 1>::zero();
@@ -212,7 +228,7 @@ namespace mapping {
         const bool solved = estimation::robust::solver::similarity<double>::solve(correspondences.data(), correspondences.size(), inlier_threshold, residuals.data(), inliers.data(), inliers_size, model);
         if (!solved) {
             core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d rejected, no similarity fits its %zu shared landmarks (%zu by id).", keyframe_id, candidate_id, correspondences.size(), shared_by_id);
-            return outcome;
+            return false;
         }
 
         const math::matrix<double, 3, 3> rotation = { { { model.rotation[0][0], model.rotation[0][1], model.rotation[0][2] },
@@ -222,7 +238,7 @@ namespace mapping {
         const bool foreign_submap = candidate_id < submap_start_id;
         if (!foreign_submap && ((model.scale > loop_closure::max_scale_ratio) || (model.scale < 1.0 / loop_closure::max_scale_ratio))) {
             core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d rejected, scale %.4f is not plausible.", keyframe_id, candidate_id, model.scale);
-            return outcome;
+            return false;
         }
         math::sim3<double> correction(math::se3<double>(math::so3<double>(rotation), translation), model.scale);
 
@@ -330,7 +346,7 @@ namespace mapping {
             correction = math::sim3<double>(math::se3<double>(math::so3<double>(refined[6], refined[3], refined[4], refined[5]), { { refined[0], refined[1], refined[2] } }), refined[7]);
             if (!foreign_submap && ((correction.scale() > loop_closure::max_scale_ratio) || (correction.scale() < 1.0 / loop_closure::max_scale_ratio))) {
                 core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d rejected, the refined scale %.4f is not plausible.", keyframe_id, candidate_id, correction.scale());
-                return outcome;
+                return false;
             }
         }
 
@@ -361,7 +377,7 @@ namespace mapping {
         if ((outcome.inliers < loop_closure::min_inliers) || (static_cast<double>(paired_inliers) < loop_closure::min_inlier_fraction * static_cast<double>(paired))) {
             core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d rejected, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity (%zu fitted it in 3D).", keyframe_id, candidate_id, outcome.inliers, correspondences.size(), shared_by_id, guided, inliers_size);
             outcome.matches.clear();
-            return outcome;
+            return false;
         }
 
         outcome.found = true;
@@ -369,7 +385,7 @@ namespace mapping {
         outcome.correction = correction;
         outcome.relative = math::sim3<double>(candidate_keyframe->pose, 1.0) * outcome.correction * math::sim3<double>(pose.inverse(), 1.0);
         core::logger::log(core::logger::level::note, "Loop detected keyframe %d -> %d, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity, scale %.4f, translation %.4f.", keyframe_id, candidate_id, outcome.inliers, correspondences.size(), shared_by_id, guided, correction.scale(), math::sqrt(correction.transformation().translation().get_length_squared()));
-        return outcome;
+        return true;
     }
 
     bool loop_closure::covisible_revisit_loop(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const int candidate_id, const keyframe& candidate, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<correspondence>& pairs, const std::vector<std::pair<size_t, size_t>>& pair_records, result& outcome) const {
@@ -389,14 +405,23 @@ namespace mapping {
         std::vector<size_t> inliers(correspondences.size());
         size_t inliers_size = 0;
         estimation::robust::solver::similarity<double>::model_type model{};
-        if (!estimation::robust::solver::similarity<double>::solve(correspondences.data(), correspondences.size(), inlier_threshold, residuals.data(), inliers.data(), inliers_size, model)) {
+        if (!estimation::robust::solver::similarity<double>::solve(correspondences.data(), correspondences.size(), inlier_threshold, residuals.data(), inliers.data(), inliers_size, model) || (inliers_size == 0)) {
             core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d skipped, no similarity fits its %zu covisible landmarks.", keyframe_id, candidate_id, correspondences.size());
             return false;
         }
         const math::matrix<double, 3, 3> rotation = { { { model.rotation[0][0], model.rotation[0][1], model.rotation[0][2] },
                                                         { model.rotation[1][0], model.rotation[1][1], model.rotation[1][2] },
                                                         { model.rotation[2][0], model.rotation[2][1], model.rotation[2][2] } } };
-        const math::matrix<double, 3, 1> translation = { { model.translation[0], model.translation[1], model.translation[2] } };
+        // The drift correction keeps the scale at one, and the fitted translation assumed the fitted scale; with the scale at one the best translation is between the inliers' centroids under the same rotation.
+        math::matrix<double, 3, 1> centroid_lhs = math::matrix<double, 3, 1>::zero();
+        math::matrix<double, 3, 1> centroid_rhs = math::matrix<double, 3, 1>::zero();
+        for (size_t i = 0; i < inliers_size; ++i) {
+            centroid_lhs = centroid_lhs + correspondences[inliers[i]].lhs;
+            centroid_rhs = centroid_rhs + correspondences[inliers[i]].rhs;
+        }
+        centroid_lhs = centroid_lhs * (1.0 / static_cast<double>(inliers_size));
+        centroid_rhs = centroid_rhs * (1.0 / static_cast<double>(inliers_size));
+        const math::matrix<double, 3, 1> translation = centroid_rhs - (rotation * centroid_lhs);
         if ((model.scale > loop_closure::max_scale_ratio) || (model.scale < 1.0 / loop_closure::max_scale_ratio)) {
             core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d skipped, the covisible drift rescales by %.4f.", keyframe_id, candidate_id, model.scale);
             return false;
@@ -463,6 +488,7 @@ namespace mapping {
 
     void loop_closure::set_hamming_scale(const float scale) {
         this->hamming_scale = scale;
+        this->recognition.set_distance_threshold(static_cast<unsigned int>((static_cast<float>(place_recognition::default_distance_threshold) * scale) + 0.5f));
     }
 
     void loop_closure::remove_keyframe(const int keyframe_id) {

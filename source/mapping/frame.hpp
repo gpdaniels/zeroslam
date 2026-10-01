@@ -79,6 +79,7 @@ namespace mapping {
             bool affine = false;
             bool blur_weighting = true;
 
+            // Every Hamming gate is an ORB bound times this scale.
             float descriptor_distance_scale() const {
                 return (this->descriptor == descriptor_kind::orb) ? 1.0f : 0.75f;
             }

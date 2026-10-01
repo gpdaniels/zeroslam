@@ -16,6 +16,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "mapping/point.hpp"
 
+#include "feature/descriptor/binary.hpp"
+#include "match/distance/hamming.hpp"
 #include "math/math.hpp"
 
 namespace mapping {
@@ -38,34 +40,50 @@ namespace mapping {
     }
 
     void point::add_descriptor(const unsigned char* const bytes) {
+        const auto hamming = [](const std::array<unsigned char, 32>& lhs, const std::array<unsigned char, 32>& rhs) {
+            feature::descriptor::binary<256> lhs_descriptor;
+            feature::descriptor::binary<256> rhs_descriptor;
+            for (size_t index = 0; index < 32; ++index) {
+                lhs_descriptor.data[index] = lhs[index];
+                rhs_descriptor.data[index] = rhs[index];
+            }
+            return match::distance::hamming::distance(lhs_descriptor, rhs_descriptor);
+        };
+        // Each entry's summed distance to the whole history is kept up to date, so an insert costs one distance per entry rather than one per pair.
+        if (this->descriptor_distance_sums.size() != this->descriptor_history.size()) {
+            this->descriptor_distance_sums.assign(this->descriptor_history.size(), 0);
+            for (size_t i = 0; i < this->descriptor_history.size(); ++i) {
+                for (size_t j = i + 1; j < this->descriptor_history.size(); ++j) {
+                    const unsigned int distance = hamming(this->descriptor_history[i], this->descriptor_history[j]);
+                    this->descriptor_distance_sums[i] += distance;
+                    this->descriptor_distance_sums[j] += distance;
+                }
+            }
+        }
+        if (this->descriptor_history.size() >= point::descriptor_history_maximum) {
+            for (size_t j = 1; j < this->descriptor_history.size(); ++j) {
+                this->descriptor_distance_sums[j] -= hamming(this->descriptor_history[0], this->descriptor_history[j]);
+            }
+            this->descriptor_history.erase(this->descriptor_history.begin());
+            this->descriptor_distance_sums.erase(this->descriptor_distance_sums.begin());
+        }
         std::array<unsigned char, 32> added;
         for (size_t index = 0; index < 32; ++index) {
             added[index] = bytes[index];
         }
-        if (this->descriptor_history.size() >= point::descriptor_history_maximum) {
-            this->descriptor_history.erase(this->descriptor_history.begin());
+        unsigned int added_sum = 0;
+        for (size_t j = 0; j < this->descriptor_history.size(); ++j) {
+            const unsigned int distance = hamming(added, this->descriptor_history[j]);
+            this->descriptor_distance_sums[j] += distance;
+            added_sum += distance;
         }
         this->descriptor_history.push_back(added);
-        const auto hamming = [](const std::array<unsigned char, 32>& lhs, const std::array<unsigned char, 32>& rhs) {
-            unsigned int distance = 0;
-            for (size_t index = 0; index < 32; ++index) {
-                unsigned char difference = static_cast<unsigned char>(lhs[index] ^ rhs[index]);
-                while (difference != 0) {
-                    distance += (difference & 1u);
-                    difference = static_cast<unsigned char>(difference >> 1);
-                }
-            }
-            return distance;
-        };
+        this->descriptor_distance_sums.push_back(added_sum);
         size_t medoid = this->descriptor_history.size() - 1;
         unsigned int medoid_sum = 0xFFFFFFFFu;
         for (size_t i = 0; i < this->descriptor_history.size(); ++i) {
-            unsigned int sum = 0;
-            for (size_t j = 0; j < this->descriptor_history.size(); ++j) {
-                sum += hamming(this->descriptor_history[i], this->descriptor_history[j]);
-            }
-            if (sum <= medoid_sum) {
-                medoid_sum = sum;
+            if (this->descriptor_distance_sums[i] <= medoid_sum) {
+                medoid_sum = this->descriptor_distance_sums[i];
                 medoid = i;
             }
         }
@@ -176,27 +194,7 @@ namespace mapping {
             }
             return information;
         }
-        if (this->uncertainty == uncertainty_kind::estimated) {
-            return pixel_only;
-        }
-        math::matrix<double, 2, 2> total = math::matrix<double, 2, 2>::identity() * (sigma * sigma);
-        for (size_t row = 0; row < 2; ++row) {
-            for (size_t column = 0; column < 2; ++column) {
-                double sum = 0.0;
-                for (size_t a = 0; a < 3; ++a) {
-                    double inner = 0.0;
-                    for (size_t b = 0; b < 3; ++b) {
-                        inner += this->covariance[a][b] * jacobian[column][b];
-                    }
-                    sum += jacobian[row][a] * inner;
-                }
-                total[row][column] += sum;
-            }
-        }
-        math::matrix<double, 2, 2> information;
-        if (!math::invert(total, information)) {
-            return pixel_only;
-        }
-        return information;
+        // An estimated point's covariance is not propagated into its observations, which keep the pixel noise alone.
+        return pixel_only;
     }
 }

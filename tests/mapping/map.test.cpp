@@ -16,7 +16,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "mapping/map.hpp"
 
+#include "geometry/plucker.hpp"
+#include "mapping/line.hpp"
 #include "math/lie.hpp"
+#include "sensor/camera.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -203,6 +206,37 @@ int main(int argc, char* argv[]) {
         REQUIRE(m.landmarks.find(p.id) != m.landmarks.end());
         m.cull();
         REQUIRE(m.landmarks.find(p.id) == m.landmarks.end());
+    }
+
+    // A line's error is the mean pixel distance of the observed endpoints from its projection, also when fx differs from fy.
+    {
+        const double parameters[sensor::model::parameter_count] = { 400.0, 600.0, 320.0, 240.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        mapping::frame f;
+        f.id = 7;
+        f.camera = sensor::model(&parameters[0], sensor::model::parameter_count);
+        f.rotation = math::matrix<double, 3, 3>::identity();
+        f.translation = math::matrix<double, 3, 1>::zero();
+        const math::matrix<double, 3, 1> a = { { -1.0, 0.5, 5.0 } };
+        const math::matrix<double, 3, 1> b = { { 1.0, -0.2, 6.0 } };
+        geometry::plucker line;
+        REQUIRE(geometry::plucker::from_points(a, b, line));
+        const mapping::line landmark(3, line, a, b);
+        const double pa[2] = { (400.0 * a[0] / a[2]) + 320.0, (600.0 * a[1] / a[2]) + 240.0 };
+        const double pb[2] = { (400.0 * b[0] / b[2]) + 320.0, (600.0 * b[1] / b[2]) + 240.0 };
+        const double along[2] = { pb[0] - pa[0], pb[1] - pa[1] };
+        const double length = std::sqrt((along[0] * along[0]) + (along[1] * along[1]));
+        const double normal[2] = { -along[1] / length, along[0] / length };
+        const double offsets[2] = { 1.5, -0.5 };
+        const double fractions[2] = { 0.3, 0.8 };
+        double ends[2][2] = {};
+        for (int end = 0; end < 2; ++end) {
+            ends[end][0] = pa[0] + (fractions[end] * along[0]) + (offsets[end] * normal[0]);
+            ends[end][1] = pa[1] + (fractions[end] * along[1]) + (offsets[end] * normal[1]);
+        }
+        const mapping::map::line_observation observed{ f.id, ends[0][0], ends[0][1], ends[1][0], ends[1][1] };
+        double error = 0.0;
+        REQUIRE(mapping::map::line_reprojection_error(f, landmark, observed, error));
+        REQUIRE(std::abs(error - 1.0) < 1.0e-9);
     }
 
     return EXIT_SUCCESS;

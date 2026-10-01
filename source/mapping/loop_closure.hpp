@@ -71,6 +71,7 @@ namespace mapping {
         };
 
         constexpr static const size_t max_candidates = 20;
+        constexpr static const size_t max_verified_candidates = 5;
         constexpr static const int min_keyframe_gap = 30;
         constexpr static const int max_covisible_landmarks = 15;
         constexpr static const double max_covisible_fraction = 0.5;
@@ -101,6 +102,8 @@ namespace mapping {
         float hamming_scale = 1.0f;
 
         bool covisible_revisit_loop(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const int candidate_id, const keyframe& candidate, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<correspondence>& pairs, const std::vector<std::pair<size_t, size_t>>& pair_records, result& outcome) const;
+
+        bool verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::binary<256>>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const;
 
     public:
         loop_closure();

@@ -275,5 +275,71 @@ int main(int argc, char* argv[]) {
         REQUIRE(!closure.detect(40, current_pose, test_camera(), unconnected, revisit.data(), revisit.size()).found);
     }
 
+    // An alias that outranks the true loop, with the same descriptors on unrelated geometry, fails verification and the true loop ranked behind it is still found.
+    {
+        mapping::loop_closure aliased;
+        std::vector<mapping::loop_closure::record> alias = first;
+        for (size_t i = 0; i < alias.size(); ++i) {
+            alias[i].landmark_id = 6000 + static_cast<int>(i);
+            alias[i].location = math::matrix<double, 3, 1>{ { random.get_random(-3.0, 3.0), random.get_random(-2.0, 2.0), random.get_random(6.0, 12.0) } };
+        }
+        observe_records(alias, identity);
+        aliased.add_keyframe(0, identity, test_camera(), alias.data(), alias.size());
+        aliased.add_keyframe(1, identity, test_camera(), first.data(), first.size());
+        const mapping::loop_closure::result result = aliased.detect(40, current_pose, test_camera(), unconnected, revisit.data(), revisit.size());
+        REQUIRE(result.found);
+        REQUIRE(result.keyframe_id == 1);
+        REQUIRE(result.inliers == 35);
+        REQUIRE(is_value_approx(result.correction.scale(), 1.0 / 1.1, 1e-6));
+    }
+
+    // A covisible revisit far from the world origin with a small scale drift: the correction keeps the scale at one, so the translation that assumed the fitted scale would misplace the map by the scale error times the distance from the origin.
+    {
+        const math::se3<double> far_pose(math::so3<double>::exp({ { 0.1, 0.4, -0.2 } }), { { 60.0, -20.0, 90.0 } });
+        const math::se3<double> far_pose_inverse = far_pose.inverse();
+        std::vector<mapping::loop_closure::record> far_first;
+        for (int landmark_id = 0; landmark_id < 40; ++landmark_id) {
+            mapping::loop_closure::record record = random_record(random, landmark_id);
+            record.location = far_pose_inverse * record.location;
+            far_first.push_back(record);
+        }
+        observe_records(far_first, far_pose);
+        mapping::loop_closure far_closure;
+        far_closure.add_keyframe(0, far_pose, test_camera(), far_first.data(), far_first.size());
+
+        // The map drifted by a similarity, and the drifted camera sees the same image, each point at 1.005 times its depth.
+        const double scale = 1.005;
+        const math::so3<double> drift_rotation = math::so3<double>::exp({ { 0.0, 0.0, 0.01 } });
+        const math::matrix<double, 3, 1> drift_translation{ { 0.3, -0.2, 0.1 } };
+        const math::sim3<double> far_drift(math::se3<double>(drift_rotation, drift_translation), scale);
+        const math::so3<double> revisit_rotation = far_pose.rotation() * drift_rotation.inverse();
+        const math::se3<double> revisit_pose(revisit_rotation, (far_pose.translation() * scale) - (revisit_rotation * drift_translation));
+        std::vector<mapping::loop_closure::record> far_revisit = far_first;
+        for (size_t i = 0; i < far_revisit.size(); ++i) {
+            far_revisit[i].location = far_drift * far_first[i].location;
+        }
+        observe_records(far_revisit, revisit_pose);
+        for (size_t i = 0; i < far_revisit.size(); ++i) {
+            REQUIRE(std::abs(far_revisit[i].pixel_x - far_first[i].pixel_x) < 1.0e-3f);
+            REQUIRE(std::abs(far_revisit[i].pixel_y - far_first[i].pixel_y) < 1.0e-3f);
+        }
+        const mapping::loop_closure::result result = far_closure.detect(40, revisit_pose, test_camera(), unconnected, far_revisit.data(), far_revisit.size());
+        REQUIRE(result.found);
+        REQUIRE(result.keyframe_id == 0);
+        REQUIRE(result.inliers == 40);
+        REQUIRE(is_value_approx(result.correction.scale(), 1.0, 1e-9));
+        math::matrix<double, 3, 1> centroid = math::matrix<double, 3, 1>::zero();
+        for (const mapping::loop_closure::record& record : far_first) {
+            centroid = centroid + record.location;
+        }
+        centroid = centroid * (1.0 / static_cast<double>(far_first.size()));
+        for (size_t i = 0; i < far_revisit.size(); ++i) {
+            // With the scale held at one, what remains is the scale error about the cloud's centroid, (s - 1)(X - c).
+            const math::matrix<double, 3, 1> error = (result.correction * far_revisit[i].location) - far_first[i].location;
+            const math::matrix<double, 3, 1> expected = (far_first[i].location - centroid) * (scale - 1.0);
+            REQUIRE(std::sqrt((error - expected).get_length_squared()) < 1.0e-3);
+        }
+    }
+
     return EXIT_SUCCESS;
 }

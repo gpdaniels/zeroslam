@@ -40,6 +40,7 @@ namespace mapping {
         unsigned char descriptor[32] = {};
         constexpr static const size_t descriptor_history_maximum = 24;
         std::vector<std::array<unsigned char, 32>> descriptor_history;
+        std::vector<unsigned int> descriptor_distance_sums;
 
         bool inverse_depth = false;
         math::matrix<double, 3, 3> anchor_rotation;

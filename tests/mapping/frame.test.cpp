@@ -91,6 +91,29 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Noise gives FAST far more corners than any fixed detection buffer, and they are found in raster order: the features kept
+    // must still cover the bottom of the image rather than stop where a buffer filled.
+    {
+        const math::matrix<double, 3, 3> intrinsics = { { { 320.0, 0.0, 320.0 }, { 0.0, 320.0, 240.0 }, { 0.0, 0.0, 1.0 } } };
+        sensor::model camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12);
+        image::image noise(480, 640);
+        unsigned int state = 77u;
+        for (size_t i = 0; i < noise.get_rows() * noise.get_cols(); ++i) {
+            state = (state * 1664525u) + 1013904223u;
+            noise.get_data()[i] = static_cast<unsigned char>(state >> 24);
+        }
+        const mapping::frame frame_noise(0, camera, noise);
+        REQUIRE(!frame_noise.keypoint_pyramid.empty());
+        size_t bottom_quarter = 0;
+        for (const feature::point& local : frame_noise.keypoint_pyramid[0]) {
+            if (local.y >= 0.75f * static_cast<float>(noise.get_rows())) {
+                ++bottom_quarter;
+            }
+        }
+        REQUIRE(frame_noise.keypoint_pyramid[0].size() > 100);
+        REQUIRE(bottom_quarter * 8 > frame_noise.keypoint_pyramid[0].size());
+    }
+
     {
         const math::matrix<double, 3, 3> intrinsics = { { { 1.0, 0.0, 0.5 }, { 0.0, 1.0, 0.5 }, { 0.0, 0.0, 1.0 } } };
         sensor::model camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12);

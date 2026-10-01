@@ -28,32 +28,112 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace mapping {
     covisibility::covisibility()
-        : weights() {
+        : weights()
+        , contributions()
+        , scratch() {
     }
 
     void covisibility::clear() {
         this->weights.clear();
+        this->contributions.clear();
+    }
+
+    void covisibility::change(const int frame_a, const int frame_b, const int delta) {
+        for (int direction = 0; direction < 2; ++direction) {
+            const int from = (direction == 0) ? frame_a : frame_b;
+            const int to = (direction == 0) ? frame_b : frame_a;
+            std::unordered_map<int, int>& row = this->weights[from];
+            const int weight = (row[to] += delta);
+            if (weight == 0) {
+                row.erase(to);
+                if (row.empty()) {
+                    this->weights.erase(from);
+                }
+            }
+        }
+    }
+
+    void covisibility::update(const int landmark_id, const int* const frame_ids, const size_t frame_ids_size) {
+        std::vector<int>& current = this->scratch;
+        current.assign(frame_ids, frame_ids + frame_ids_size);
+        if (!std::is_sorted(current.begin(), current.end())) {
+            std::sort(current.begin(), current.end());
+        }
+        current.erase(std::unique(current.begin(), current.end()), current.end());
+        contribution& recorded = this->contributions[landmark_id];
+        recorded.updated = true;
+        if (recorded.frame_ids == current) {
+            return;
+        }
+        // Pairs with a frame that left lose this landmark, pairs with a frame that joined gain it, and the rest are unchanged.
+        const std::vector<int>& previous = recorded.frame_ids;
+        const auto contains = [](const std::vector<int>& sorted, const int frame_id) {
+            return std::binary_search(sorted.begin(), sorted.end(), frame_id);
+        };
+        for (const int left : previous) {
+            if (contains(current, left)) {
+                continue;
+            }
+            for (const int other : previous) {
+                if ((other != left) && (contains(current, other) || (other > left))) {
+                    this->change(left, other, -1);
+                }
+            }
+        }
+        for (const int joined : current) {
+            if (contains(previous, joined)) {
+                continue;
+            }
+            for (const int other : current) {
+                if ((other != joined) && (contains(previous, other) || (other > joined))) {
+                    this->change(joined, other, +1);
+                }
+            }
+        }
+        recorded.frame_ids = current;
+    }
+
+    void covisibility::remove(const int landmark_id) {
+        const std::unordered_map<int, contribution>::iterator recorded = this->contributions.find(landmark_id);
+        if (recorded == this->contributions.end()) {
+            return;
+        }
+        const std::vector<int>& frame_ids = recorded->second.frame_ids;
+        for (size_t i = 0; i < frame_ids.size(); ++i) {
+            for (size_t j = i + 1; j < frame_ids.size(); ++j) {
+                this->change(frame_ids[i], frame_ids[j], -1);
+            }
+        }
+        this->contributions.erase(recorded);
+    }
+
+    void covisibility::begin_update() {
+        for (auto& [landmark_id, recorded] : this->contributions) {
+            static_cast<void>(landmark_id);
+            recorded.updated = false;
+        }
+    }
+
+    void covisibility::end_update() {
+        std::vector<int> stale;
+        for (const auto& [landmark_id, recorded] : this->contributions) {
+            if (!recorded.updated) {
+                stale.push_back(landmark_id);
+            }
+        }
+        for (const int landmark_id : stale) {
+            this->remove(landmark_id);
+        }
     }
 
     void covisibility::add(const int* const frame_ids, const size_t frame_ids_size) {
-        const auto is_repeat = [frame_ids](const size_t index) {
-            for (size_t earlier = 0; earlier < index; ++earlier) {
-                if (frame_ids[earlier] == frame_ids[index]) {
-                    return true;
-                }
-            }
-            return false;
-        };
-        for (size_t i = 0; i < frame_ids_size; ++i) {
-            if (is_repeat(i)) {
-                continue;
-            }
-            for (size_t j = i + 1; j < frame_ids_size; ++j) {
-                if ((frame_ids[i] == frame_ids[j]) || is_repeat(j)) {
-                    continue;
-                }
-                ++this->weights[frame_ids[i]][frame_ids[j]];
-                ++this->weights[frame_ids[j]][frame_ids[i]];
+        std::vector<int>& unique = this->scratch;
+        unique.assign(frame_ids, frame_ids + frame_ids_size);
+        std::sort(unique.begin(), unique.end());
+        unique.erase(std::unique(unique.begin(), unique.end()), unique.end());
+        for (size_t i = 0; i < unique.size(); ++i) {
+            for (size_t j = i + 1; j < unique.size(); ++j) {
+                this->change(unique[i], unique[j], +1);
             }
         }
     }

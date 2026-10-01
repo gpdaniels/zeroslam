@@ -36,7 +36,16 @@ namespace {
 namespace mapping {
     class covisibility final {
     private:
+        struct contribution final {
+            std::vector<int> frame_ids;
+            bool updated = false;
+        };
+
         std::unordered_map<int, std::unordered_map<int, int>> weights;
+        std::unordered_map<int, contribution> contributions;
+        std::vector<int> scratch;
+
+        void change(const int frame_a, const int frame_b, const int delta);
 
     public:
         covisibility();
@@ -44,7 +53,18 @@ namespace mapping {
     public:
         void clear();
 
+        // Count one co-observation for every pair of distinct frames, from a landmark that is not tracked by id.
         void add(const int* const frame_ids, const size_t frame_ids_size);
+
+        // Bring one landmark's contribution in line with the frames observing it now, changing only the pairs that differ.
+        void update(const int landmark_id, const int* const frame_ids, const size_t frame_ids_size);
+
+        // Withdraw a landmark's contribution.
+        void remove(const int landmark_id);
+
+        // Between the two, update every landmark that still exists; end_update removes the contributions of the others.
+        void begin_update();
+        void end_update();
 
         int weight(const int frame_a, const int frame_b) const;
 

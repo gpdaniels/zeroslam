@@ -33,6 +33,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "feature/refiner/subpixel.hpp"
 #include "feature/score/fast.hpp"
 #include "feature/suppressor/fast.hpp"
+#include "image/blur.hpp"
 #include "math/math.hpp"
 
 #if defined(_MSC_VER)
@@ -92,23 +93,24 @@ namespace mapping {
         const size_t octaves = this->image_pyramid.size();
         this->keypoint_pyramid.reserve(octaves);
         this->descriptor_pyramid.reserve(octaves);
+        // Detections are collected in scan order, so the buffer holds every pixel of the largest level rather than truncating the bottom of a textured image.
+        std::vector<feature::point> detections(this->image_pyramid[0].get_rows() * this->image_pyramid[0].get_cols());
         for (size_t o = 0; o < octaves; ++o) {
             const image::image& image_grey = this->image_pyramid[o];
             const int width = static_cast<int>(image_grey.get_cols());
             const int height = static_cast<int>(image_grey.get_rows());
 
-            std::vector<feature::point> kps(50000);
             size_t feature_count = 0;
             if (frontend.detector == settings::detector_kind::mser) {
-                feature_count = feature::detector::mser::detect(image_grey.get_data(), width, height, width, feature::detector::mser::options(), kps.size(), kps.data());
+                feature_count = feature::detector::mser::detect(image_grey.get_data(), width, height, width, feature::detector::mser::options(), detections.size(), detections.data());
             }
             else if (frontend.detector == settings::detector_kind::fast) {
-                feature_count = feature::detector::fast::detect(image_grey.get_data(), width, height, width, 7, kps.size(), kps.data());
+                feature_count = feature::detector::fast::detect(image_grey.get_data(), width, height, width, 7, detections.size(), detections.data());
             }
             else {
-                feature_count = feature::detector::structure_tensor::detect(image_grey.get_data(), width, height, width, frontend.detector_measure, frontend.detector_sigma, frame::detector_threshold, kps.size(), kps.data());
+                feature_count = feature::detector::structure_tensor::detect(image_grey.get_data(), width, height, width, frontend.detector_measure, frontend.detector_sigma, frame::detector_threshold, detections.size(), detections.data());
             }
-            kps.resize(feature_count);
+            std::vector<feature::point> kps(detections.begin(), detections.begin() + static_cast<std::ptrdiff_t>(feature_count));
 
             constexpr static const int border = 25;
             ASSERT((frontend.refiner != settings::refiner_kind::structure_tensor) || (feature::refiner::structure_tensor::footprint(frontend.refiner_sigma) <= border), "The structure tensor refiner reads outside the feature border.");
@@ -159,10 +161,27 @@ namespace mapping {
                 kps.resize(static_cast<size_t>(distribute_minimum));
             }
 
+            // rBRIEF's test pairs were learned on smoothed patches, so ORB describes a smoothed copy of the level while the orientation is measured on the level itself.
+            const bool describe_orb = frontend.descriptor == settings::descriptor_kind::orb;
+            image::image smoothed;
+            if (describe_orb) {
+                smoothed = image::image(image_grey.get_rows(), image_grey.get_cols());
+                image::blur::gaussian_7x7(image_grey.get_data(), width, height, width, smoothed.get_data());
+            }
+            // TEBLID describes from sums over the whole level, computed once here rather than per keypoint.
+            std::vector<unsigned int> level_sums;
+            if (frontend.descriptor == settings::descriptor_kind::teblid) {
+                level_sums.resize(static_cast<size_t>(width + 1) * static_cast<size_t>(height + 1));
+                feature::descriptor::teblid::integral(image_grey.get_data(), width, height, width, level_sums.data());
+            }
+
             std::vector<feature::descriptor::binary<256>> des;
             des.resize(kps.size());
             core::thread_pool::instance().parallel_for(kps.size(), 32, [&](const size_t i) {
-                const unsigned char* feature = image_grey.get_data() + static_cast<size_t>(kps[i].y) * image_grey.get_cols() + static_cast<size_t>(kps[i].x);
+                const size_t pixel_x = static_cast<size_t>(kps[i].x);
+                const size_t pixel_y = static_cast<size_t>(kps[i].y);
+                const size_t pixel_offset = pixel_y * image_grey.get_cols() + pixel_x;
+                const unsigned char* feature = image_grey.get_data() + pixel_offset;
                 float offset_x = 0;
                 float offset_y = 0;
                 bool refined = false;
@@ -176,32 +195,45 @@ namespace mapping {
                         refined = feature::refiner::structure_tensor::refine(feature, width, frontend.refiner_measure, frontend.refiner_sigma, offset_x, offset_y);
                     } break;
                 }
-                if (frontend.descriptor != settings::descriptor_kind::orb) {
-                    const float angle = feature::angle::orb::dominant_angle(feature, width);
-                    if (frontend.descriptor == settings::descriptor_kind::teblid) {
-                        feature::descriptor::teblid::describe(feature, width, angle, des[i]);
+                if (refined) {
+                    // The refiner's offset is measured from the pixel it was given, which for a fractional detection (an MSER centroid) is the pixel containing it.
+                    kps[i].x = static_cast<float>(pixel_x) + offset_x;
+                    kps[i].y = static_cast<float>(pixel_y) + offset_y;
+                }
+                if (!describe_orb) {
+                    // Describe where the keypoint now is, unless refinement moved it too close to the border for the descriptor's footprint.
+                    const bool describe_refined = refined && (kps[i].x >= static_cast<float>(border)) && (kps[i].x <= static_cast<float>(width - border - 1)) && (kps[i].y >= static_cast<float>(border)) && (kps[i].y <= static_cast<float>(height - border - 1));
+                    float angle = 0.0f;
+                    if (describe_refined) {
+                        unsigned char patch[41][41];
+                        feature::refiner::subpixel::patch_41x41_bilinear(feature, width, offset_x, offset_y, &patch[0][0]);
+                        angle = feature::angle::orb::dominant_angle(&patch[20][20], 41);
                     }
                     else {
-                        feature::descriptor::sift::describe(feature, width, angle, des[i]);
+                        angle = feature::angle::orb::dominant_angle(feature, width);
                     }
-                    if (refined) {
-                        kps[i].x += offset_x;
-                        kps[i].y += offset_y;
+                    if (frontend.descriptor == settings::descriptor_kind::teblid) {
+                        const float centre_x = describe_refined ? kps[i].x : static_cast<float>(pixel_x);
+                        const float centre_y = describe_refined ? kps[i].y : static_cast<float>(pixel_y);
+                        feature::descriptor::teblid::describe_integral(level_sums.data(), width + 1, centre_x, centre_y, angle, des[i]);
+                    }
+                    else {
+                        feature::descriptor::sift::describe(feature, width, describe_refined ? offset_x : 0.0f, describe_refined ? offset_y : 0.0f, angle, des[i]);
                     }
                     return;
                 }
+                const unsigned char* const feature_smoothed = smoothed.get_data() + pixel_offset;
                 if (!refined) {
                     const float angle = feature::angle::orb::dominant_angle(feature, width);
-                    feature::descriptor::orb::describe(feature, width, angle, des[i]);
+                    feature::descriptor::orb::describe(feature_smoothed, width, angle, des[i]);
                     return;
                 }
 
                 unsigned char patch[41][41];
                 feature::refiner::subpixel::patch_41x41_bilinear(feature, width, offset_x, offset_y, &patch[0][0]);
                 const float angle = feature::angle::orb::dominant_angle(&patch[20][20], 41);
+                feature::refiner::subpixel::patch_41x41_bilinear(feature_smoothed, width, offset_x, offset_y, &patch[0][0]);
                 feature::descriptor::orb::describe(&patch[20][20], 41, angle, des[i]);
-                kps[i].x += offset_x;
-                kps[i].y += offset_y;
             });
             for (feature::point& kp : kps) {
                 kp.octave = static_cast<int>(o);

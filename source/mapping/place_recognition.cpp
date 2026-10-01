@@ -33,6 +33,10 @@ namespace mapping {
         , max_distance(distance_threshold) {
     }
 
+    void place_recognition::set_distance_threshold(const unsigned int distance_threshold) {
+        this->max_distance = distance_threshold;
+    }
+
     void place_recognition::add_keyframe(const int keyframe_id, const feature::descriptor::binary<256>* const descriptors, const size_t descriptors_size) {
         if (descriptors_size == 0) {
             return;
@@ -66,8 +70,10 @@ namespace mapping {
         const size_t max_candidates
     ) const {
         std::vector<candidate> candidates;
+        std::vector<match::index::hbst::hit> hits;
         for (size_t query_index = 0; query_index < query_descriptors_size; ++query_index) {
-            for (const match::index::hbst::hit& found : this->index.search(query_descriptors[query_index], this->max_distance)) {
+            this->index.search(query_descriptors[query_index], this->max_distance, hits);
+            for (const match::index::hbst::hit& found : hits) {
                 if (found.keyframe_id == current_keyframe_id) {
                     continue;
                 }
