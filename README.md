@@ -40,13 +40,110 @@ cmake --build . --parallel 4
 ctest
 ```
 
+This builds the `zeroslam` shared library from `source/` (C++17, nothing beyond the platform's threads library), with the public headers in `include/zeroslam/`.
+The default build type is `Release`, executables land in `build/runtime/[config]/` and the shared library in `build/library/[config]/` (the Windows dll sits with the executables).
+
+Every `tests/[path].test.cpp` is one test executable for `source/[path].hpp`, compiled from the library's objects so it reaches the internal classes.
+The test executables are left out of the default build: `ctest` builds each one before it runs it, or `cmake --build . --target tests` builds them all.
+The scripts in `checks/` (formatting, license headers, include guards, tool layering, raw allocations, ...) run as `check_*` tests too, or together with `cmake --build . --target check`, and `cmake --build . --target format` applies clang-format (the CI pins clang-format 21.1.2).
+
+| Option | Default | Effect |
+|---|---|---|
+| `ZEROSLAM_SIMD` | `ON` | Compile the AVX and AVX2 (x86-64) or NEON (arm64) kernels. The best one the CPU supports is chosen at run time, and every tier gives the same results as the portable code. |
+| `ZEROSLAM_WERROR` | `OFF` | Treat compiler warnings as errors, as the CI does. |
+| `ZEROSLAM_CHECKS` | `ON` | Register the `checks/` scripts as tests and add the `check` target. |
+| `ZEROSLAM_SANITIZE_ADDRESS`, `ZEROSLAM_SANITIZE_UNDEFINED`, `ZEROSLAM_SANITIZE_THREAD`, `ZEROSLAM_SANITIZE_MEMORY` | `OFF` | Build with a sanitizer (gcc and clang, memory is clang only, and address and thread cannot be combined). |
+| `ZEROSLAM_COVERAGE` | `OFF` | Build with coverage instrumentation (gcov with gcc, llvm source based coverage with clang). |
+| `ZEROSLAM_PERF` | `OFF` | Keep frame pointers for `perf` captures (linux and `RelWithDebInfo` only). |
+| `BUILD_ALL_TOOLS` | `OFF` | Build every tool. |
+| `BUILD_ZEROSLAM_[TOOL]` | `OFF` | Build one tool: its directory name upper cased with `-` as `_`, e.g. `-DBUILD_ZEROSLAM_PROCESS=ON`, `-DBUILD_ZEROSLAM_IMPORT_EUROC=ON`, and `-DBUILD_ZEROSLAM_ZEROSLAM=ON` for the launcher. |
+
+The library runs its parallel loops on one pool of worker threads sized to the machine (the calling thread included).
+The `ZEROSLAM_THREADS` environment variable overrides that count (`ZEROSLAM_THREADS=1` runs everything on the calling thread).
+Results are bit identical from run to run, whatever the thread count and SIMD tier, on a given platform; they are not bit identical across platforms, whose maths libraries differ in the last bits.
+
+## Tools ##
+
+The tools are disabled by default, enable them all with `-DBUILD_ALL_TOOLS=ON` or one at a time with their `BUILD_ZEROSLAM_[TOOL]` option.
+Each `tools/[tool]` directory builds a `zeroslam-[tool]` executable, and the `zeroslam` launcher runs `zeroslam [tool] [arguments...]` as `zeroslam-[tool] [arguments...]`, looking next to itself first and then on the `PATH` (`--quiet` hides the banner, `zeroslam help` lists the tools it finds).
+The examples below use the launcher, `./runtime/Release/zeroslam-process ...` works the same way without it.
+
+| Tool | Purpose | Needs |
+|---|---|---|
+| `zeroslam` | The launcher. | |
+| `process` | Run the SLAM system over a scene, see "Processing a scene". | |
+| `evaluate` | Align trajectories to a ground truth and report their errors, see "Evaluating a trajectory". | |
+| `dataset` | List, download, validate, expand and collapse scenes, see "Fetching datasets". | `curl` at run time to download |
+| `regression` | Fetch, validate, process and evaluate a scene, and log the result, see "Tracking accuracy over time". | the `process` and `evaluate` tools, and `dataset` to fetch |
+| `gui` | Play a scene through the SLAM system live, or view a saved map, see "Viewing a scene". | OpenGL, and X11 on linux |
+| `import-euroc`, `import-tumrgbd`, `import-eth3d`, `import-kitti`, `import-lamaria` | Convert a public dataset into a scene, see "Importing datasets". | the `dataset` tool, to pack and validate the result |
+| `capture-oakd` | Record a Luxonis OAK-D camera (stereo, depth and imu) into a scene. | git and network access at configure time: it fetches depthai-core and builds its vcpkg dependencies |
+| `capture-kinect`, `capture-webcam` | Placeholders, not implemented yet. | |
+| `api-c`, `api-cpp`, `api-python` | Demonstrations of the C, C++ and python APIs on a rendered scene, registered as `tool_api_*` tests. | python3 for `api-python` |
+
+`tools/common` is a static library of code shared by the tools (mcap, lz4, cdr, json, trajectory metrics, files and paths) and is always built.
+
+## Using the library ##
+
+The interface is the C API in `include/zeroslam/zeroslam.h`, wrapped for C++ by the header only `include/zeroslam/zeroslam.hpp` (`zeroslam::system`) and for python by the ctypes module `include/zeroslam/zeroslam.py`, which loads the library from `ZEROSLAM_API_LIBRARY`, then next to itself, then the working directory, then the system search path.
+The `tools/api-c`, `tools/api-cpp` and `tools/api-python` demonstrations walk through every call.
+
+1. `zeroslam_create` a system, and optionally `zeroslam_set_configuration` it (see "Configuration").
+2. `zeroslam_set_sensor_rig`, before any data, with exactly one `zeroslam_sensor_camera` entry (the system is monocular, and the other sensor types are rejected): a non-zero id and a `zeroslam_sensor_parameters_camera_struct` of the image size, the focal lengths, the principal point in the pixel-centre frame (see "Pixel coordinates"), and the distortion `[k1 k2 p1 p2 k3 k4 k5 k6]` (zeros for an undistorted pinhole).
+3. `zeroslam_set_sensor_data` with each frame: the camera's id, a nanosecond timestamp that increases strictly from frame to frame, and `width * height` bytes of row major 8 bit greyscale pixels. A batch is validated whole before any of it is processed.
+4. `zeroslam_get_pose` (the newest posed frame) or `zeroslam_get_pose_at_timestamp` (the frame with exactly that timestamp) at any time, and `zeroslam_finalise` at the end of a run for a last global adjustment. Poses follow "Coordinate conventions": frames before initialisation completes, and frames dropped while tracking was lost, have no pose, and the covariance is not estimated yet (it is zero).
+5. `zeroslam_get_map_chunk` (every landmark, the position arguments are not used yet), `zeroslam_get_map_lines`, `zeroslam_get_map_keyframes` and `zeroslam_get_map_edges` (the covisibility and loop edges between keyframes, by timestamp) export the map.
+6. `zeroslam_destroy` the system.
+
+Every call returns a `zeroslam_return_enum`.
+The getters fill caller owned buffers: a null or short buffer fails with `zeroslam_return_failure_insufficient_data_length` and reports the length needed, so a first call sizes the buffer and a second fills it.
+
+### Configuration ###
+
+The configuration is text, one `key=value` per line.
+`zeroslam_get_configuration` returns every key with its current value, and `zeroslam_set_configuration` changes just the keys it is given, rejecting the whole text (`zeroslam_return_failure_invalid_configuration`) on an unknown key or value.
+The `process` and `regression` tools pass any setting through with `--config key=value`, and the `gui` takes the front end settings it offers in its controls the same way.
+
+| Key | Default | Values |
+|---|---|---|
+| `verbosity` | `1` | Log level, `0` silent, `1` errors, `2` warnings, `3` notes, `4` progress, `5` debug. |
+| `detector` | `fast` | `fast`, `mser`, or a structure tensor corner measure: `klt`, `forstner`, `harris`, `rohr`, `kenney`. |
+| `detector_sigma` | `2.5` | The structure tensor detector's integration scale (up to `3.5`). |
+| `refiner` | `subpixel` | `none`, `subpixel`, or a structure tensor measure (as `detector`) to refine corners with. |
+| `refiner_sigma` | `1.5` | The structure tensor refiner's integration scale (up to `3.2`). |
+| `tracker` | `klt` | `klt` pyramidal optical flow of the detected features, or `extrema` curvature extrema tracks. |
+| `association` | `both` | How frames are associated: `klt` flow alone, `match` descriptor matching alone, or `both`. |
+| `descriptor` | `orb` | `orb`, `teblid`, or `bsift` (binarised sift). |
+| `affine` | `off` | Match landmarks against their whole descriptor history, and with `descriptor=bsift` add affine (tilted) views of each descriptor. |
+| `blur` | `on` | Weight measurements by the frame's blur against the recent frames. |
+| `lines` | `off` | Detect, track and map line segments too. |
+| `line_pose` | `off` | Use the line landmarks in pose estimation (with `lines=on`). |
+| `line_angle` | `off` | Drop a line observation seen within this many degrees of end on (below `89`), or `off`. |
+| `culling` | `on` | Cull redundant keyframes. |
+| `global_adjustment` | `10` | Run a global adjustment every this many inserted keyframes, or `off`. |
+| `depth` | `inverse` | Landmark parameterisation, `inverse` anchored inverse depth or `xyz`. |
+| `budget` | `free` | `fixed` caps each pyramid level at its share of the feature budget, `free` lets the distributor keep more. |
+| `damping` | `off` | Halve a klt step that reverses the previous one, damping oscillation. |
+| `collisions` | `2` | Drop a track closer than this many pixels (up to `64`) to a stronger one, or `off`. |
+| `outliers` | `0` | Unlink a track from its landmark after this many outlier frames, `0` never. |
+| `anchor` | `off` | Track patches anchored to their first frame: `translation`, `affine`, `translation_illumination`, `affine_illumination`, or `off`. |
+| `anchor_refresh` | `off` | Re-anchor a patch whose alignment error exceeds this fraction (up to `1`) of its flow's rejection gate (the klt error limit for patch anchors, the wavelet phase limit for wavelet anchors), or `off`. |
+| `flow` | `intensity` | `intensity` flow, or `wavelet` quaternion wavelet phase flow. |
+| `wavelet_window` | `2` | The wavelet flow's half window, `1` to `6`. |
+| `wavelet_levels` | `6` | The wavelet decomposition levels, `2` to `8`. |
+| `wavelet_robust` | `off` | Huber weight the wavelet flow's phase residuals. |
+| `wavelet_undecimated` | `off` | Use an undecimated wavelet decomposition. |
+| `wavelet_seed` | `rest` | Start the wavelet flow at `rest`, from the `klt` flow, or from the klt flow and fall back to it where the wavelet flow fails (`klt_fallback`). |
+| `solver` | `dense_schur` | The bundle adjustment's linear solver: `dense_schur`, `square_root` (landmarks eliminated by QR), or `automatic` (square root once there are enough poses). Graphs the square root solver cannot take fall back to the dense one. |
+| `solver_precision` | `double` | The linear solver's precision, `double` or `single`. |
+
 ## Scene format ##
 
-A scene is one mcap file, `datasets/[dataset]/[scene].mcap`, holding something like:
-- Raw image messages in lz4 compressed chunks (zstd chunks are rejected).
-- Camera intrinsics as one camera info message per frame, with the principal point in the pixel-centre frame (see "Coordinate conventions" below).
+A scene is one mcap file, `datasets/[dataset]/[scene].mcap`, holding:
+- Raw image messages (`sensor_msgs/msg/Image`: `mono8` or `rgb8` for the cameras the system runs on, `mono16` or `32FC1` for depth) in uncompressed or lz4 compressed chunks (zstd chunks are rejected).
+- Camera intrinsics as one camera info message per frame on `/sensor/[name]/camera_info`, a `plumb_bob` (`k1 k2 p1 p2 [k3]`) or `rational_polynomial` (`k1 k2 p1 p2 k3 k4 k5 k6`) pinhole with no rectification, with the principal point in the pixel-centre frame (see "Coordinate conventions" below). A distortion that folds back on itself, where the radial factor stops growing or reaches a pole of the rational model, limits the model to the radius inside that point; rays and pixels beyond it are treated as not visible.
 - IMU messages.
-- A ground truth trajectory on `/tf` as `root -> ego`.
+- A ground truth trajectory on `/tf` as `root -> ego`, when the dataset has one.
 
 Sensors are topics named `/sensor/[type]_[01-99]` (`image_01`, `image_02`, ... for cameras; `imu_01`, ... for imus; `lidar_01`, `gnss_01`...) and each sensor's frame carries its full name (e.g. `sensor/image_01`).
 
@@ -55,12 +152,12 @@ A per topic message `ego -> sensor/[name]` transform poses each sensor on it wit
 
 Scene mcap files can be viewed directly in a browser with web-viewers e.g. [Lichtblick](https://lichtblick-suite.github.io/lichtblick/).
 
-The inspectable directory form produced by expanding a dataset mirrors the topics.
+The inspectable directory form produced by expanding a scene mirrors the topics, with timestamps written as seconds with nine decimals.
 ```
 scene/
 ├── sensor/
-│   ├── image_01/     # Frames named by their timestamp in nanoseconds ([ns].pgm).
-│   ├── image_01.txt  # Per frame:    `[timestamp] [x] [y] [z] [qx] [qy] [qz] [qw] MODEL [fx] [fy] [cx] [cy] [[k1] [k2] [p1] [p2] [[k3]]]]`
+│   ├── image_01/     # Frames named by their timestamp in nanoseconds, zero padded to 20 digits ([ns].pnm, P5, P6 or Pf).
+│   ├── image_01.txt  # Per frame:    `[timestamp] [x] [y] [z] [qx] [qy] [qz] [qw] [model] [fx] [fy] [cx] [cy] [distortion...]`
 │   ├── image_02/     # The second camera's frames.
 │   ├── image_02.txt  # The second camera's model/intrinsics/extrinsics.
 │   └── imu_01.txt    # Per sample:   `[timestamp] [x] [y] [z] [qx] [qy] [qz] [qw] [wx] [wy] [wz] [ax] [ay] [az]`
@@ -84,8 +181,9 @@ Importers are responsible for re-expressing a dataset into this convention rathe
 LaMAria's pseudo ground truth is the pose of its right imu (its documentation says the left camera, but the poses turn with the imu's gyroscope) and is carried onto cam0 with the calibration's `T_b_s`; its cameras are mounted on their side, so the importer turns every frame 90 degrees clockwise upright and the camera frames, intrinsics and extrinsics with it.
 
 The SLAM output (`trajectory.txt` from `zeroslam process`, `zeroslam_pose_struct` from the C API in `include/zeroslam/zeroslam.h`) uses the same TUM camera-to-world convention: `[timestamp] [x] [y] [z] [qx] [qy] [qz] [qw]` is the camera centre in the map's world and the camera-to-world rotation.
-The map's world frame is the first camera's frame: the first pose is the identity, so the world starts out with x right, y down and z along the first view. It is not gravity aligned and has no heading.
-A monocular map also has no metric scale: one unit is the initialisation baseline.
+The map's world frame is the frame of the first posed camera, the initialisation anchor: the first pose is the identity, so the world starts out with x right, y down and z along the first view. It is not gravity aligned and has no heading.
+Frames before initialisation completes, and frames dropped while tracking is lost, have no pose.
+A monocular map also has no metric scale: one unit starts out as the initialisation baseline (bundle adjustment then moves it), and a submap started after tracking is lost has a scale of its own until a loop closure joins it to the map.
 
 An estimate and a ground truth therefore differ by a rigid pin of the first pose (`T_gt(first) * inverse(T_estimate(first))`) plus a scale.
 That pin, at the fitted scale, is what `zeroslam gui` draws by default (`Scale To Truth` on, `Align To Truth` off; the fitted rotation is the optional extra and unticking the scale shows the map in its own units), and `zeroslam evaluate` fits a Sim(3) anchored on the first pose (`--first`, the default) or on the centroids (`--centroid`).
@@ -104,7 +202,7 @@ Three kinds of value carry image positions, and `source/core/coordinates.hpp` na
 | `pixel_centre` | float | `0.5 .. size - 0.5` | a position in the continuous image: what the camera model projects to and unprojects from, what the map stores, what every exported keypoint, track, line endpoint and observation carries; a centred camera has `cx = width / 2` |
 | image plane | float | unit depth | `((u - cx) / fx, (v - cy) / fy)`: what the two-view, PnP, triangulation and cheirality solvers consume |
 
-A detector works in indices, a refiner adds a fractional offset measured from the detecting index, and the sum is wrapped to a centre (`+0.5`) once, at the detector -> feature boundary, after the pyramid level is flattened onto level 0 (`index * scale + 0.5`, never `(index + 0.5) * scale`: the pyramid is decimated, so level pixel `i` is level-0 pixel `i * scale`).
+A detector works in indices, a refiner adds a fractional offset measured from the detecting index, and the sum is wrapped to a centre (`+0.5`) once, at the detector -> feature boundary, after the pyramid level is flattened onto level 0 (`index * scale + 0.5`, never `(index + 0.5) * scale`: the pyramid is decimated by two per level, so level pixel `i` is level-0 pixel `i * scale` with `scale = 2^level`).
 Image samplers (the KLT tracker, descriptors, `image::interpolation`) take index-space positions, so a centre is converted back (`- 0.5`) before sampling, and the pixel containing a centre is its `floor`, never `round`.
 
 Published calibrations (TUM RGB-D, EuRoC, ETH3D, any ros `camera_info` or OpenCV calibration) put pixel centres at integer coordinates, so a centred 640 wide camera is published with `cx = 319.5`.
@@ -115,28 +213,35 @@ Shifting every feature by `+0.5` and the principal point by `+0.5` together is a
 
 ## Processing a scene ##
 
-The tools directory contains a tool directory called `process`, target/binary is `zeroslam-process`, run as `zeroslam process`.
-This tool takes a scene mcap and runs the SLAM system on it outputting a trajectory file and pointcloud for evaluation.
+The `process` tool runs the SLAM system over a scene mcap, frame by frame through the C API, and writes the trajectory (`trajectory.txt`, TUM format) and a binary ply of the landmarks and the camera frusta (`map.ply`) into the working directory.
+Colour frames are converted to greyscale, and the first frame's intrinsics are kept for the whole run.
 ```
 # Build the tools.
 cd build
+cmake .. -DBUILD_ZEROSLAM_ZEROSLAM=ON -DBUILD_ZEROSLAM_PROCESS=ON
 cmake --build . --parallel 4
 
 # Process a scene.
-./runtime/Release/zeroslam process ../datasets/freiburg/xyz.mcap
+./runtime/Release/zeroslam process ../datasets/tum-rgbd/fr1_xyz.mcap
+
+# Process the first 300 frames, logging progress, and report the errors against a ground truth.
+./runtime/Release/zeroslam process ../datasets/tum-rgbd/fr1_xyz.mcap --frames 300 --verbose 4 --truth trajectory_gt.txt
+
+# Process with other library settings (see "Configuration").
+./runtime/Release/zeroslam process ../datasets/tum-rgbd/fr1_xyz.mcap --config descriptor=teblid --config lines=on
 ```
 
-The program will output a trajectory file in TUM format and a ply pointcloud file.
+The options are `--frames [count]` (the first frames only), `--skip [count]` (ignore the first frames), `--verbose [0-5]` (the log level, default `1`), `--truth [trajectory.txt]` (end with the absolute, relative and per metre errors against a TUM trajectory), `--live` (skip the final global adjustment, so the trajectory is the one tracked live) and `--config key=value` (repeatable).
 
 ## Evaluating a trajectory ##
 
-The tools directory contains a tool directory called `evaluate`, target/binary is `zeroslam-evaluate`, run as `zeroslam evaluate`.
-This tool aligns trajectories in the TUM format and returns the error after scaling and alignment.
+The `evaluate` tool aligns up to two TUM format trajectories to a ground truth, pairing poses by timestamp (the nearest within 20 ms), and reports the absolute trajectory error after the Sim(3) alignment, the relative displacement errors, the error per metre of path, and the per segment scale drift.
 
 Usage:
 ```
-# Build the tools.
+# Build the tool.
 cd build
+cmake .. -DBUILD_ZEROSLAM_ZEROSLAM=ON -DBUILD_ZEROSLAM_EVALUATE=ON
 cmake --build . --parallel 4
 
 # Evaluate a trajectory with a ground truth.
@@ -145,45 +250,93 @@ cmake --build . --parallel 4
 # Evaluate two trajectories against a ground truth.
 ./runtime/Release/zeroslam evaluate trajectory_gt.txt trajectory_eval_1.txt trajectory_eval_2.txt
 
-# Ensure the first pose is aligned.
+# Anchor the alignment on the first pose pair (the default), or on the two centroids for the least squares fit.
 ./runtime/Release/zeroslam evaluate trajectory_gt.txt trajectory_eval_1.txt --first
+./runtime/Release/zeroslam evaluate trajectory_gt.txt trajectory_eval_1.txt --centroid
 
-# Plot the trajectories from each of the x, y, or z, planes.
+# Fail (exit code 1) when an aligned rmse exceeds 5 cm.
+./runtime/Release/zeroslam evaluate trajectory_gt.txt trajectory_eval_1.txt --max-rmse 0.05
+
+# Plot the trajectories viewed along each of the x, y, and z axes (trajectory_x.ppm, trajectory_y.ppm, trajectory_z.ppm).
 ./runtime/Release/zeroslam evaluate trajectory_gt.txt trajectory_eval_1.txt --plot xyz
 ```
 
+A scene's ground truth is written as a trajectory file with `zeroslam dataset trajectory [scene.mcap] [trajectory.txt]`.
+
 ## Fetching datasets ##
 
-The tools directory contains a tool directory called `dataset`, target/binary is `zeroslam-dataset`, run as `zeroslam dataset`.
-This tool can list, download, validate, expand, and collapse, dataset scenes hosted at [gpdaniels/slam-datasets](https://huggingface.co/datasets/gpdaniels/slam-datasets).
-By default the datasets directory is assumed to be next to the tool executable (`./datasets` when that cannot be determined) override with `--datasets`.
+The `dataset` tool can list, download, validate, expand, and collapse dataset scenes hosted at [gpdaniels/slam-datasets](https://huggingface.co/datasets/gpdaniels/slam-datasets), and write a scene's ground truth trajectory.
+By default the datasets directory is the `datasets` directory next to the tool executable (`./datasets` when that cannot be determined), override it with `--datasets`.
+Configuring with the dataset tool enabled links `build/runtime/[config]/datasets` to the source tree's `datasets/` directory, so the tools share one copy.
 
 **Note: Downloading datasets with this tool requires that the `curl` executable is installed and reachable.**
 
-Scenes are stored as one mcap file each, `[dataset]/[scene].mcap`, and `get` accepts a whole dataset (`freiburg`) or a single scene (`freiburg/xyz`).
+The hub holds the `tum-rgbd`, `euroc-mav`, `eth3d-slam`, `kitti-odometry` and `lamaria` datasets.
+Scenes are stored as one mcap file each, `[dataset]/[scene].mcap`, and `get` accepts a whole dataset (`tum-rgbd`) or a single scene (`tum-rgbd/fr1_xyz`), validating every scene it fetches.
 Downloads stream to a `.part` file renamed into place after a size check, so interrupted downloads are detectable and rerunning a download completes or repairs the files (`--force` redownloads).
 Private repositories are reached with `--token` or the `HF_TOKEN` environment variable, and `--repo` selects another hub repository (huggingface only).
+`validate` checks a scene by name, every scene of a dataset, or a scene mcap by path: the raw frames, a pinhole calibration per frame, and the `root -> ego -> sensor` frame tree on `/tf`.
 
 Usage:
 ```
 # Build the tool.
 cd build
+cmake .. -DBUILD_ZEROSLAM_ZEROSLAM=ON -DBUILD_ZEROSLAM_DATASET=ON
 cmake --build . --parallel 4
 
 # List, download, and validate a scene.
 ./runtime/Release/zeroslam dataset list
-./runtime/Release/zeroslam dataset get freiburg/xyz
-./runtime/Release/zeroslam dataset validate freiburg/xyz
+./runtime/Release/zeroslam dataset get tum-rgbd/fr1_xyz
+./runtime/Release/zeroslam dataset validate tum-rgbd/fr1_xyz
 
 # Unpack a scene for inspection or editing, and pack it back.
-./runtime/Release/zeroslam dataset expand ../datasets/freiburg/xyz.mcap ./xyz-expanded
-./runtime/Release/zeroslam dataset collapse ./xyz-expanded ../datasets/freiburg/xyz.mcap
+./runtime/Release/zeroslam dataset expand ../datasets/tum-rgbd/fr1_xyz.mcap ./fr1_xyz-expanded
+./runtime/Release/zeroslam dataset collapse ./fr1_xyz-expanded ../datasets/tum-rgbd/fr1_xyz.mcap
+
+# Write a scene's ground truth as a trajectory file.
+./runtime/Release/zeroslam dataset trajectory ../datasets/tum-rgbd/fr1_xyz.mcap trajectory_gt.txt
+```
+
+## Importing datasets ##
+
+The importers turn a dataset's own release into a scene mcap in the convention above (see "Coordinate conventions"), writing the directory form next to the mcap (the mcap's path without the extension) and packing and validating it with the `dataset` tool (found next to the importer, or with `--tools-dir`).
+They read already extracted directories, not zips.
+
+| Tool | Input | Notes |
+|---|---|---|
+| `import-euroc` | `[mav0-dir] [groundtruth.csv] [output.mcap]` | EuRoC MAV ASL `mav0/`, with a corrected ground truth such as open_vins' `ov_data/euroc_mav/[sequence].csv`. |
+| `import-tumrgbd` | `[tumrgbd-dir] [output.mcap]` | TUM RGB-D, with the rgb, depth and accelerometer streams. `--freiburg [1-3]` sets the camera calibration, by default read from `rgb.txt`'s header or the directory name. |
+| `import-eth3d` | `[eth3d-dir] [output.mcap]` | ETH3D SLAM, the monocular part plus the stereo, depth and imu parts found inside it or given with `--stereo`, `--rgbd` and `--imu`. |
+| `import-kitti` | `[sequence-dir] ([poses.txt]) [output.mcap]` | KITTI odometry, `--cameras` selects which of the four cameras to import. The poses are optional, only sequences 00 to 10 publish them. |
+| `import-lamaria` | `[asl-dir] [pinhole.json] [output.mcap]` | LaMAria's undistorted ASL (pinhole) release, `--ground-truth` adds the pseudo ground truth where a sequence has one. |
+
+```
+# Build the importers, and the dataset tool they pack scenes with.
+cd build
+cmake .. -DBUILD_ZEROSLAM_ZEROSLAM=ON -DBUILD_ZEROSLAM_DATASET=ON -DBUILD_ZEROSLAM_IMPORT_EUROC=ON
+cmake --build . --parallel 4
+
+# Import a EuRoC sequence.
+./runtime/Release/zeroslam import-euroc ./MH_01_easy/mav0 ./MH_01_easy.csv ../datasets/euroc-mav/mh_01_easy.mcap
+```
+
+## Viewing a scene ##
+
+The `gui` tool plays a scene through the SLAM system live, drawing the image with its features, the landmarks, lines, keyframes, covisibility and loop edges, and the trajectory against the scene's ground truth with live metrics (see "Coordinate conventions" for the `Scale To Truth` and `Align To Truth` controls).
+It also saves a finished map (`--save-map`) and displays a saved map instead of running the system (`--load-map`), and `--play`, `--screenshot [file]`, `--screenshot-after [frames]` and `--exit-after [frames]` script it.
+`--config key=value` starts it with a front end setting it offers in its controls: `tracker`, `lines`, `culling`, `association`, `detector`, `descriptor` and `flow`.
+It needs OpenGL, with X11 on linux, Cocoa on macOS and Win32 on windows.
+```
+cd build
+cmake .. -DBUILD_ZEROSLAM_ZEROSLAM=ON -DBUILD_ZEROSLAM_GUI=ON
+cmake --build . --parallel 4
+./runtime/Release/zeroslam gui ../datasets/tum-rgbd/fr1_xyz.mcap --play
 ```
 
 ## Tracking accuracy over time ##
 
-The tools directory contains a tool directory called `regression`, target/binary is `zeroslam-regression`, run as `zeroslam regression`.
-This tool downloads (if not downloaded), validates a scene, runs the SLAM system on it, and evaluates the recorded trajectory against a ground truth.
+The `regression` tool downloads (if not downloaded) and validates a scene, runs the `process` tool on it, evaluates the recorded trajectory against the scene's ground truth with the `evaluate` tool, and appends the metrics and the commit to a log.
+The scene is a scene mcap path, or a bare `[dataset]/[scene]` name looked up in the datasets directory next to the tools.
 
 The recorded metrics never fail the run. The exit code only reflects operational failures, as interpreting metric changes depends on the code changes.
 
@@ -191,17 +344,21 @@ Usage:
 ```
 # Build the tools.
 cd build
+cmake .. -DBUILD_ZEROSLAM_ZEROSLAM=ON -DBUILD_ZEROSLAM_REGRESSION=ON -DBUILD_ZEROSLAM_PROCESS=ON -DBUILD_ZEROSLAM_EVALUATE=ON -DBUILD_ZEROSLAM_DATASET=ON
 cmake --build . --parallel 4
 
 # Download (if not downloaded) and benchmark a scene in the datasets directory.
-./runtime/Release/zeroslam regression freiburg/xyz
+./runtime/Release/zeroslam regression tum-rgbd/fr1_xyz
 
 # Benchmark only the first 150 frames of an mcap file scene.
-./runtime/Release/zeroslam regression ../datasets/freiburg/xyz.mcap --frames 150
+./runtime/Release/zeroslam regression ../datasets/tum-rgbd/fr1_xyz.mcap --frames 150
 
 # Benchmark and evaluate against a custom ground truth.
-./runtime/Release/zeroslam regression ../datasets/freiburg/xyz.mcap --ground-truth trajectory.txt
+./runtime/Release/zeroslam regression ../datasets/tum-rgbd/fr1_xyz.mcap --ground-truth trajectory.txt
 ```
+
+The run's outputs go to `--work-dir` (default `./zeroslam-regression-work/[name]`) and the results are appended to `--log` (default `./regression.log`).
+`--name` and `--commit` override the recorded scene name and commit (default the git `HEAD`), `--config key=value` is forwarded to the `process` tool, `--first` or `--centroid` picks the alignment anchor, and `--tools-dir` points at the other tools.
 
 ## License ##
 
