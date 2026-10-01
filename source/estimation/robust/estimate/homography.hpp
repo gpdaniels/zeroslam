@@ -32,7 +32,8 @@ namespace estimation::robust::estimate {
         type homography[3][3];
     };
 
-    // A homography mapping rhs to lhs from four normalised correspondences, scored by the symmetric transfer error; a singular homography marks every datum an outlier.
+    // A homography mapping rhs to lhs from four normalised correspondences, scored by the symmetric transfer error |H rhs - lhs|^2 + |H^-1 lhs - rhs|^2, four squared terms in normalised image units; a singular homography marks every datum an outlier.
+    // With isotropic noise of sigma on each coordinate of both points, sigma = pixels / f, the two transfer errors are opposite to first order, so an inlier's residual at the true homography is 4 sigma^2 times a chi-squared variable of two degrees of freedom when H is near a unit scale similarity: a mean of 8 sigma^2 and 95% below 23.97 sigma^2; for a local scale s the factor is 2 + s^2 + 1 / s^2 in place of 4.
     template <typename type>
     class homography final
         : public estimator<correspondence_2d_2d<type>, 4, model_homography<type>, 1> {

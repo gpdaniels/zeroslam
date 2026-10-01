@@ -42,10 +42,12 @@ namespace estimation::robust::solver {
         size_t& inliers_size,
         model_type& best_model
     ) {
+        static_assert(sizeof(data_type) == 6 * sizeof(type), "The sampler seed hashes the correspondences, which must hold only their coordinates.");
+
         const float probability_failure = 0.01f;
         const size_t iterations_minimum = 5;
         const size_t iterations_maximum = 256;
-        sample::random<3> sampler;
+        sample::random<3> sampler(sample::random<3>::seed_from(correspondences, data_size));
         estimate::similarity<type> estimator;
         const evaluate::maximum_likelihood support(residual_threshold);
         consensus<decltype(sampler), decltype(estimator), decltype(support)> estimate(

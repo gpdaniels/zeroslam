@@ -25,7 +25,8 @@ namespace {
 }
 
 namespace estimation::robust::solver {
-    // Prebuilt consensus for the homography estimator with the default sampler, evaluator, threshold and iteration budget; residuals and inliers must hold data_size entries.
+    // Prebuilt consensus for the homography estimator with a sampler seeded from the data, the maximum likelihood evaluator and the default iteration budget, then a normalised linear refit on the inliers; residuals and inliers must hold data_size entries.
+    // The residual_threshold bounds the four term symmetric transfer error in normalised image units, so for a tolerance in pixels pass (pixels / f)^2; with isotropic noise of sigma pixels in both images and a homography near a unit scale similarity an inlier's residual is 4 (sigma / f)^2 times a chi-squared variable of two degrees of freedom, a mean of 8 (sigma / f)^2, so 23.97 (sigma / f)^2 keeps 95% of them.
     template <typename type>
     class homography final {
     public:
@@ -39,7 +40,8 @@ namespace estimation::robust::solver {
             float* const __restrict residuals,
             size_t* const __restrict inliers,
             size_t& inliers_size,
-            model_type& best_model
+            model_type& best_model,
+            const float residual_threshold = 2.0e-5f
         );
     };
 

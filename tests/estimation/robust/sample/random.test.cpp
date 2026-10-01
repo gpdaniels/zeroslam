@@ -88,5 +88,52 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Samplers with equal seeds draw the same sequence, different seeds a different one, and seeded draws are still distinct and in range.
+    {
+        estimation::robust::sample::random<3> lhs(0x5eed0200ull);
+        estimation::robust::sample::random<3> rhs(0x5eed0200ull);
+        estimation::robust::sample::random<3> other(0x5eed0201ull);
+        lhs.prepare(50);
+        rhs.prepare(50);
+        other.prepare(50);
+        size_t differing = 0;
+        for (int draw = 0; draw < 64; ++draw) {
+            size_t lhs_indices[3];
+            size_t rhs_indices[3];
+            size_t other_indices[3];
+            lhs.sample(lhs_indices);
+            rhs.sample(rhs_indices);
+            other.sample(other_indices);
+            for (size_t i = 0; i < 3; ++i) {
+                REQUIRE(lhs_indices[i] == rhs_indices[i]);
+                REQUIRE(other_indices[i] < 50);
+                differing += (lhs_indices[i] != other_indices[i]) ? size_t(1) : size_t(0);
+            }
+            REQUIRE(other_indices[0] != other_indices[1]);
+            REQUIRE(other_indices[1] != other_indices[2]);
+            REQUIRE(other_indices[0] != other_indices[2]);
+        }
+        REQUIRE(differing > 100);
+    }
+
+    // The data seed is a function of the bytes alone: equal data gives equal seeds, and changing one value or the size changes it.
+    {
+        double data[12];
+        double copy[12];
+        for (size_t i = 0; i < 12; ++i) {
+            data[i] = 0.25 * static_cast<double>(i) - 1.0;
+            copy[i] = data[i];
+        }
+        const unsigned long long int seed = estimation::robust::sample::random<2>::seed_from(data, 12);
+        REQUIRE(estimation::robust::sample::random<2>::seed_from(copy, 12) == seed);
+        REQUIRE(estimation::robust::sample::random<5>::seed_from(copy, 12) == seed);
+        REQUIRE(estimation::robust::sample::random<2>::seed_from(data, 11) != seed);
+        copy[7] = 0.5000000001;
+        REQUIRE(estimation::robust::sample::random<2>::seed_from(copy, 12) != seed);
+        const float odd_sized[3] = { 1.0f, 2.0f, 3.0f };
+        const float odd_sized_changed[3] = { 1.0f, 2.0f, 3.5f };
+        REQUIRE(estimation::robust::sample::random<2>::seed_from(odd_sized, 3) != estimation::robust::sample::random<2>::seed_from(odd_sized_changed, 3));
+    }
+
     return EXIT_SUCCESS;
 }

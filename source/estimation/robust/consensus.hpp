@@ -38,7 +38,7 @@ namespace {
 }
 
 namespace estimation::robust {
-    // Sample consensus over a sampler, an estimator and an evaluator; the iteration budget adapts to the best inlier ratio found so far.
+    // Sample consensus over a sampler, an estimator and an evaluator; the iteration budget adapts to the best inlier ratio found so far, and estimate fails when the best model has fewer inliers than a sample.
     template <
         typename template_sampler_type,
         typename template_estimator_type,
@@ -198,7 +198,8 @@ namespace estimation::robust {
             }
             this->consensus_estimator.compute_residuals(data, data_size, best_model, residuals);
             this->consensus_evaluator.evaluate(residuals, data_size, inliers, inliers_size);
-            return true;
+            // A best model supported by fewer inliers than a sample, for example when every model was non-finite, is no solution.
+            return inliers_size >= sample_size;
         }
     };
 }

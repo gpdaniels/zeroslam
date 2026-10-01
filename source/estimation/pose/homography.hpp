@@ -23,7 +23,7 @@ namespace {
 }
 
 namespace estimation::pose {
-    // Relative pose [R | t] of the rhs camera from a homography mapping rhs points to lhs points (Faugeras and Lustman) and its normalised correspondences by a two view cheirality vote; same outputs and acceptance rule as pose::essential.
+    // Relative pose [R | t] of the rhs camera from a homography mapping rhs points to lhs points (Faugeras and Lustman) and its normalised correspondences by a two view cheirality vote over all eight candidates; same outputs and acceptance rule as pose::essential.
     template <typename type>
     class homography final {
     public:

@@ -40,14 +40,16 @@ namespace estimation::robust::solver {
         float* const __restrict residuals,
         size_t* const __restrict inliers,
         size_t& inliers_size,
-        model_type& best_model
+        model_type& best_model,
+        const float residual_threshold
     ) {
+        static_assert(sizeof(data_type) == 4 * sizeof(type), "The sampler seed hashes the correspondences, which must hold only their coordinates.");
+
         const float probability_failure = 0.01f;
         const size_t iterations_minimum = 5;
         const size_t iterations_maximum = 300;
-        const float residual_threshold = 2.0e-5f;
 
-        sample::random<4> sampler;
+        sample::random<4> sampler(sample::random<4>::seed_from(correspondences, data_size));
         estimate::homography<type> estimator;
         const evaluate::maximum_likelihood support(residual_threshold);
 

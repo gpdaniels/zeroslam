@@ -16,6 +16,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "estimation/minimal/essential_5_point.hpp"
 
+#include "core/random_pcg.hpp"
+
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
@@ -101,6 +103,108 @@ static inline void project_point(const double* rotation, const double* translati
     point[2] += translation[2];
     point_xy[0] = point[0] / point[2];
     point_xy[1] = point[1] / point[2];
+}
+
+static inline void rotation_from_axis_angle(const double* axis_angle, double* rotation) {
+    const double angle = std::sqrt(axis_angle[0] * axis_angle[0] + axis_angle[1] * axis_angle[1] + axis_angle[2] * axis_angle[2]);
+    if (!(angle > 0.0)) {
+        const double identity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+        for (int i = 0; i < 9; ++i) {
+            rotation[i] = identity[i];
+        }
+        return;
+    }
+    const double axis[3] = { axis_angle[0] / angle, axis_angle[1] / angle, axis_angle[2] / angle };
+    const double c = std::cos(angle);
+    const double s = std::sin(angle);
+    const double v = 1.0 - c;
+    rotation[0] = c + axis[0] * axis[0] * v;
+    rotation[1] = axis[0] * axis[1] * v - axis[2] * s;
+    rotation[2] = axis[0] * axis[2] * v + axis[1] * s;
+    rotation[3] = axis[1] * axis[0] * v + axis[2] * s;
+    rotation[4] = c + axis[1] * axis[1] * v;
+    rotation[5] = axis[1] * axis[2] * v - axis[0] * s;
+    rotation[6] = axis[2] * axis[0] * v - axis[1] * s;
+    rotation[7] = axis[2] * axis[1] * v + axis[0] * s;
+    rotation[8] = c + axis[2] * axis[2] * v;
+}
+
+// The smallest distance between a solution and the expected unit matrix, of either sign.
+static inline double closest_solution(const double* essentials, int solutions, const double* expected) {
+    double closest = 1e9;
+    for (int s = 0; s < solutions; ++s) {
+        double current[9];
+        for (int k = 0; k < 9; ++k) {
+            current[k] = essentials[s * 9 + k];
+        }
+        normalize_matrix(current);
+        double plus = 0.0;
+        double minus = 0.0;
+        for (int k = 0; k < 9; ++k) {
+            plus += (current[k] - expected[k]) * (current[k] - expected[k]);
+            minus += (current[k] + expected[k]) * (current[k] + expected[k]);
+        }
+        closest = std::fmin(closest, std::sqrt(std::fmin(plus, minus)));
+    }
+    return closest;
+}
+
+// Five correspondences of points at depths 2 to 6 under a random rotation of up to 0.15 radians, with the baseline scaled so the mean parallax is the given angle.
+static inline bool make_parallax_sample(core::random_pcg& random, double parallax_degrees, double* lhs_points, double* rhs_points, double* expected) {
+    const double axis_angle[3] = { 0.087 * random.get_random(-1.0, 1.0), 0.087 * random.get_random(-1.0, 1.0), 0.087 * random.get_random(-1.0, 1.0) };
+    double rotation[9];
+    rotation_from_axis_angle(axis_angle, rotation);
+    double translation[3] = { random.get_random(-1.0, 1.0), random.get_random(-1.0, 1.0), random.get_random(-1.0, 1.0) };
+    const double translation_norm = std::sqrt(translation[0] * translation[0] + translation[1] * translation[1] + translation[2] * translation[2]);
+    for (int k = 0; k < 3; ++k) {
+        translation[k] /= translation_norm;
+    }
+    double points[5][3];
+    for (int i = 0; i < 5; ++i) {
+        const double depth = random.get_random(2.0, 6.0);
+        points[i][0] = 0.6 * random.get_random(-1.0, 1.0) * depth;
+        points[i][1] = 0.45 * random.get_random(-1.0, 1.0) * depth;
+        points[i][2] = depth;
+    }
+    const double centre[3] = {
+        -(rotation[0] * translation[0] + rotation[3] * translation[1] + rotation[6] * translation[2]),
+        -(rotation[1] * translation[0] + rotation[4] * translation[1] + rotation[7] * translation[2]),
+        -(rotation[2] * translation[0] + rotation[5] * translation[1] + rotation[8] * translation[2])
+    };
+    double parallax_mean = 0.0;
+    for (int i = 0; i < 5; ++i) {
+        const double from_centre[3] = { points[i][0] - centre[0], points[i][1] - centre[1], points[i][2] - centre[2] };
+        const double dot = points[i][0] * from_centre[0] + points[i][1] * from_centre[1] + points[i][2] * from_centre[2];
+        const double cross[3] = {
+            points[i][1] * from_centre[2] - points[i][2] * from_centre[1],
+            points[i][2] * from_centre[0] - points[i][0] * from_centre[2],
+            points[i][0] * from_centre[1] - points[i][1] * from_centre[0]
+        };
+        parallax_mean += std::atan2(std::sqrt(cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]), dot) / 5.0;
+    }
+    const double scale = (parallax_degrees * 3.14159265358979323846 / 180.0) / parallax_mean;
+    for (int k = 0; k < 3; ++k) {
+        translation[k] *= scale;
+    }
+    for (int i = 0; i < 5; ++i) {
+        double rhs_camera[3];
+        matrix_vector_multiply(rotation, points[i], rhs_camera);
+        for (int k = 0; k < 3; ++k) {
+            rhs_camera[k] += translation[k];
+        }
+        if (rhs_camera[2] < 0.1) {
+            return false;
+        }
+        lhs_points[2 * i + 0] = points[i][0] / points[i][2];
+        lhs_points[2 * i + 1] = points[i][1] / points[i][2];
+        rhs_points[2 * i + 0] = rhs_camera[0] / rhs_camera[2];
+        rhs_points[2 * i + 1] = rhs_camera[1] / rhs_camera[2];
+    }
+    double translation_matrix[9];
+    cross_matrix(translation, translation_matrix);
+    matrix_multiply(translation_matrix, rotation, expected);
+    normalize_matrix(expected);
+    return true;
 }
 
 int main(int argc, char* argv[]) {
@@ -398,6 +502,105 @@ int main(int argc, char* argv[]) {
             const double residual = rhs_homogeneous[0] * essential_lhs[0] + rhs_homogeneous[1] * essential_lhs[1] + rhs_homogeneous[2] * essential_lhs[2];
             REQUIRE(std::abs(residual) < 1e-6);
         }
+    }
+
+    // Translation along an axis without rotation makes y' = y, x' = x or x' y = y' x hold at every point, which ties two columns of the constraint matrix; every sample keeps the true matrix, and again with a small rotation.
+    {
+        const double translations[3][3] = { { 0.5, 0.0, 0.0 }, { 0.0, 0.5, 0.0 }, { 0.0, 0.0, 0.5 } };
+        for (int axis = 0; axis < 3; ++axis) {
+            for (int rotated = 0; rotated < 2; ++rotated) {
+                const double axis_angle[3] = { 0.0, (rotated == 1) ? 0.05 : 0.0, 0.0 };
+                double rotation[9];
+                rotation_from_axis_angle(axis_angle, rotation);
+                double translation_matrix[9];
+                cross_matrix(translations[axis], translation_matrix);
+                double expected[9];
+                matrix_multiply(translation_matrix, rotation, expected);
+                normalize_matrix(expected);
+
+                core::random_pcg random;
+                double lhs_points[200 * 2];
+                double rhs_points[200 * 2];
+                for (int i = 0; i < 200; ++i) {
+                    const double point_xyz[3] = {
+                        (static_cast<double>(random.get_random_raw() % 6000) / 1000.0) - 3.0,
+                        (static_cast<double>(random.get_random_raw() % 6000) / 1000.0) - 3.0,
+                        4.0 + (static_cast<double>(random.get_random_raw() % 10000) / 1000.0)
+                    };
+                    lhs_points[2 * i + 0] = point_xyz[0] / point_xyz[2];
+                    lhs_points[2 * i + 1] = point_xyz[1] / point_xyz[2];
+                    project_point(rotation, translations[axis], point_xyz, &rhs_points[2 * i]);
+                }
+                for (int sample = 0; sample < 40; ++sample) {
+                    double essentials[10 * 9] = {};
+                    const int solutions = estimation::minimal::essential_5_point<double>::solve(&lhs_points[sample * 10], &rhs_points[sample * 10], essentials);
+                    REQUIRE(solutions >= 1);
+                    REQUIRE(closest_solution(essentials, solutions, expected) < 1e-6);
+                }
+            }
+        }
+    }
+
+    // Half a degree of parallax: samples keep their solutions, which have unit norm.
+    {
+        core::random_pcg random(0x5eed0101ull);
+        int samples = 0;
+        int without_solutions = 0;
+        int missed = 0;
+        while (samples < 1000) {
+            double lhs_points[10];
+            double rhs_points[10];
+            double expected[9];
+            if (!make_parallax_sample(random, 0.5, lhs_points, rhs_points, expected)) {
+                continue;
+            }
+            ++samples;
+            double essentials[10 * 9] = {};
+            const int solutions = estimation::minimal::essential_5_point<double>::solve(lhs_points, rhs_points, essentials);
+            if (solutions == 0) {
+                ++without_solutions;
+            }
+            for (int s = 0; s < solutions; ++s) {
+                REQUIRE(is_value_approx(frobenius_norm(&essentials[s * 9]), 1.0, 1e-12));
+            }
+            if (!(closest_solution(essentials, solutions, expected) < 1e-3)) {
+                ++missed;
+            }
+        }
+        REQUIRE(without_solutions <= 5);
+        REQUIRE(missed <= 5);
+    }
+
+    // Single precision is solved in double precision, so the true matrix is found to single precision.
+    {
+        core::random_pcg random(0x5eed0102ull);
+        int samples = 0;
+        int missed = 0;
+        while (samples < 500) {
+            double lhs_points[10];
+            double rhs_points[10];
+            double expected[9];
+            if (!make_parallax_sample(random, 4.0, lhs_points, rhs_points, expected)) {
+                continue;
+            }
+            ++samples;
+            float lhs_points_float[10];
+            float rhs_points_float[10];
+            for (int i = 0; i < 10; ++i) {
+                lhs_points_float[i] = static_cast<float>(lhs_points[i]);
+                rhs_points_float[i] = static_cast<float>(rhs_points[i]);
+            }
+            float essentials_float[10 * 9] = {};
+            const int solutions = estimation::minimal::essential_5_point<float>::solve(lhs_points_float, rhs_points_float, essentials_float);
+            double essentials[10 * 9] = {};
+            for (int i = 0; i < solutions * 9; ++i) {
+                essentials[i] = static_cast<double>(essentials_float[i]);
+            }
+            if (!(closest_solution(essentials, solutions, expected) < 1e-3)) {
+                ++missed;
+            }
+        }
+        REQUIRE(missed <= 3);
     }
 
     return EXIT_SUCCESS;

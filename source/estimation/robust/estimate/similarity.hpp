@@ -34,6 +34,7 @@ namespace estimation::robust::estimate {
         type scale;
     };
 
+    // Similarities rhs = s R lhs + t from three correspondences by Umeyama's method, scored by the distance between the rhs point and the mapped lhs point divided by the scale: a distance in lhs units, that of the lhs point from the inverse mapped rhs point; a scale that is not positive and finite marks every datum an outlier.
     template <typename type>
     class similarity final
         : public estimator<correspondence_3d_3d<type>, 3, model_similarity<type>, 1> {

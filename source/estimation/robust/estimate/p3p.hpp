@@ -33,7 +33,8 @@ namespace estimation::robust::estimate {
         type translation[3];
     };
 
-    // World to camera poses from three correspondences by the perspective three point solver, scored by one minus the cosine between the observed and reprojected bearings.
+    // World to camera poses from three correspondences by the perspective three point solver, scored by one minus the cosine between the observed and reprojected bearings, about half the squared angle.
+    // With isotropic noise of sigma on the image point, sigma = pixels / f, the residual of an inlier near the principal point is sigma^2 / 2 times a chi-squared variable of two degrees of freedom: a mean of sigma^2 and 95% below 3.0 sigma^2, and less towards the image edges.
     template <typename type>
     class p3p final
         : public estimator<correspondence_2d_3d<type>, 3, model_p3p<type>, 4> {

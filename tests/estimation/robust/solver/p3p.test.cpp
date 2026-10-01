@@ -16,6 +16,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "estimation/robust/solver/p3p.hpp"
 
+#include "core/random_pcg.hpp"
 #include "estimation/robust/consensus.hpp"
 #include "estimation/robust/evaluate/maximum_likelihood.hpp"
 #include "estimation/robust/sample/random.hpp"
@@ -421,6 +422,51 @@ int main(int argc, char* argv[]) {
             (gt_translation[0] * model.translation[0] + gt_translation[1] * model.translation[1] + gt_translation[2] * model.translation[2]) /
             (gt_translation_norm * recovered_translation_norm);
         REQUIRE(translation_direction_dot > 0.999);
+    }
+
+    // The threshold: the default is the former 1 - cos(2.5e-3) exactly, passing it is the same as leaving it out, a tighter one keeps fewer inliers and a looser one more.
+    {
+        REQUIRE(static_cast<float>(1.0 - std::cos(static_cast<double>(2.5e-3f))) == 3.12499833e-6f);
+        core::random_pcg random(0x5eed0320ull);
+        const double rotation[9] = { std::cos(0.3), 0, std::sin(0.3), 0, 1, 0, -std::sin(0.3), 0, std::cos(0.3) };
+        const double translation[3] = { 0.2, -0.1, 0.5 };
+        constexpr static const size_t inlier_count = 150;
+        constexpr static const size_t correspondence_count = 200;
+        estimation::correspondence_2d_3d<double> data[correspondence_count];
+        for (size_t i = 0; i < correspondence_count; ++i) {
+            const double world_point[3] = { random.get_random(-2.0, 2.0), random.get_random(-1.5, 1.5), random.get_random(3.0, 8.0) };
+            double point[2];
+            project_point(rotation, translation, world_point, point);
+            if (i >= inlier_count) {
+                point[0] = random.get_random(-0.6, 0.6);
+                point[1] = random.get_random(-0.45, 0.45);
+            }
+            data[i].lhs[0] = point[0] + 1.7e-3 * random.get_random(-1.0, 1.0);
+            data[i].lhs[1] = point[1] + 1.7e-3 * random.get_random(-1.0, 1.0);
+            data[i].rhs[0] = world_point[0];
+            data[i].rhs[1] = world_point[1];
+            data[i].rhs[2] = world_point[2];
+        }
+        float residuals[correspondence_count];
+        size_t inliers[correspondence_count];
+        size_t inliers_default = 0;
+        estimation::robust::estimate::p3p<double>::model model_default{};
+        REQUIRE(estimation::robust::solver::p3p<double>::solve(data, correspondence_count, residuals, inliers, inliers_default, model_default));
+        size_t inliers_explicit = 0;
+        estimation::robust::estimate::p3p<double>::model model_explicit{};
+        REQUIRE(estimation::robust::solver::p3p<double>::solve(data, correspondence_count, residuals, inliers, inliers_explicit, model_explicit, static_cast<float>(1.0 - std::cos(static_cast<double>(2.5e-3f)))));
+        REQUIRE(inliers_explicit == inliers_default);
+        for (int i = 0; i < 9; ++i) {
+            REQUIRE(model_explicit.rotation[i / 3][i % 3] == model_default.rotation[i / 3][i % 3]);
+        }
+        size_t inliers_tight = 0;
+        estimation::robust::estimate::p3p<double>::model model_tight{};
+        REQUIRE(estimation::robust::solver::p3p<double>::solve(data, correspondence_count, residuals, inliers, inliers_tight, model_tight, 3.0e-8f));
+        size_t inliers_loose = 0;
+        estimation::robust::estimate::p3p<double>::model model_loose{};
+        REQUIRE(estimation::robust::solver::p3p<double>::solve(data, correspondence_count, residuals, inliers, inliers_loose, model_loose, 3.0e-3f));
+        REQUIRE(inliers_tight < inliers_default);
+        REQUIRE(inliers_loose > inliers_default);
     }
 
     return EXIT_SUCCESS;

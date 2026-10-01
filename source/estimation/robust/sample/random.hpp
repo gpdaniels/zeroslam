@@ -27,13 +27,37 @@ namespace {
 }
 
 namespace estimation::robust::sample {
-    // Draws distinct indices uniformly with a fixed seed, so every run is reproducible.
+    // Draws distinct indices uniformly with a fixed or given seed, so every run is reproducible.
     template <size_t sample_size>
     class random final
         : public sampler<sample_size> {
     private:
         core::random_pcg rng;
         size_t size = 0;
+
+    public:
+        random() = default;
+
+        explicit random(const unsigned long long int seed_value)
+            : rng(seed_value) {
+        }
+
+        // A seed hashed from the bytes of the data, so equal data draws equal samples and problems of equal size do not; the data type must have no padding.
+        template <typename data_type>
+        static unsigned long long int seed_from(const data_type* const data, const size_t data_size) {
+            const unsigned char* const bytes = static_cast<const unsigned char*>(static_cast<const void*>(data));
+            const size_t bytes_size = data_size * sizeof(data_type);
+            unsigned long long int hash = 0x9E3779B97F4A7C15ull ^ static_cast<unsigned long long int>(bytes_size);
+            for (size_t offset = 0; offset < bytes_size; offset += 8) {
+                unsigned long long int word = 0;
+                for (size_t byte = 0; (byte < 8) && ((offset + byte) < bytes_size); ++byte) {
+                    word |= static_cast<unsigned long long int>(bytes[offset + byte]) << (8 * byte);
+                }
+                hash = (hash ^ word) * 0xFF51AFD7ED558CCDull;
+                hash ^= hash >> 32;
+            }
+            return hash;
+        }
 
     public:
         virtual void prepare(

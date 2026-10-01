@@ -32,7 +32,8 @@ namespace estimation::robust::estimate {
         type essential[3][3];
     };
 
-    // Essential matrices from five normalised correspondences by the five point solver, scored by the Sampson distance.
+    // Essential matrices from five normalised correspondences by the five point solver, scored by the squared Sampson distance in normalised image units.
+    // With isotropic noise of sigma on each coordinate of both points, sigma = pixels / f, the residual of an inlier at the true matrix is sigma^2 times a chi-squared variable of one degree of freedom: a mean of sigma^2 and 95% below 3.84 sigma^2.
     template <typename type>
     class essential final
         : public estimator<correspondence_2d_2d<type>, 5, model_essential<type>, 10> {

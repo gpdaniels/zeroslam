@@ -25,7 +25,8 @@ namespace {
 }
 
 namespace estimation::robust::solver {
-    // Prebuilt consensus for the p3p estimator with the default sampler, evaluator, threshold and iteration budget; residuals and inliers must hold data_size entries.
+    // Prebuilt consensus for the p3p estimator with a sampler seeded from the data, the maximum likelihood evaluator and the default iteration budget; residuals and inliers must hold data_size entries.
+    // The residual_threshold bounds one minus the cosine of the angle between the observed and reprojected bearings, so for a tolerance in pixels pass 1 - cos(pixels / f), about (pixels / f)^2 / 2 near the principal point, and the default is 1 - cos(2.5e-3); with isotropic noise of sigma pixels there an inlier's residual is (sigma / f)^2 / 2 times a chi-squared variable of two degrees of freedom, so 3.0 (sigma / f)^2 keeps 95% of them.
     template <typename type>
     class p3p final {
     public:
@@ -39,7 +40,8 @@ namespace estimation::robust::solver {
             float* const __restrict residuals,
             size_t* const __restrict inliers,
             size_t& inliers_size,
-            model_type& best_model
+            model_type& best_model,
+            const float residual_threshold = 3.12499833e-6f
         );
     };
 

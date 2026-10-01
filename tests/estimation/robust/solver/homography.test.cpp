@@ -16,6 +16,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "estimation/robust/solver/homography.hpp"
 
+#include "core/random_pcg.hpp"
+
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
@@ -187,6 +189,57 @@ int main(int argc, char* argv[]) {
                 REQUIRE(std::isfinite(model.homography[y][x]));
             }
         }
+    }
+
+    // The threshold: passing the default is the same as leaving it out, a tighter one keeps fewer inliers and a looser one more.
+    {
+        core::random_pcg random(0x5eed0310ull);
+        const double rotation[9] = { std::cos(0.05), 0, std::sin(0.05), 0, 1, 0, -std::sin(0.05), 0, std::cos(0.05) };
+        const double translation[3] = { 0.3, -0.1, 0.1 };
+        const double identity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+        const double zero[3] = { 0, 0, 0 };
+        constexpr static const size_t inlier_count = 150;
+        constexpr static const size_t correspondence_count = 200;
+        estimation::correspondence_2d_2d<double> data[correspondence_count];
+        for (size_t i = 0; i < correspondence_count; ++i) {
+            const double x = random.get_random(-0.6, 0.6);
+            const double y = random.get_random(-0.45, 0.45);
+            const double depth = 4.0 / (1.0 - 0.2 * x + 0.1 * y);
+            const double world_point[3] = { x * depth, y * depth, depth };
+            double lhs[2];
+            double rhs[2];
+            project_point(identity, zero, world_point, lhs);
+            project_point(rotation, translation, world_point, rhs);
+            if (i >= inlier_count) {
+                rhs[0] = random.get_random(-0.6, 0.6);
+                rhs[1] = random.get_random(-0.45, 0.45);
+            }
+            const double noise[4] = { random.get_random(-1.0, 1.0), random.get_random(-1.0, 1.0), random.get_random(-1.0, 1.0), random.get_random(-1.0, 1.0) };
+            data[i].lhs[0] = lhs[0] + 1.7e-3 * noise[0];
+            data[i].lhs[1] = lhs[1] + 1.7e-3 * noise[1];
+            data[i].rhs[0] = rhs[0] + 1.7e-3 * noise[2];
+            data[i].rhs[1] = rhs[1] + 1.7e-3 * noise[3];
+        }
+        float residuals[correspondence_count];
+        size_t inliers[correspondence_count];
+        size_t inliers_default = 0;
+        estimation::robust::estimate::homography<double>::model model_default{};
+        REQUIRE(estimation::robust::solver::homography<double>::solve(data, correspondence_count, residuals, inliers, inliers_default, model_default));
+        size_t inliers_explicit = 0;
+        estimation::robust::estimate::homography<double>::model model_explicit{};
+        REQUIRE(estimation::robust::solver::homography<double>::solve(data, correspondence_count, residuals, inliers, inliers_explicit, model_explicit, 2.0e-5f));
+        REQUIRE(inliers_explicit == inliers_default);
+        for (int i = 0; i < 9; ++i) {
+            REQUIRE(model_explicit.homography[i / 3][i % 3] == model_default.homography[i / 3][i % 3]);
+        }
+        size_t inliers_tight = 0;
+        estimation::robust::estimate::homography<double>::model model_tight{};
+        REQUIRE(estimation::robust::solver::homography<double>::solve(data, correspondence_count, residuals, inliers, inliers_tight, model_tight, 2.0e-7f));
+        size_t inliers_loose = 0;
+        estimation::robust::estimate::homography<double>::model model_loose{};
+        REQUIRE(estimation::robust::solver::homography<double>::solve(data, correspondence_count, residuals, inliers, inliers_loose, model_loose, 2.0e-3f));
+        REQUIRE(inliers_tight < inliers_default);
+        REQUIRE(inliers_loose > inliers_default);
     }
 
     return EXIT_SUCCESS;

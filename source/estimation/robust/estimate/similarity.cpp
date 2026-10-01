@@ -58,6 +58,14 @@ namespace estimation::robust::estimate {
         const model& candidate,
         float* const __restrict residuals
     ) const {
+        // The distance is taken in lhs units, the rhs distance divided by the scale, so a threshold set from the lhs points means the same at any scale.
+        if (!(candidate.scale > type(0)) || !math::isfinite(candidate.scale)) {
+            for (size_t i = 0; i < data_size; ++i) {
+                residuals[i] = math::inf<float>();
+            }
+            return;
+        }
+        const type scale_inverse = type(1) / candidate.scale;
         for (size_t i = 0; i < data_size; ++i) {
             type distance_squared = 0;
             for (size_t row = 0; row < 3; ++row) {
@@ -69,7 +77,7 @@ namespace estimation::robust::estimate {
                 residuals[i] = math::inf<float>();
             }
             else {
-                residuals[i] = static_cast<float>(math::sqrt(distance_squared));
+                residuals[i] = static_cast<float>(math::sqrt(distance_squared) * scale_inverse);
             }
         }
     }

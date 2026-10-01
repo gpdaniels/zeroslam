@@ -43,15 +43,11 @@ namespace estimation::minimal {
                 r2 = type(-2);
                 return true;
             }
+            // The larger root has no cancellation and the smaller follows from the product of the roots, which also avoids 0 / 0 when c = 0.
             const type y = math::sqrt(v);
-            if (b < type(0)) {
-                r1 = type(0.5) * (-b + y);
-                r2 = type(0.5) * (-b - y);
-            }
-            else {
-                r1 = type(2.0) * c / (-b + y);
-                r2 = type(2.0) * c / (-b - y);
-            }
+            const type q = (b < type(0)) ? (type(0.5) * (y - b)) : (type(-0.5) * (b + y));
+            r1 = q;
+            r2 = (q != type(0)) ? (c / q) : type(0);
             return true;
         };
 
@@ -77,6 +73,8 @@ namespace estimation::minimal {
                 }
                 else {
                     c = type(3.0) * b / (type(2.0) * a) * math::sqrt(type(-3.0) / a);
+                    // Rounding can put the cosine just outside [-1, 1].
+                    c = math::max(type(-1.0), math::min(type(1.0), c));
                     root = type(2.0) * math::sqrt(-a / type(3.0)) * math::cos(math::acos(c) / type(3.0)) - c2 / type(3.0);
                 }
             }

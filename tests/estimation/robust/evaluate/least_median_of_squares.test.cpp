@@ -74,6 +74,38 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // A NaN residual orders as infinite, so the median stays finite and the NaN is never an inlier.
+    {
+        const float residuals[5] = { 1.0f, std::nanf(""), 2.0f, 3.0f, std::nanf("") };
+        size_t inliers[5] = {};
+        size_t inliers_size = 0;
+        const float cost = evaluator.evaluate(residuals, 5, inliers, inliers_size);
+        REQUIRE(is_value_approx(static_cast<double>(cost), 9.0));
+        REQUIRE(inliers_size == 3);
+        for (size_t i = 0; i < inliers_size; ++i) {
+            REQUIRE((inliers[i] != 1) && (inliers[i] != 4));
+        }
+        const float mostly_nan[4] = { std::nanf(""), std::nanf(""), std::nanf(""), 1.0f };
+        size_t mostly_nan_inliers[4] = {};
+        REQUIRE(std::isinf(evaluator.evaluate(mostly_nan, 4, mostly_nan_inliers, inliers_size)));
+    }
+
+    // Many equal residuals: the median is their value, and every one is an inlier.
+    {
+        constexpr static const size_t count = 100000;
+        static float residuals[count];
+        static size_t inliers[count];
+        for (size_t i = 0; i < count; ++i) {
+            residuals[i] = 0.5f;
+        }
+        size_t inliers_size = 0;
+        REQUIRE(evaluator.evaluate(residuals, count, inliers, inliers_size) == 0.25f);
+        REQUIRE(inliers_size == count);
+        for (size_t i = 0; i < count; ++i) {
+            REQUIRE(inliers[i] == i);
+        }
+    }
+
     // The input residuals are left untouched.
     {
         const float residuals[4] = { 4.0f, 3.0f, 2.0f, 1.0f };

@@ -19,7 +19,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "estimation/robust/consensus.hpp"
 #include "estimation/robust/evaluate/maximum_likelihood.hpp"
 #include "estimation/robust/sample/random.hpp"
-#include "math/math.hpp"
 
 namespace estimation::robust::solver {
     template <typename type>
@@ -29,16 +28,16 @@ namespace estimation::robust::solver {
         float* const __restrict residuals,
         size_t* const __restrict inliers,
         size_t& inliers_size,
-        model_type& best_model
+        model_type& best_model,
+        const float residual_threshold
     ) {
+        static_assert(sizeof(data_type) == 5 * sizeof(type), "The sampler seed hashes the correspondences, which must hold only their coordinates.");
+
         const float probability_failure = 0.01f;
         const size_t iterations_minimum = 5;
         const size_t iterations_maximum = 300;
 
-        const float threshold_angle_radians = 2.5e-3f;
-        const float residual_threshold = static_cast<float>(1.0 - math::cos(static_cast<double>(threshold_angle_radians)));
-
-        sample::random<3> sampler;
+        sample::random<3> sampler(sample::random<3>::seed_from(correspondences, data_size));
         estimate::p3p<type> estimator;
         const evaluate::maximum_likelihood support(residual_threshold);
 

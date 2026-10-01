@@ -25,6 +25,7 @@ namespace {
 }
 
 namespace estimation::robust::solver {
+    // Prebuilt consensus for the similarity estimator with a sampler seeded from the data, the maximum likelihood evaluator and the default iteration budget, then a refit on the inliers; the residual_threshold is a distance in lhs units, see estimate::similarity; residuals and inliers must hold data_size entries.
     template <typename type>
     class similarity final {
     public:

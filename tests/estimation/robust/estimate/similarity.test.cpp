@@ -76,10 +76,32 @@ int main(int argc, char* argv[]) {
         for (size_t i = 0; i < 6; ++i) {
             REQUIRE(residuals[i] < 1e-5f);
         }
+        // Residuals are in lhs units: an rhs offset counts divided by the scale, an lhs offset as it is.
         data[4].rhs[0] += 0.05;
         estimator.compute_residuals(data, 6, models[0], residuals);
-        REQUIRE(is_value_approx(static_cast<double>(residuals[4]), 0.05, 1e-4));
+        REQUIRE(is_value_approx(static_cast<double>(residuals[4]), 0.05 / scale, 1e-4));
         REQUIRE(residuals[3] < 1e-5f);
+        data[4].rhs[0] -= 0.05;
+        data[5].lhs[1] += 0.05;
+        estimator.compute_residuals(data, 6, models[0], residuals);
+        REQUIRE(is_value_approx(static_cast<double>(residuals[5]), 0.05, 1e-4));
+        REQUIRE(residuals[4] < 1e-5f);
+    }
+
+    // A scale that is not positive and finite marks every datum an outlier.
+    {
+        estimation::correspondence_3d_3d<double> data[2] = {};
+        estimation::robust::estimate::similarity<double>::model model{};
+        model.rotation[0][0] = 1.0;
+        model.rotation[1][1] = 1.0;
+        model.rotation[2][2] = 1.0;
+        float residuals[2];
+        model.scale = 0.0;
+        estimator.compute_residuals(data, 2, model, residuals);
+        REQUIRE(std::isinf(residuals[0]) && std::isinf(residuals[1]));
+        model.scale = std::nan("");
+        estimator.compute_residuals(data, 2, model, residuals);
+        REQUIRE(std::isinf(residuals[0]) && std::isinf(residuals[1]));
     }
 
     {

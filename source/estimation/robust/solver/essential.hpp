@@ -25,7 +25,8 @@ namespace {
 }
 
 namespace estimation::robust::solver {
-    // Prebuilt consensus for the essential estimator with the default sampler, evaluator, threshold and iteration budget; residuals and inliers must hold data_size entries.
+    // Prebuilt consensus for the essential estimator with a sampler seeded from the data, the maximum likelihood evaluator and a fixed iteration budget, then a linear refit on the inliers kept when it lowers the cost; residuals and inliers must hold data_size entries.
+    // The residual_threshold bounds the squared Sampson distance in normalised image units, so for a tolerance in pixels pass (pixels / f)^2; with isotropic noise of sigma pixels in both images an inlier's residual is (sigma / f)^2 times a chi-squared variable of one degree of freedom, so 3.84 (sigma / f)^2 keeps 95% of them.
     template <typename type>
     class essential final {
     public:
@@ -39,7 +40,8 @@ namespace estimation::robust::solver {
             float* const __restrict residuals,
             size_t* const __restrict inliers,
             size_t& inliers_size,
-            model_type& best_model
+            model_type& best_model,
+            const float residual_threshold = 1.0e-5f
         );
     };
 

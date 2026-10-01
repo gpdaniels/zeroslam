@@ -16,6 +16,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "estimation/robust/solver/essential.hpp"
 
+#include "core/random_pcg.hpp"
 #include "estimation/robust/consensus.hpp"
 #include "estimation/robust/evaluate/maximum_likelihood.hpp"
 #include "estimation/robust/sample/random.hpp"
@@ -94,9 +95,149 @@ static inline void project_point(const double* rotation, const double* translati
     point_xy[1] = point[1] / point[2];
 }
 
+static inline double gaussian(core::random_pcg& random) {
+    const double radius = std::sqrt(-2.0 * std::log(random.get_random_exclusive()));
+    return radius * std::cos(6.283185307179586 * random.get_random_exclusive());
+}
+
+// Points at depths 2 to 6, or on a plane, seen before and after a random motion; the first inlier_count with noise of sigma on every coordinate, the rest random; the true matrix is written with unit norm.
+static inline void make_scene(core::random_pcg& random, size_t inlier_count, size_t outlier_count, double sigma, bool planar, estimation::correspondence_2d_2d<double>* data, double* essential) {
+    const double alpha = random.get_random(-0.05, 0.05);
+    const double beta = random.get_random(-0.05, 0.05);
+    const double rotation_x[9] = { 1, 0, 0, 0, std::cos(alpha), -std::sin(alpha), 0, std::sin(alpha), std::cos(alpha) };
+    const double rotation_y[9] = { std::cos(beta), 0, std::sin(beta), 0, 1, 0, -std::sin(beta), 0, std::cos(beta) };
+    double rotation[9];
+    matrix_multiply(rotation_y, rotation_x, rotation);
+    const double translation[3] = { random.get_random(-0.4, 0.4), random.get_random(-0.2, 0.2), random.get_random(-0.2, 0.2) };
+    const double identity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+    const double zero[3] = { 0, 0, 0 };
+    for (size_t i = 0; i < inlier_count + outlier_count; ++i) {
+        const double x = random.get_random(-0.6, 0.6);
+        const double y = random.get_random(-0.45, 0.45);
+        const double depth = planar ? (4.0 / (1.0 - 0.2 * x + 0.1 * y)) : random.get_random(2.0, 6.0);
+        const double point_xyz[3] = { x * depth, y * depth, depth };
+        double lhs[2];
+        double rhs[2];
+        project_point(identity, zero, point_xyz, lhs);
+        project_point(rotation, translation, point_xyz, rhs);
+        if (i >= inlier_count) {
+            rhs[0] = random.get_random(-0.6, 0.6);
+            rhs[1] = random.get_random(-0.45, 0.45);
+        }
+        data[i].lhs[0] = lhs[0] + sigma * gaussian(random);
+        data[i].lhs[1] = lhs[1] + sigma * gaussian(random);
+        data[i].rhs[0] = rhs[0] + sigma * gaussian(random);
+        data[i].rhs[1] = rhs[1] + sigma * gaussian(random);
+    }
+    double translation_matrix[9];
+    cross_matrix(translation, translation_matrix);
+    matrix_multiply(translation_matrix, rotation, essential);
+    normalize_matrix(essential);
+}
+
+static inline float scene_cost(const estimation::correspondence_2d_2d<double>* data, const size_t data_size, const double* essential, const float residual_threshold) {
+    estimation::robust::estimate::essential<double>::model model;
+    for (int i = 0; i < 9; ++i) {
+        model.essential[i / 3][i % 3] = essential[i];
+    }
+    float residuals[400];
+    size_t inliers[400];
+    size_t inliers_size = 0;
+    estimation::robust::estimate::essential<double>().compute_residuals(data, data_size, model, residuals);
+    return estimation::robust::evaluate::maximum_likelihood(residual_threshold).evaluate(residuals, data_size, inliers, inliers_size);
+}
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
+
+    // Noise free planar correspondences leave the linear refit a null space of three dimensions, so it is skipped and the five point model, exact on every correspondence, is kept.
+    {
+        core::random_pcg random(0x5eed0300ull);
+        for (int trial = 0; trial < 8; ++trial) {
+            constexpr static const size_t correspondence_count = 60;
+            estimation::correspondence_2d_2d<double> data[correspondence_count];
+            double essential[9];
+            make_scene(random, correspondence_count, 0, 0.0, true, data, essential);
+            float residuals[correspondence_count];
+            size_t inliers[correspondence_count];
+            size_t inliers_size = 0;
+            estimation::robust::estimate::essential<double>::model model{};
+            REQUIRE(estimation::robust::solver::essential<double>::solve(data, correspondence_count, residuals, inliers, inliers_size, model));
+            REQUIRE(inliers_size == correspondence_count);
+            for (size_t i = 0; i < correspondence_count; ++i) {
+                REQUIRE(residuals[i] < 1e-12f);
+            }
+        }
+    }
+
+    // With noise, in general and planar scenes, the refit replaces the consensus model only when it lowers the cost, and the result is never far worse than the true matrix.
+    {
+        core::random_pcg random(0x5eed0301ull);
+        size_t improved = 0;
+        for (int trial = 0; trial < 12; ++trial) {
+            constexpr static const size_t inlier_count = 160;
+            constexpr static const size_t correspondence_count = 200;
+            const float residual_threshold = 1.0e-5f;
+            estimation::correspondence_2d_2d<double> data[correspondence_count];
+            double essential[9];
+            make_scene(random, inlier_count, correspondence_count - inlier_count, 1.0e-3, (trial % 3) == 0, data, essential);
+
+            // The solver's own consensus: the same seed, evaluator and iteration budget, without the refit.
+            estimation::robust::sample::random<5> sampler(estimation::robust::sample::random<5>::seed_from(data, correspondence_count));
+            estimation::robust::estimate::essential<double> estimator;
+            estimation::robust::evaluate::maximum_likelihood support(residual_threshold);
+            estimation::robust::consensus<estimation::robust::sample::random<5>, estimation::robust::estimate::essential<double>, estimation::robust::evaluate::maximum_likelihood> consensus(sampler, estimator, support, 0.01f, 100, 300);
+            float consensus_residuals[correspondence_count];
+            size_t consensus_inliers[correspondence_count];
+            size_t consensus_inliers_size = 0;
+            estimation::robust::estimate::essential<double>::model consensus_model{};
+            REQUIRE(consensus.estimate(data, correspondence_count, consensus_residuals, consensus_inliers, consensus_inliers_size, consensus_model));
+            const float consensus_cost = support.evaluate(consensus_residuals, correspondence_count, consensus_inliers, consensus_inliers_size);
+
+            float residuals[correspondence_count];
+            size_t inliers[correspondence_count];
+            size_t inliers_size = 0;
+            estimation::robust::estimate::essential<double>::model model{};
+            REQUIRE(estimation::robust::solver::essential<double>::solve(data, correspondence_count, residuals, inliers, inliers_size, model));
+            const float cost = support.evaluate(residuals, correspondence_count, inliers, inliers_size);
+            REQUIRE(cost <= consensus_cost);
+            if (cost < consensus_cost) {
+                ++improved;
+            }
+            REQUIRE(cost <= 1.5f * scene_cost(data, correspondence_count, essential, residual_threshold));
+        }
+        REQUIRE(improved > 0);
+    }
+
+    // The threshold: passing the default is the same as leaving it out, a tighter one keeps fewer inliers and a looser one more.
+    {
+        core::random_pcg random(0x5eed0302ull);
+        constexpr static const size_t correspondence_count = 200;
+        estimation::correspondence_2d_2d<double> data[correspondence_count];
+        double essential[9];
+        make_scene(random, 160, correspondence_count - 160, 1.0e-3, false, data, essential);
+        float residuals[correspondence_count];
+        size_t inliers[correspondence_count];
+        size_t inliers_default = 0;
+        estimation::robust::estimate::essential<double>::model model_default{};
+        REQUIRE(estimation::robust::solver::essential<double>::solve(data, correspondence_count, residuals, inliers, inliers_default, model_default));
+        size_t inliers_explicit = 0;
+        estimation::robust::estimate::essential<double>::model model_explicit{};
+        REQUIRE(estimation::robust::solver::essential<double>::solve(data, correspondence_count, residuals, inliers, inliers_explicit, model_explicit, 1.0e-5f));
+        REQUIRE(inliers_explicit == inliers_default);
+        for (int i = 0; i < 9; ++i) {
+            REQUIRE(model_explicit.essential[i / 3][i % 3] == model_default.essential[i / 3][i % 3]);
+        }
+        size_t inliers_tight = 0;
+        estimation::robust::estimate::essential<double>::model model_tight{};
+        REQUIRE(estimation::robust::solver::essential<double>::solve(data, correspondence_count, residuals, inliers, inliers_tight, model_tight, 1.0e-7f));
+        size_t inliers_loose = 0;
+        estimation::robust::estimate::essential<double>::model model_loose{};
+        REQUIRE(estimation::robust::solver::essential<double>::solve(data, correspondence_count, residuals, inliers, inliers_loose, model_loose, 1.0e-3f));
+        REQUIRE(inliers_tight < inliers_default);
+        REQUIRE(inliers_loose > inliers_default);
+    }
 
     // One outlier.
     {
@@ -374,6 +515,55 @@ int main(int argc, char* argv[]) {
         REQUIRE(inliers_size_fresh == inliers_size);
         for (int i = 0; i < 9; ++i) {
             REQUIRE(model_fresh.essential[i / 3][i % 3] == model.essential[i / 3][i % 3]);
+        }
+    }
+
+    // A sideways translation without rotation, where y' = y at every point, and the same with a rotation: every correspondence is an inlier of the true matrix.
+    {
+        for (int rotated = 0; rotated < 2; ++rotated) {
+            const double angle = (rotated == 1) ? 0.05 : 0.0;
+            const double rotation[9] = { std::cos(angle), 0.0, std::sin(angle), 0.0, 1.0, 0.0, -std::sin(angle), 0.0, std::cos(angle) };
+            const double translation[3] = { 0.5, 0.0, 0.0 };
+            core::random_pcg random;
+            constexpr static const size_t correspondence_count = 200;
+            estimation::correspondence_2d_2d<double> data[correspondence_count];
+            for (size_t i = 0; i < correspondence_count; ++i) {
+                const double point_xyz[3] = {
+                    (static_cast<double>(random.get_random_raw() % 6000) / 1000.0) - 3.0,
+                    (static_cast<double>(random.get_random_raw() % 6000) / 1000.0) - 3.0,
+                    4.0 + (static_cast<double>(random.get_random_raw() % 10000) / 1000.0)
+                };
+                data[i].lhs[0] = point_xyz[0] / point_xyz[2];
+                data[i].lhs[1] = point_xyz[1] / point_xyz[2];
+                double point[2];
+                project_point(rotation, translation, point_xyz, point);
+                data[i].rhs[0] = point[0];
+                data[i].rhs[1] = point[1];
+            }
+            double translation_matrix[9];
+            cross_matrix(translation, translation_matrix);
+            double expected[9];
+            matrix_multiply(translation_matrix, rotation, expected);
+
+            float residuals[correspondence_count];
+            size_t inliers[correspondence_count];
+            size_t inliers_size = 0;
+            estimation::robust::estimate::essential<double>::model model{};
+            REQUIRE(estimation::robust::solver::essential<double>::solve(data, correspondence_count, residuals, inliers, inliers_size, model));
+            REQUIRE(inliers_size == correspondence_count);
+            double recovered[9];
+            for (int i = 0; i < 9; ++i) {
+                recovered[i] = model.essential[i / 3][i % 3];
+            }
+            normalize_matrix(recovered);
+            normalize_matrix(expected);
+            double plus = 0.0;
+            double minus = 0.0;
+            for (int i = 0; i < 9; ++i) {
+                plus += (recovered[i] - expected[i]) * (recovered[i] - expected[i]);
+                minus += (recovered[i] + expected[i]) * (recovered[i] + expected[i]);
+            }
+            REQUIRE(std::sqrt(std::fmin(plus, minus)) < 1e-6);
         }
     }
 

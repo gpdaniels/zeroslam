@@ -80,9 +80,47 @@ public:
     }
 };
 
+class nan_line_estimator final
+    : public estimation::robust::estimator<xy, 2, line, 1> {
+public:
+    virtual size_t generate_models(const xy* const __restrict data, const size_t data_size, line* const __restrict models) const override final {
+        static_cast<void>(data);
+        static_cast<void>(data_size);
+        models[0].gradient = std::nanf("");
+        models[0].intercept = std::nanf("");
+        return 1;
+    }
+
+    virtual void compute_residuals(const xy* const __restrict data, const size_t data_size, const line& model, float* const __restrict residuals) const override final {
+        static_cast<void>(data);
+        static_cast<void>(model);
+        for (size_t i = 0; i < data_size; ++i) {
+            residuals[i] = std::nanf("");
+        }
+    }
+};
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
+
+    // A best model with fewer inliers than a sample, here every model non-finite, is no solution.
+    {
+        xy data[16];
+        for (size_t i = 0; i < 16; ++i) {
+            data[i] = xy{ static_cast<float>(i), static_cast<float>(2 * i) };
+        }
+        estimation::robust::sample::random<2> random;
+        nan_line_estimator estimator;
+        estimation::robust::evaluate::inlier_support inlier_support(0.1f);
+        estimation::robust::consensus<estimation::robust::sample::random<2>, nan_line_estimator, estimation::robust::evaluate::inlier_support> consensus(random, estimator, inlier_support, 0.01f, 0, 10);
+        float residuals[16];
+        size_t inliers[16];
+        size_t inliers_size = 0;
+        line best_model;
+        REQUIRE(!consensus.estimate(data, 16, residuals, inliers, inliers_size, best_model));
+        REQUIRE(inliers_size == 0);
+    }
 
     // Line fitting with half the points as noise, repeated on the same object and on a fresh one.
     {

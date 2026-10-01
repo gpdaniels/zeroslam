@@ -16,6 +16,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "estimation/minimal/perspective_3_point.hpp"
 
+#include "core/random_pcg.hpp"
+
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
@@ -318,6 +320,82 @@ int main(int argc, char* argv[]) {
             }
         }
         REQUIRE(found_match);
+    }
+
+    // Symmetric configurations, an equilateral triangle about the optical axis and small perturbations of it, and random poses: every solution is finite; one is the true pose for random poses and for perturbations of 1e-3, the exactly symmetric triangle being degenerate.
+    {
+        core::random_pcg random(0x5eed0500ull);
+        size_t trials = 0;
+        size_t found = 0;
+        for (int trial = 0; trial < 2000; ++trial) {
+            const bool must_match = (trial >= 1000) || ((trial % 4) == 1);
+            double world_points[3][3];
+            double rotation[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+            double translation[3] = { 0, 0, 0 };
+            if (trial < 1000) {
+                const double perturbations[4] = { 0.0, 1e-3, 1e-6, 1e-9 };
+                const double perturbation = perturbations[trial % 4];
+                const double phase = random.get_random(0.0, 6.283185307179586);
+                for (int i = 0; i < 3; ++i) {
+                    const double angle = phase + (2.0943951023931953 * static_cast<double>(i));
+                    world_points[i][0] = std::cos(angle) + perturbation * random.get_random(-1.0, 1.0);
+                    world_points[i][1] = std::sin(angle) + perturbation * random.get_random(-1.0, 1.0);
+                    world_points[i][2] = 4.0 + perturbation * random.get_random(-1.0, 1.0);
+                }
+            }
+            else {
+                const double alpha = random.get_random(-1.0, 1.0);
+                const double beta = random.get_random(-1.0, 1.0);
+                const double rotation_x[9] = { 1, 0, 0, 0, std::cos(alpha), -std::sin(alpha), 0, std::sin(alpha), std::cos(alpha) };
+                const double rotation_y[9] = { std::cos(beta), 0, std::sin(beta), 0, 1, 0, -std::sin(beta), 0, std::cos(beta) };
+                matrix_multiply(rotation_y, rotation_x, rotation);
+                translation[0] = random.get_random(-1.0, 1.0);
+                translation[1] = random.get_random(-1.0, 1.0);
+                translation[2] = random.get_random(-1.0, 1.0);
+                for (int i = 0; i < 3; ++i) {
+                    // A point in front of the camera, mapped back to the world.
+                    const double camera[3] = { random.get_random(-2.0, 2.0), random.get_random(-2.0, 2.0), random.get_random(2.0, 8.0) };
+                    const double shifted[3] = { camera[0] - translation[0], camera[1] - translation[1], camera[2] - translation[2] };
+                    for (int k = 0; k < 3; ++k) {
+                        world_points[i][k] = rotation[0 * 3 + k] * shifted[0] + rotation[1 * 3 + k] * shifted[1] + rotation[2 * 3 + k] * shifted[2];
+                    }
+                }
+            }
+            double bearing_vectors[3][3];
+            for (int i = 0; i < 3; ++i) {
+                double p[3];
+                matrix_vector_multiply(rotation, &world_points[i][0], p);
+                const double norm = std::sqrt((p[0] + translation[0]) * (p[0] + translation[0]) + (p[1] + translation[1]) * (p[1] + translation[1]) + (p[2] + translation[2]) * (p[2] + translation[2]));
+                for (int k = 0; k < 3; ++k) {
+                    bearing_vectors[i][k] = (p[k] + translation[k]) / norm;
+                }
+            }
+            double p3p_rotations[4][9];
+            double p3p_translations[4][3];
+            const int n_solutions = estimation::minimal::perspective_3_point<double>::solve(bearing_vectors, world_points, p3p_rotations, p3p_translations);
+            bool matched = false;
+            for (int s = 0; s < n_solutions; ++s) {
+                bool r_match = true;
+                for (int k = 0; k < 9; ++k) {
+                    REQUIRE(std::isfinite(p3p_rotations[s][k]));
+                    r_match = r_match && is_value_approx(rotation[k], p3p_rotations[s][k], 1e-5);
+                }
+                bool t_match = true;
+                for (int k = 0; k < 3; ++k) {
+                    REQUIRE(std::isfinite(p3p_translations[s][k]));
+                    t_match = t_match && is_value_approx(translation[k], p3p_translations[s][k], 1e-5);
+                }
+                matched = matched || (r_match && t_match);
+            }
+            if (must_match) {
+                ++trials;
+                if (matched) {
+                    ++found;
+                }
+            }
+        }
+        REQUIRE(trials == 1250);
+        REQUIRE(found == trials);
     }
 
     // Collinear points.

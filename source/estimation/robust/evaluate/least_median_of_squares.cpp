@@ -23,7 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
-#include <vector>
+#include <algorithm>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -41,13 +41,23 @@ namespace estimation::robust::evaluate {
         size_t& inliers_size
     ) const {
         ASSERT(this->sample_size < residuals_size, "The median needs more residuals than the sample size.");
-        std::vector<float> residuals_squared(residuals_size);
+        // A non-finite residual orders as infinitely large, so a median is never NaN and a model with one can still be replaced.
+        const auto squared = [residuals](const size_t index) -> float {
+            const float value = residuals[index] * residuals[index];
+            return math::isnan(value) ? math::inf<float>() : value;
+        };
+        const auto squared_less = [&squared](const size_t lhs, const size_t rhs) -> bool {
+            return squared(lhs) < squared(rhs);
+        };
+        // The inlier indices, which hold residuals_size entries, are ordered while the median is found, so nothing is allocated.
         for (size_t i = 0; i < residuals_size; ++i) {
-            residuals_squared[i] = residuals[i] * residuals[i];
+            inliers[i] = i;
         }
-        float median_squared = least_median_of_squares::nth_element(residuals_squared.data(), residuals_size, residuals_size / 2);
+        size_t* const middle = inliers + (residuals_size / 2);
+        std::nth_element(inliers, middle, inliers + residuals_size, squared_less);
+        float median_squared = squared(*middle);
         if ((residuals_size % 2) == 0) {
-            median_squared = 0.5f * (median_squared + least_median_of_squares::nth_element(residuals_squared.data(), residuals_size, (residuals_size / 2) - 1));
+            median_squared = 0.5f * (median_squared + squared(*std::max_element(inliers, middle, squared_less)));
         }
         // Rousseeuw's robust scale estimate with the small sample correction, at two and a half standard deviations.
         const float threshold = 2.5f * 1.4826f * (1.0f + (5.0f / static_cast<float>(residuals_size - this->sample_size))) * math::sqrt(median_squared);
@@ -59,37 +69,5 @@ namespace estimation::robust::evaluate {
             }
         }
         return median_squared;
-    }
-
-    float least_median_of_squares::nth_element(float* const __restrict data, const size_t data_size, const size_t n) {
-        // Quickselect on the values that are at least the pivot moving left, so the nth largest ends at index n.
-        size_t start = 0;
-        size_t end = data_size - 1;
-        for (;;) {
-            if (end == start) {
-                return data[start];
-            }
-            size_t store = start;
-            const float pivot = data[end];
-            for (size_t i = start; i < end; ++i) {
-                if (data[i] >= pivot) {
-                    const float temp = data[store];
-                    data[store] = data[i];
-                    data[i] = temp;
-                    ++store;
-                }
-            }
-            data[end] = data[store];
-            data[store] = pivot;
-            if (n == store) {
-                return data[store];
-            }
-            if (n < store) {
-                end = store - 1;
-            }
-            else {
-                start = store + 1;
-            }
-        }
     }
 }

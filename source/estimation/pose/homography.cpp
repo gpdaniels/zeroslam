@@ -22,6 +22,16 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "math/matrix.hpp"
 #include "math/matrix_decomposition_singular_value.hpp"
 
+#if defined(_MSC_VER)
+#pragma warning(push, 0)
+#endif
+
+#include <vector>
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
 namespace estimation::pose {
     template <typename type>
     bool homography<type>::recover(
@@ -92,13 +102,6 @@ namespace estimation::pose {
 
         const type sign_factor = ((determinant_3x3(matrix_u) < type(0)) ? type(-1) : type(1)) * ((determinant_3x3(matrix_vt) < type(0)) ? type(-1) : type(1));
 
-        type matrix_v[9];
-        for (int row = 0; row < 3; ++row) {
-            for (int col = 0; col < 3; ++col) {
-                matrix_v[row * 3 + col] = matrix_vt[col * 3 + row];
-            }
-        }
-
         const type d1_squared = d1 * d1;
         const type d2_squared = d2 * d2;
         const type d3_squared = d3 * d3;
@@ -112,15 +115,8 @@ namespace estimation::pose {
         type candidate_translations[8][3];
         int candidate_count = 0;
 
-        const auto emit_candidate = [&](const type rotation_prime[9], const type translation_prime[3], const type normal_prime[3]) {
-            type normal[3];
-            for (int row = 0; row < 3; ++row) {
-                normal[row] = matrix_v[row * 3 + 0] * normal_prime[0] + matrix_v[row * 3 + 1] * normal_prime[1] + matrix_v[row * 3 + 2] * normal_prime[2];
-            }
-            if (normal[2] < type(0)) {
-                return;
-            }
-
+        // Every candidate goes to the vote: the sign of the plane normal on the principal ray says nothing about the points, and a test on it drops the true pose of an oblique plane such as a floor.
+        const auto emit_candidate = [&](const type rotation_prime[9], const type translation_prime[3]) {
             type u_rotation_prime[9];
             matrix_multiply_3x3(matrix_u, rotation_prime, u_rotation_prime);
             type candidate_rotation[9];
@@ -162,8 +158,7 @@ namespace estimation::pose {
                     cos_theta
                 };
                 const type translation_prime[3] = { x1_signs[i] * (d1 - d3), type(0), -x3_signs[i] * (d1 - d3) };
-                const type normal_prime[3] = { x1_signs[i], type(0), x3_signs[i] };
-                emit_candidate(rotation_prime, translation_prime, normal_prime);
+                emit_candidate(rotation_prime, translation_prime);
             }
         }
 
@@ -184,8 +179,7 @@ namespace estimation::pose {
                     -cos_phi
                 };
                 const type translation_prime[3] = { x1_signs[i] * (d1 + d3), type(0), x3_signs[i] * (d1 + d3) };
-                const type normal_prime[3] = { x1_signs[i], type(0), x3_signs[i] };
-                emit_candidate(rotation_prime, translation_prime, normal_prime);
+                emit_candidate(rotation_prime, translation_prime);
             }
         }
 
@@ -199,12 +193,8 @@ namespace estimation::pose {
             { type(0), type(0), type(1), type(0) }
         };
 
-        type** const triangulated_points_set = new type*[static_cast<size_t>(candidate_count)];
-        size_t* const triangulated_points_valid_counts = new size_t[static_cast<size_t>(candidate_count)];
-        for (int candidate_index = 0; candidate_index < candidate_count; ++candidate_index) {
-            triangulated_points_set[candidate_index] = new type[point_count * 3]{};
-            triangulated_points_valid_counts[candidate_index] = size_t(0);
-        }
+        std::vector<type> triangulated_points_set(static_cast<size_t>(candidate_count) * point_count * 3);
+        size_t triangulated_points_valid_counts[8] = {};
 
         for (int candidate_index = 0; candidate_index < candidate_count; ++candidate_index) {
             const type rhs_camera_pose[3][4] = {
@@ -212,6 +202,7 @@ namespace estimation::pose {
                 { candidate_rotations[candidate_index][3], candidate_rotations[candidate_index][4], candidate_rotations[candidate_index][5], candidate_translations[candidate_index][1] },
                 { candidate_rotations[candidate_index][6], candidate_rotations[candidate_index][7], candidate_rotations[candidate_index][8], candidate_translations[candidate_index][2] }
             };
+            type* const candidate_points = triangulated_points_set.data() + (static_cast<size_t>(candidate_index) * point_count * 3);
 
             for (size_t point_index = 0; point_index < point_count; ++point_index) {
                 math::matrix<type, 3, 1> triangulated_result = math::matrix<type, 3, 1>::zero();
@@ -222,9 +213,9 @@ namespace estimation::pose {
                     math::matrix<type, 3, 4>(&rhs_camera_pose[0][0]),
                     triangulated_result
                 );
-                triangulated_points_set[candidate_index][point_index * 3 + 0] = triangulated_result[0];
-                triangulated_points_set[candidate_index][point_index * 3 + 1] = triangulated_result[1];
-                triangulated_points_set[candidate_index][point_index * 3 + 2] = triangulated_result[2];
+                candidate_points[point_index * 3 + 0] = triangulated_result[0];
+                candidate_points[point_index * 3 + 1] = triangulated_result[1];
+                candidate_points[point_index * 3 + 2] = triangulated_result[2];
                 if (is_valid) {
                     triangulated_points_valid_counts[candidate_index] += size_t(1);
                 }
@@ -256,20 +247,13 @@ namespace estimation::pose {
         for (int row = 0; row < 3; ++row) {
             translation[row] = candidate_translations[best_candidate_index][row];
         }
-        for (size_t point_index = 0; point_index < point_count; ++point_index) {
-            triangulated_points[point_index * 3 + 0] = triangulated_points_set[best_candidate_index][point_index * 3 + 0];
-            triangulated_points[point_index * 3 + 1] = triangulated_points_set[best_candidate_index][point_index * 3 + 1];
-            triangulated_points[point_index * 3 + 2] = triangulated_points_set[best_candidate_index][point_index * 3 + 2];
+        const type* const best_points = triangulated_points_set.data() + (static_cast<size_t>(best_candidate_index) * point_count * 3);
+        for (size_t point_index = 0; point_index < point_count * 3; ++point_index) {
+            triangulated_points[point_index] = best_points[point_index];
         }
         if (support_count != nullptr) {
             *support_count = best_count;
         }
-
-        for (int candidate_index = 0; candidate_index < candidate_count; ++candidate_index) {
-            delete[] triangulated_points_set[candidate_index];
-        }
-        delete[] triangulated_points_set;
-        delete[] triangulated_points_valid_counts;
 
         return success;
     }

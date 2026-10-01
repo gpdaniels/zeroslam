@@ -25,7 +25,7 @@ namespace {
 }
 
 namespace estimation::robust::evaluate {
-    // The cost is the median squared residual; inliers are within a robust standard deviation band derived from it, so no threshold is needed.
+    // The cost is the median squared residual, a NaN residual counting as infinite; inliers are within a robust standard deviation band derived from it, so no threshold is needed; the inlier buffer doubles as the working space, so nothing is allocated.
     class least_median_of_squares final
         : public evaluator {
     private:
@@ -41,9 +41,6 @@ namespace estimation::robust::evaluate {
             size_t* const __restrict inliers,
             size_t& inliers_size
         ) const override final;
-
-    private:
-        static float nth_element(float* const __restrict data, const size_t data_size, const size_t n);
     };
 }
 
