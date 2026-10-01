@@ -29,6 +29,16 @@ namespace image {
             unsigned char* __restrict const target_data
         );
 
+        // The 5x5 blur at the even rows and columns only, a (source_width / 2) by (source_height / 2) target equal to gaussian_5x5 then keeping every second row and column.
+        static void gaussian_5x5_decimate(
+            const unsigned char* __restrict const source_data,
+            const int source_width,
+            const int source_height,
+            const int source_stride,
+            unsigned char* __restrict const target_data,
+            const int target_stride
+        );
+
         static void gaussian_7x7(
             const unsigned char* __restrict const source_data,
             const int source_width,

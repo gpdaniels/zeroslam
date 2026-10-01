@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "core/cpu.hpp"
 #include "core/timestamp.hpp"
 #include "image/image.hpp"
+#include "image/resize.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -39,15 +40,158 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace image {
     void gaussian_5x5_cpu(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data);
+    void gaussian_5x5_decimate_cpu(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data, const int target_stride);
     void gaussian_7x7_cpu(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data);
 #if defined(ZEROSLAM_SIMD_AVX2)
     void gaussian_5x5_avx2(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data);
+    void gaussian_5x5_decimate_avx2(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data, const int target_stride);
     void gaussian_7x7_avx2(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data);
 #endif
 #if defined(ZEROSLAM_SIMD_NEON)
     void gaussian_5x5_neon(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data);
+    void gaussian_5x5_decimate_neon(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data, const int target_stride);
     void gaussian_7x7_neon(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data);
 #endif
+}
+
+using blur_function = void (*)(const unsigned char* __restrict const, const int, const int, const int, unsigned char* __restrict const);
+using decimate_function = void (*)(const unsigned char* __restrict const, const int, const int, const int, unsigned char* __restrict const, const int);
+
+struct blur_tier final {
+    const char* name;
+    blur_function gaussian_5x5;
+    blur_function gaussian_7x7;
+    decimate_function gaussian_5x5_decimate;
+};
+
+static std::vector<blur_tier> available_tiers() {
+    std::vector<blur_tier> tiers;
+    tiers.push_back({ "cpu", &image::gaussian_5x5_cpu, &image::gaussian_7x7_cpu, &image::gaussian_5x5_decimate_cpu });
+    tiers.push_back({ "dispatched", &image::blur::gaussian_5x5, &image::blur::gaussian_7x7, &image::blur::gaussian_5x5_decimate });
+#if defined(ZEROSLAM_SIMD_AVX2)
+    if (core::cpu::has_avx2()) {
+        tiers.push_back({ "avx2", &image::gaussian_5x5_avx2, &image::gaussian_7x7_avx2, &image::gaussian_5x5_decimate_avx2 });
+    }
+#endif
+#if defined(ZEROSLAM_SIMD_NEON)
+    if (core::cpu::has_neon()) {
+        tiers.push_back({ "neon", &image::gaussian_5x5_neon, &image::gaussian_7x7_neon, &image::gaussian_5x5_decimate_neon });
+    }
+#endif
+    return tiers;
+}
+
+static int reflect_index(int index, const int size) {
+    if (size == 1) {
+        return 0;
+    }
+    while ((index < 0) || (index >= size)) {
+        if (index < 0) {
+            index = -index;
+        }
+        if (index >= size) {
+            index = (2 * size) - 2 - index;
+        }
+    }
+    return index;
+}
+
+// The blur from its definition, the outer product of the binomial taps at every pixel with the edges reflected, the target rows stride apart like the source.
+static void reference_blur(const int kernel_size, const unsigned char* const data, const int width, const int height, const int stride, unsigned char* const blurred) {
+    const int taps_5x5[5] = { 1, 4, 6, 4, 1 };
+    const int taps_7x7[7] = { 1, 6, 15, 20, 15, 6, 1 };
+    const int* const taps = (kernel_size == 5) ? &taps_5x5[0] : &taps_7x7[0];
+    const int shift = (kernel_size == 5) ? 8 : 12;
+    const int radius = kernel_size / 2;
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int sum = 0;
+            for (int i = 0; i < kernel_size; ++i) {
+                for (int j = 0; j < kernel_size; ++j) {
+                    sum += taps[i] * taps[j] * data[(reflect_index(y + i - radius, height) * stride) + reflect_index(x + j - radius, width)];
+                }
+            }
+            blurred[(y * stride) + x] = static_cast<unsigned char>((sum + (1 << (shift - 1))) >> shift);
+        }
+    }
+}
+
+static unsigned char next_random_byte(unsigned int& state) {
+    state = (state * 1664525u) + 1013904223u;
+    return static_cast<unsigned char>(state >> 24);
+}
+
+// Every tier's blurs against the definition, and the decimating blur against the blur then resize::decimate, the padding past each row left alone.
+static void require_matches_reference(const std::vector<blur_tier>& tiers, const int width, const int height, const int padding, unsigned int& state) {
+    constexpr static const unsigned char untouched = 0x5A;
+    const int stride = width + padding;
+    const size_t size = static_cast<size_t>(stride) * static_cast<size_t>(height);
+    std::vector<unsigned char> data(size);
+    for (unsigned char& value : data) {
+        value = next_random_byte(state);
+    }
+    for (const int kernel_size : { 5, 7 }) {
+        std::vector<unsigned char> expected(size, untouched);
+        reference_blur(kernel_size, data.data(), width, height, stride, expected.data());
+        for (const blur_tier& tier : tiers) {
+            std::vector<unsigned char> blurred(size, untouched);
+            ((kernel_size == 5) ? tier.gaussian_5x5 : tier.gaussian_7x7)(data.data(), width, height, stride, blurred.data());
+            REQUIRE(blurred == expected);
+        }
+    }
+    std::vector<unsigned char> blurred(size, untouched);
+    reference_blur(5, data.data(), width, height, stride, blurred.data());
+    std::vector<unsigned char> packed(static_cast<size_t>(width) * static_cast<size_t>(height));
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            packed[(static_cast<size_t>(y) * static_cast<size_t>(width)) + static_cast<size_t>(x)] = blurred[(static_cast<size_t>(y) * static_cast<size_t>(stride)) + static_cast<size_t>(x)];
+        }
+    }
+    const int target_width = width / 2;
+    const int target_height = height / 2;
+    const int target_stride = target_width + padding;
+    std::vector<unsigned char> decimated(static_cast<size_t>(target_width) * static_cast<size_t>(target_height));
+    image::resize::decimate(packed.data(), static_cast<size_t>(width), static_cast<size_t>(height), static_cast<size_t>(target_width), static_cast<size_t>(target_height), decimated.data());
+    std::vector<unsigned char> expected(static_cast<size_t>(target_stride) * static_cast<size_t>(target_height), untouched);
+    for (int y = 0; y < target_height; ++y) {
+        for (int x = 0; x < target_width; ++x) {
+            expected[(static_cast<size_t>(y) * static_cast<size_t>(target_stride)) + static_cast<size_t>(x)] = decimated[(static_cast<size_t>(y) * static_cast<size_t>(target_width)) + static_cast<size_t>(x)];
+        }
+    }
+    for (const blur_tier& tier : tiers) {
+        std::vector<unsigned char> target(expected.size(), untouched);
+        tier.gaussian_5x5_decimate(data.data(), width, height, stride, target.data(), target_stride);
+        REQUIRE(target == expected);
+    }
+}
+
+// The pyramid's step, one blur then decimate against the decimating blur.
+static void benchmark_decimate(const blur_tier& tier, const int width, const int height) {
+    const size_t size = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const size_t target_size = static_cast<size_t>(width / 2) * static_cast<size_t>(height / 2);
+    std::vector<unsigned char> data(size);
+    unsigned int state = 17u;
+    for (unsigned char& value : data) {
+        value = next_random_byte(state);
+    }
+    std::vector<unsigned char> blurred(size);
+    std::vector<unsigned char> separate(target_size);
+    std::vector<unsigned char> combined(target_size);
+    constexpr static const int iteration_count = 50;
+    const long long int start_separate = core::timestamp();
+    for (int i = 0; i < iteration_count; ++i) {
+        tier.gaussian_5x5(data.data(), width, height, width, blurred.data());
+        image::resize::decimate(blurred.data(), static_cast<size_t>(width), static_cast<size_t>(height), static_cast<size_t>(width / 2), static_cast<size_t>(height / 2), separate.data());
+    }
+    const long long int start_combined = core::timestamp();
+    for (int i = 0; i < iteration_count; ++i) {
+        tier.gaussian_5x5_decimate(data.data(), width, height, width, combined.data(), width / 2);
+    }
+    const long long int end_combined = core::timestamp();
+    REQUIRE(separate == combined);
+    const double time_separate = static_cast<double>(start_combined - start_separate) * 1.0e-3 / iteration_count;
+    const double time_combined = static_cast<double>(end_combined - start_combined) * 1.0e-3 / iteration_count;
+    std::printf("gaussian_5x5_decimate %s benchmark %dx%d: blur then decimate %.1f us, decimating blur %.1f us, speedup %.2fx\n", tier.name, width, height, time_separate, time_combined, (time_combined > 0.0) ? (time_separate / time_combined) : 0.0);
 }
 
 static void fill_test_pattern(std::vector<unsigned char>& data, const size_t width, const size_t height) {
@@ -262,6 +406,48 @@ int main(int argc, char* argv[]) {
         image::blur::gaussian_7x7(&data[0][0], width, height, width, &blurred[0][0]);
         for (int i = 0; i < height * width; ++i) {
             REQUIRE((&blurred[0][0])[i] == (&blurred_cpu[0][0])[i]);
+        }
+    }
+
+    {
+        const std::vector<blur_tier> tiers = available_tiers();
+        unsigned int state = 2463534242u;
+        for (int width = 1; width <= 70; ++width) {
+            for (int height = 1; height <= 9; ++height) {
+                for (const int padding : { 0, 1, 13 }) {
+                    require_matches_reference(tiers, width, height, padding, state);
+                }
+            }
+        }
+        for (const int width : { 1023, 1024, 1025, 1026, 1031, 2048, 2049, 2050, 2100 }) {
+            for (const int height : { 1, 2, 5, 6 }) {
+                for (const int padding : { 0, 7 }) {
+                    require_matches_reference(tiers, width, height, padding, state);
+                }
+            }
+        }
+        for (const int size : { 0, -3 }) {
+            unsigned char data[4] = { 1, 2, 3, 4 };
+            unsigned char target[4] = { 9, 9, 9, 9 };
+            for (const blur_tier& tier : tiers) {
+                tier.gaussian_5x5(&data[0], size, 2, 2, &target[0]);
+                tier.gaussian_7x7(&data[0], 2, size, 2, &target[0]);
+                tier.gaussian_5x5_decimate(&data[0], size, 2, 2, &target[0], 1);
+                tier.gaussian_5x5_decimate(&data[0], 1, 4, 1, &target[0], 1);
+                tier.gaussian_5x5_decimate(&data[0], 4, 1, 4, &target[0], 2);
+            }
+            for (int i = 0; i < 4; ++i) {
+                REQUIRE(target[i] == 9);
+            }
+        }
+        for (const blur_tier& tier : tiers) {
+            if (tier.name[0] == 'd') {
+                continue;
+            }
+            benchmark_decimate(tier, 640, 480);
+            benchmark_decimate(tier, 752, 480);
+            benchmark_decimate(tier, 1241, 376);
+            benchmark_decimate(tier, 739, 458);
         }
     }
 

@@ -114,6 +114,45 @@ namespace {
         }
         return angle;
     }
+
+    // The correlation sum over m of first[m + lag] second[m], for lags -9 to 9.
+    std::vector<double> correlate(const double* const first, const double* const second) {
+        constexpr static const int length = image::quaternion_wavelet::filter_length;
+        std::vector<double> result((2 * length) - 1, 0.0);
+        for (int lag = 1 - length; lag < length; ++lag) {
+            for (int tap = 0; tap < length; ++tap) {
+                if (((tap + lag) >= 0) && ((tap + lag) < length)) {
+                    result[static_cast<size_t>(lag + length - 1)] += first[tap + lag] * second[tap];
+                }
+            }
+        }
+        return result;
+    }
+
+    // A sequence convolved with a filter upsampled by spread, both centred on their middle element, as the result is.
+    std::vector<double> convolve(const std::vector<double>& sequence, const std::vector<double>& filter, const size_t spread) {
+        std::vector<double> result(sequence.size() + ((filter.size() - 1) * spread), 0.0);
+        for (size_t index = 0; index < sequence.size(); ++index) {
+            for (size_t tap = 0; tap < filter.size(); ++tap) {
+                result[index + (tap * spread)] += sequence[index] * filter[tap];
+            }
+        }
+        return result;
+    }
+
+    // The exact centre of the analytic pair F_a + i F_b from its cross correlation and two autocorrelations, all centred on lag zero.
+    // Over (-pi, pi) the first moment of |F_a + i F_b|^2 is 4 pi times the sum over lags d != 0 of cross[d] (-1)^d / d, and its power 2 pi (|f_a|^2 + |f_b|^2).
+    double exact_centre(const std::vector<double>& cross, const std::vector<double>& first, const std::vector<double>& second, const size_t level) {
+        const long long int middle = static_cast<long long int>(cross.size() / 2);
+        double sum = 0.0;
+        for (size_t index = 0; index < cross.size(); ++index) {
+            const long long int lag = static_cast<long long int>(index) - middle;
+            if (lag != 0) {
+                sum += cross[index] * (((lag % 2) == 0) ? 1.0 : -1.0) / static_cast<double>(lag);
+            }
+        }
+        return (sum * static_cast<double>(1u << level)) / (pi * (first[first.size() / 2] + second[second.size() / 2]));
+    }
 }
 
 int main() {
@@ -167,6 +206,36 @@ int main() {
             REQUIRE(scaling[level - 1] < 0.35);
         }
         REQUIRE(wavelet[0] < 0.55);
+    }
+
+    {
+        // Every level against the exact first moments, the limit of an ever finer grid, from the correlations of the two trees' cascaded filters.
+        double wavelet[image::quaternion_wavelet::maximum_levels];
+        double scaling[image::quaternion_wavelet::maximum_levels];
+        image::quaternion_wavelet::spectral_centres(image::quaternion_wavelet::maximum_levels, &wavelet[0], &scaling[0]);
+        std::vector<double> scaling_cross(1, 1.0);
+        std::vector<double> scaling_first(1, 1.0);
+        std::vector<double> scaling_second(1, 1.0);
+        for (size_t level = 1; level <= image::quaternion_wavelet::maximum_levels; ++level) {
+            const double* const lowpass_a = (level == 1) ? image::quaternion_wavelet::first_lowpass_a() : image::quaternion_wavelet::later_lowpass_a();
+            const double* const lowpass_b = (level == 1) ? image::quaternion_wavelet::first_lowpass_b() : image::quaternion_wavelet::later_lowpass_b();
+            double highpass_a[image::quaternion_wavelet::filter_length];
+            double highpass_b[image::quaternion_wavelet::filter_length];
+            image::quaternion_wavelet::quadrature_mirror(lowpass_a, &highpass_a[0]);
+            image::quaternion_wavelet::quadrature_mirror(lowpass_b, &highpass_b[0]);
+            const size_t spread = static_cast<size_t>(1) << (level - 1);
+            const double wavelet_exact = exact_centre(convolve(scaling_cross, correlate(&highpass_a[0], &highpass_b[0]), spread), convolve(scaling_first, correlate(&highpass_a[0], &highpass_a[0]), spread), convolve(scaling_second, correlate(&highpass_b[0], &highpass_b[0]), spread), level);
+            scaling_cross = convolve(scaling_cross, correlate(lowpass_a, lowpass_b), spread);
+            scaling_first = convolve(scaling_first, correlate(lowpass_a, lowpass_a), spread);
+            scaling_second = convolve(scaling_second, correlate(lowpass_b, lowpass_b), spread);
+            const double scaling_exact = exact_centre(scaling_cross, scaling_first, scaling_second, level);
+            // Only the first level has energy at the Nyquist frequency, where the grid's trapezoid rule leaves an error of order 1 / samples^2.
+            const double tolerance = (level == 1) ? 1e-5 : 1e-10;
+            REQUIRE(std::abs(wavelet[level - 1] - wavelet_exact) < (tolerance * wavelet_exact));
+            REQUIRE(std::abs(scaling[level - 1] - scaling_exact) < (tolerance * scaling_exact));
+            REQUIRE(wavelet_exact > 0.4);
+            REQUIRE(scaling_exact > 0.2);
+        }
     }
 
     const texture_field field(7);

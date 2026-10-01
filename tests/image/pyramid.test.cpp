@@ -47,6 +47,21 @@ static inline image::image make_textured(const size_t rows, const size_t cols) {
     return textured;
 }
 
+// A bright paraboloid centred on level 0 pixel (centre_x, centre_y), symmetric about it, so every level keeps its peak on the pixel the halving maps the centre to.
+static inline image::image make_dot(const size_t rows, const size_t cols, const size_t centre_x, const size_t centre_y, const size_t radius) {
+    image::image dot(rows, cols);
+    const long long int limit = static_cast<long long int>(radius * radius);
+    for (size_t i = 0; i < rows; ++i) {
+        for (size_t j = 0; j < cols; ++j) {
+            const long long int offset_x = static_cast<long long int>(j) - static_cast<long long int>(centre_x);
+            const long long int offset_y = static_cast<long long int>(i) - static_cast<long long int>(centre_y);
+            const long long int squared = (offset_x * offset_x) + (offset_y * offset_y);
+            dot.get_data()[i * cols + j] = static_cast<unsigned char>((squared < limit) ? ((250 * (limit - squared)) / limit) : 0);
+        }
+    }
+    return dot;
+}
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
@@ -59,6 +74,27 @@ int main(int argc, char* argv[]) {
         REQUIRE(image::pyramid::automatic_levels(100, 100) == 2);
         REQUIRE(image::pyramid::automatic_levels(8, 8) == 1);
         REQUIRE(image::pyramid::automatic_levels(1, 1) == 1);
+        REQUIRE(image::pyramid::automatic_levels(0, 0) == 1);
+        REQUIRE(image::pyramid::automatic_levels(0, 640) == 1);
+        REQUIRE(image::pyramid::automatic_levels(480, 0) == 1);
+        REQUIRE(image::pyramid::automatic_levels(31, 1000) == 1);
+        REQUIRE(image::pyramid::automatic_levels(32, 32) == 1);
+        REQUIRE(image::pyramid::automatic_levels(63, 1000) == 1);
+        REQUIRE(image::pyramid::automatic_levels(64, 64) == 2);
+        for (size_t smallest = 0; smallest < 4096; ++smallest) {
+            size_t expected = 1;
+            while ((smallest >> (expected + 5)) > 0) {
+                ++expected;
+            }
+            REQUIRE(image::pyramid::automatic_levels(smallest, 4096) == expected);
+        }
+    }
+
+    {
+        const image::pyramid from_empty((image::image()));
+        REQUIRE(from_empty.size() == 1);
+        REQUIRE(from_empty[0].get_cols() == 0);
+        REQUIRE(from_empty.scale_x(0) == 1.0f);
     }
 
     {
@@ -131,6 +167,49 @@ int main(int argc, char* argv[]) {
         REQUIRE(built.size() == 2);
         REQUIRE(built[1].get_cols() == 100);
         REQUIRE(built[1].get_rows() == 62);
+    }
+
+    {
+        // Sizes that do not divide by 2^level: each level still halves the one above, so the scale is 2^level and level pixel (i, j) is level 0 pixel (i * 2^level, j * 2^level) up to the far edges.
+        const size_t sizes[4][3] = { { 739, 458, 4 }, { 572, 758, 5 }, { 1241, 376, 4 }, { 1242, 375, 4 } };
+        for (const auto& size : sizes) {
+            const size_t cols = size[0];
+            const size_t rows = size[1];
+            const image::pyramid plain(make_textured(rows, cols));
+            REQUIRE(plain.size() == size[2]);
+            for (size_t level = 1; level < plain.size(); ++level) {
+                REQUIRE(plain[level].get_cols() == plain[level - 1].get_cols() / 2);
+                REQUIRE(plain[level].get_rows() == plain[level - 1].get_rows() / 2);
+                REQUIRE(plain.scale_x(level) == static_cast<float>(1u << level));
+                REQUIRE(plain.scale_y(level) == static_cast<float>(1u << level));
+                const size_t level_cols = plain[level].get_cols();
+                const size_t level_rows = plain[level].get_rows();
+                const size_t positions[2][2] = { { level_cols - 4, level_rows - 4 }, { level_cols / 3, (2 * level_rows) / 3 } };
+                for (const auto& position : positions) {
+                    const size_t centre_x = position[0] << level;
+                    const size_t centre_y = position[1] << level;
+                    const image::pyramid dotted(make_dot(rows, cols, centre_x, centre_y, static_cast<size_t>(2) << level));
+                    REQUIRE(dotted.size() == plain.size());
+                    const unsigned char* const data = dotted[level].get_data();
+                    size_t brightest = 0;
+                    size_t ties = 0;
+                    for (size_t index = 0; index < level_cols * level_rows; ++index) {
+                        if (data[index] > data[brightest]) {
+                            brightest = index;
+                            ties = 1;
+                        }
+                        else if (data[index] == data[brightest]) {
+                            ++ties;
+                        }
+                    }
+                    REQUIRE(ties == 1);
+                    REQUIRE(brightest % level_cols == position[0]);
+                    REQUIRE(brightest / level_cols == position[1]);
+                    REQUIRE(static_cast<float>(brightest % level_cols) * dotted.scale_x(level) == static_cast<float>(centre_x));
+                    REQUIRE(static_cast<float>(brightest / level_cols) * dotted.scale_y(level) == static_cast<float>(centre_y));
+                }
+            }
+        }
     }
 
     return EXIT_SUCCESS;

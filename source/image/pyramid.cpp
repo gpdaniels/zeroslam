@@ -18,7 +18,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "core/assert.hpp"
 #include "image/blur.hpp"
-#include "image/resize.hpp"
 #include "math/math.hpp"
 
 namespace image {
@@ -36,27 +35,29 @@ namespace image {
         this->images.push_back(base);
         this->scales_x.push_back(1.0f);
         this->scales_y.push_back(1.0f);
-        double inverse_scale = 1.0;
         for (size_t level = 1; level < levels; ++level) {
-            inverse_scale *= 0.5;
-            const size_t target_cols = static_cast<size_t>(static_cast<double>(base.get_cols()) * inverse_scale);
-            const size_t target_rows = static_cast<size_t>(static_cast<double>(base.get_rows()) * inverse_scale);
+            // Each level keeps the even rows and columns of the blurred level above, so its pixel i is level 0 pixel i * 2^level whatever the size.
+            const image& previous = this->images.back();
+            const size_t target_cols = previous.get_cols() / 2;
+            const size_t target_rows = previous.get_rows() / 2;
             if ((target_cols < pyramid::minimum_dimension) || (target_rows < pyramid::minimum_dimension)) {
                 break;
             }
-            const image& previous = this->images.back();
-            image blurred(previous.get_rows(), previous.get_cols());
-            blur::gaussian_5x5(previous.get_data(), static_cast<int>(previous.get_cols()), static_cast<int>(previous.get_rows()), static_cast<int>(previous.get_cols()), blurred.get_data());
             image next(target_rows, target_cols);
-            resize::decimate(blurred.get_data(), blurred.get_cols(), blurred.get_rows(), next.get_cols(), next.get_rows(), next.get_data());
+            blur::gaussian_5x5_decimate(previous.get_data(), static_cast<int>(previous.get_cols()), static_cast<int>(previous.get_rows()), static_cast<int>(previous.get_cols()), next.get_data(), static_cast<int>(target_cols));
             this->images.push_back(static_cast<image&&>(next));
-            this->scales_x.push_back(static_cast<float>(static_cast<double>(base.get_cols()) / static_cast<double>(target_cols)));
-            this->scales_y.push_back(static_cast<float>(static_cast<double>(base.get_rows()) / static_cast<double>(target_rows)));
+            const float scale = static_cast<float>(1u << level);
+            this->scales_x.push_back(scale);
+            this->scales_y.push_back(scale);
         }
     }
 
     size_t pyramid::automatic_levels(const size_t cols, const size_t rows) {
-        const int levels = static_cast<int>(math::floor(math::log(static_cast<double>(math::min(cols, rows))) / math::log(2.0))) - 4;
+        const size_t smallest = math::min(cols, rows);
+        if (smallest < pyramid::minimum_dimension) {
+            return 1;
+        }
+        const int levels = static_cast<int>(math::floor(math::log(static_cast<double>(smallest)) / math::log(2.0))) - 4;
         return static_cast<size_t>(math::max(1, levels));
     }
 

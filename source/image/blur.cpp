@@ -21,13 +21,16 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 namespace image {
 #if defined(ZEROSLAM_SIMD_NEON)
     void gaussian_5x5_neon(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data);
+    void gaussian_5x5_decimate_neon(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data, const int target_stride);
     void gaussian_7x7_neon(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data);
 #endif
 #if defined(ZEROSLAM_SIMD_AVX2)
     void gaussian_5x5_avx2(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data);
+    void gaussian_5x5_decimate_avx2(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data, const int target_stride);
     void gaussian_7x7_avx2(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data);
 #endif
     void gaussian_5x5_cpu(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data);
+    void gaussian_5x5_decimate_cpu(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data, const int target_stride);
     void gaussian_7x7_cpu(const unsigned char* __restrict const source_data, const int source_width, const int source_height, const int source_stride, unsigned char* __restrict const target_data);
 
     void blur::gaussian_5x5(
@@ -50,6 +53,29 @@ namespace image {
         }
 #endif
         gaussian_5x5_cpu(source_data, source_width, source_height, source_stride, target_data);
+    }
+
+    void blur::gaussian_5x5_decimate(
+        const unsigned char* __restrict const source_data,
+        const int source_width,
+        const int source_height,
+        const int source_stride,
+        unsigned char* __restrict const target_data,
+        const int target_stride
+    ) {
+#if defined(ZEROSLAM_SIMD_NEON)
+        if (core::cpu::has_neon()) {
+            gaussian_5x5_decimate_neon(source_data, source_width, source_height, source_stride, target_data, target_stride);
+            return;
+        }
+#endif
+#if defined(ZEROSLAM_SIMD_AVX2)
+        if (core::cpu::has_avx2()) {
+            gaussian_5x5_decimate_avx2(source_data, source_width, source_height, source_stride, target_data, target_stride);
+            return;
+        }
+#endif
+        gaussian_5x5_decimate_cpu(source_data, source_width, source_height, source_stride, target_data, target_stride);
     }
 
     void blur::gaussian_7x7(
