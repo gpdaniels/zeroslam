@@ -138,7 +138,8 @@ namespace match::matcher {
         };
 
     public:
-        // Match every left keypoint against the right keypoints its epipolar line passes near; scoring and tie breaks are those of the brute force matcher.
+        // Match every left keypoint against the right keypoints its epipolar line passes near; scoring, tie breaks and what is reported are
+        // those of the brute force matcher: the matches_count best candidates, all of them found once the best is under the threshold.
         static size_t find_matches(
             const feature::point* __restrict const lhs_points,
             const feature::descriptor::binary<256>* __restrict const lhs_descriptors,

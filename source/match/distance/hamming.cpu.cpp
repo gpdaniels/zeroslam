@@ -14,8 +14,12 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "feature/descriptor/binary.hpp"
+
 namespace match::distance {
     unsigned int distance_cpu(const unsigned char* __restrict const data_lhs, const unsigned char* __restrict const data_rhs);
+    void distances_cpu(const feature::descriptor::binary<256>& query, const feature::descriptor::binary<256>* __restrict const descriptors, const size_t descriptors_size, unsigned int* __restrict const results);
+    void distances_indexed_cpu(const feature::descriptor::binary<256>& query, const feature::descriptor::binary<256>* __restrict const descriptors, const size_t* __restrict const indices, const size_t indices_size, unsigned int* __restrict const results);
 
     namespace {
         unsigned int distance_64(const unsigned char* __restrict const data_lhs, const unsigned char* __restrict const data_rhs) {
@@ -40,5 +44,17 @@ namespace match::distance {
 
     unsigned int distance_cpu(const unsigned char* __restrict const data_lhs, const unsigned char* __restrict const data_rhs) {
         return (distance_64(&data_lhs[0], &data_rhs[0]) + distance_64(&data_lhs[8], &data_rhs[8])) + (distance_64(&data_lhs[16], &data_rhs[16]) + distance_64(&data_lhs[24], &data_rhs[24]));
+    }
+
+    void distances_cpu(const feature::descriptor::binary<256>& query, const feature::descriptor::binary<256>* __restrict const descriptors, const size_t descriptors_size, unsigned int* __restrict const results) {
+        for (size_t index = 0; index < descriptors_size; ++index) {
+            results[index] = distance_cpu(query.data, descriptors[index].data);
+        }
+    }
+
+    void distances_indexed_cpu(const feature::descriptor::binary<256>& query, const feature::descriptor::binary<256>* __restrict const descriptors, const size_t* __restrict const indices, const size_t indices_size, unsigned int* __restrict const results) {
+        for (size_t index = 0; index < indices_size; ++index) {
+            results[index] = distance_cpu(query.data, descriptors[indices[index]].data);
+        }
     }
 }

@@ -150,5 +150,40 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    {
+        // A leaf of one repeated descriptor cannot split, it takes more copies without retrying, and splits once others arrive.
+        match::index::hbst tree;
+        core::random_pcg random;
+        const feature::descriptor::binary<256> blank = random_descriptor(random);
+        const std::vector<feature::descriptor::binary<256>> copies(5000, blank);
+        tree.insert(1, copies.data(), copies.size());
+        tree.insert(3, copies.data(), copies.size());
+        REQUIRE(tree.size() == 10000);
+        std::vector<match::index::hbst::hit> hits;
+        tree.search(blank, 1, hits);
+        REQUIRE(hits.size() == 2);
+        REQUIRE((hits[0].keyframe_id == 1) && (hits[0].descriptor_index == 0) && (hits[0].distance == 0));
+        REQUIRE((hits[1].keyframe_id == 3) && (hits[1].descriptor_index == 0) && (hits[1].distance == 0));
+        const std::vector<feature::descriptor::binary<256>> others = random_descriptors(random, 400);
+        tree.insert(2, others.data(), others.size());
+        REQUIRE(tree.size() == 10400);
+        for (size_t i = 0; i < others.size(); ++i) {
+            tree.search(others[i], 1, hits);
+            REQUIRE((hits.size() == 1) && (hits[0].keyframe_id == 2) && (hits[0].descriptor_index == i));
+            const std::vector<match::index::hbst::hit> returned = tree.search(others[i], 1);
+            REQUIRE((returned.size() == 1) && (returned[0].keyframe_id == 2) && (returned[0].descriptor_index == i));
+        }
+        tree.search(blank, 1, hits);
+        REQUIRE((hits.size() == 2) && (hits[0].keyframe_id == 1) && (hits[1].keyframe_id == 3));
+        tree.remove(1);
+        tree.remove(3);
+        REQUIRE(tree.size() == 400);
+        tree.search(blank, 1, hits);
+        REQUIRE(hits.empty());
+        tree.insert(4, &blank, 1);
+        tree.search(blank, 1, hits);
+        REQUIRE((hits.size() == 1) && (hits[0].keyframe_id == 4));
+    }
+
     return EXIT_SUCCESS;
 }

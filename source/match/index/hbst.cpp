@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "match/index/hbst.hpp"
 
 #include "match/distance/hamming.hpp"
+#include "math/math.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -29,6 +30,17 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 namespace match::index {
+    namespace {
+        bool identical(const feature::descriptor::binary<hbst::descriptor_bits>& lhs, const feature::descriptor::binary<hbst::descriptor_bits>& rhs) {
+            for (size_t byte = 0; byte < feature::descriptor::binary<hbst::descriptor_bits>::size_bytes; ++byte) {
+                if (lhs.data[byte] != rhs.data[byte]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
     hbst::hbst()
         : nodes(1)
         , entry_count(0) {
@@ -59,46 +71,74 @@ namespace match::index {
 
     void hbst::insert(const entry& stored) {
         const size_t leaf_index = this->find_leaf(stored.descriptor);
-        this->nodes[leaf_index].entries.push_back(stored);
+        node& leaf = this->nodes[leaf_index];
+        if (leaf.unsplittable && !leaf.descriptors.empty() && !identical(leaf.descriptors[0], stored.descriptor)) {
+            leaf.unsplittable = false;
+        }
+        leaf.descriptors.push_back(stored.descriptor);
+        leaf.keyframe_ids.push_back(stored.keyframe_id);
+        leaf.descriptor_indices.push_back(stored.descriptor_index);
         ++this->entry_count;
-        if (this->nodes[leaf_index].entries.size() > hbst::leaf_capacity) {
+        if (!leaf.unsplittable && (leaf.descriptors.size() > hbst::leaf_capacity)) {
             this->split(leaf_index);
         }
     }
 
     void hbst::remove(const int keyframe_id) {
-        const auto belongs_to_keyframe = [keyframe_id](const entry& stored) {
-            return stored.keyframe_id == keyframe_id;
-        };
         for (node& current : this->nodes) {
-            const size_t before = current.entries.size();
-            current.entries.erase(std::remove_if(current.entries.begin(), current.entries.end(), belongs_to_keyframe), current.entries.end());
-            this->entry_count -= before - current.entries.size();
+            size_t kept = 0;
+            for (size_t i = 0; i < current.keyframe_ids.size(); ++i) {
+                if (current.keyframe_ids[i] == keyframe_id) {
+                    continue;
+                }
+                current.descriptors[kept] = current.descriptors[i];
+                current.keyframe_ids[kept] = current.keyframe_ids[i];
+                current.descriptor_indices[kept] = current.descriptor_indices[i];
+                ++kept;
+            }
+            this->entry_count -= current.keyframe_ids.size() - kept;
+            current.descriptors.resize(kept);
+            current.keyframe_ids.resize(kept);
+            current.descriptor_indices.resize(kept);
         }
     }
 
     std::vector<hbst::hit> hbst::search(const feature::descriptor::binary<descriptor_bits>& query, const unsigned int max_distance) const {
         std::vector<hit> hits;
+        this->search(query, max_distance, hits);
+        return hits;
+    }
+
+    void hbst::search(const feature::descriptor::binary<descriptor_bits>& query, const unsigned int max_distance, std::vector<hit>& hits) const {
+        hits.clear();
         const node& leaf = this->nodes[this->find_leaf(query)];
-        for (const entry& stored : leaf.entries) {
-            const unsigned int distance = distance::hamming::distance(query, stored.descriptor);
-            if (distance >= max_distance) {
-                continue;
-            }
-            bool merged = false;
-            for (hit& existing : hits) {
-                if (existing.keyframe_id != stored.keyframe_id) {
+        constexpr static const size_t block_size = 128;
+        unsigned int distances[block_size];
+        for (size_t block_begin = 0; block_begin < leaf.descriptors.size(); block_begin += block_size) {
+            const size_t block_count = math::min(block_size, leaf.descriptors.size() - block_begin);
+            distance::hamming::distances(query, &leaf.descriptors[block_begin], block_count, &distances[0]);
+            for (size_t block_index = 0; block_index < block_count; ++block_index) {
+                const unsigned int found = distances[block_index];
+                if (found >= max_distance) {
                     continue;
                 }
-                if ((distance < existing.distance) || ((distance == existing.distance) && (stored.descriptor_index < existing.descriptor_index))) {
-                    existing.descriptor_index = stored.descriptor_index;
-                    existing.distance = distance;
+                const int keyframe_id = leaf.keyframe_ids[block_begin + block_index];
+                const size_t descriptor_index = leaf.descriptor_indices[block_begin + block_index];
+                bool merged = false;
+                for (hit& existing : hits) {
+                    if (existing.keyframe_id != keyframe_id) {
+                        continue;
+                    }
+                    if ((found < existing.distance) || ((found == existing.distance) && (descriptor_index < existing.descriptor_index))) {
+                        existing.descriptor_index = descriptor_index;
+                        existing.distance = found;
+                    }
+                    merged = true;
+                    break;
                 }
-                merged = true;
-                break;
-            }
-            if (!merged) {
-                hits.push_back(hit{ stored.keyframe_id, stored.descriptor_index, distance });
+                if (!merged) {
+                    hits.push_back(hit{ keyframe_id, descriptor_index, found });
+                }
             }
         }
         std::sort(hits.begin(), hits.end(), [](const hit& lhs, const hit& rhs) {
@@ -107,7 +147,6 @@ namespace match::index {
             }
             return lhs.keyframe_id < rhs.keyframe_id;
         });
-        return hits;
     }
 
     size_t hbst::find_leaf(const feature::descriptor::binary<descriptor_bits>& descriptor) const {
@@ -119,11 +158,11 @@ namespace match::index {
     }
 
     void hbst::split(const size_t leaf_index) {
-        const size_t count = this->nodes[leaf_index].entries.size();
+        const size_t count = this->nodes[leaf_index].descriptors.size();
         size_t ones[hbst::descriptor_bits] = {};
-        for (const entry& stored : this->nodes[leaf_index].entries) {
+        for (const feature::descriptor::binary<descriptor_bits>& stored : this->nodes[leaf_index].descriptors) {
             for (size_t bit = 0; bit < hbst::descriptor_bits; ++bit) {
-                ones[bit] += hbst::get_bit(stored.descriptor, bit) ? 1u : 0u;
+                ones[bit] += hbst::get_bit(stored, bit) ? 1u : 0u;
             }
         }
         int best_bit = -1;
@@ -136,6 +175,8 @@ namespace match::index {
             }
         }
         if ((best_bit < 0) || (best_imbalance == count)) {
+            // No bit differs between the entries, so they are all one descriptor and no split can separate them.
+            this->nodes[leaf_index].unsplittable = true;
             return;
         }
         this->nodes.push_back(node());
@@ -143,11 +184,18 @@ namespace match::index {
         const size_t child_zero = this->nodes.size() - 2;
         const size_t child_one = this->nodes.size() - 1;
         node& leaf = this->nodes[leaf_index];
-        for (const entry& stored : leaf.entries) {
-            this->nodes[hbst::get_bit(stored.descriptor, static_cast<size_t>(best_bit)) ? child_one : child_zero].entries.push_back(stored);
+        for (size_t i = 0; i < count; ++i) {
+            node& child = this->nodes[hbst::get_bit(leaf.descriptors[i], static_cast<size_t>(best_bit)) ? child_one : child_zero];
+            child.descriptors.push_back(leaf.descriptors[i]);
+            child.keyframe_ids.push_back(leaf.keyframe_ids[i]);
+            child.descriptor_indices.push_back(leaf.descriptor_indices[i]);
         }
-        leaf.entries.clear();
-        leaf.entries.shrink_to_fit();
+        leaf.descriptors.clear();
+        leaf.descriptors.shrink_to_fit();
+        leaf.keyframe_ids.clear();
+        leaf.keyframe_ids.shrink_to_fit();
+        leaf.descriptor_indices.clear();
+        leaf.descriptor_indices.shrink_to_fit();
         leaf.split_bit = best_bit;
         leaf.child[0] = child_zero;
         leaf.child[1] = child_one;

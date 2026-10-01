@@ -14,6 +14,8 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "feature/descriptor/binary.hpp"
+
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
 #endif
@@ -26,23 +28,80 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace match::distance {
     unsigned int distance_avx(const unsigned char* __restrict const data_lhs, const unsigned char* __restrict const data_rhs);
+    void distances_avx(const feature::descriptor::binary<256>& query, const feature::descriptor::binary<256>* __restrict const descriptors, const size_t descriptors_size, unsigned int* __restrict const results);
+    void distances_indexed_avx(const feature::descriptor::binary<256>& query, const feature::descriptor::binary<256>* __restrict const descriptors, const size_t* __restrict const indices, const size_t indices_size, unsigned int* __restrict const results);
+
+    namespace {
+        class contiguous final {
+        public:
+            const feature::descriptor::binary<256>* descriptors;
+
+            const unsigned char* operator()(const size_t index) const {
+                return this->descriptors[index].data;
+            }
+        };
+
+        class indexed final {
+        public:
+            const feature::descriptor::binary<256>* descriptors;
+            const size_t* indices;
+
+            const unsigned char* operator()(const size_t index) const {
+                return this->descriptors[this->indices[index]].data;
+            }
+        };
+
+        __m128i byte_counts(const __m128i value) {
+            const __m128i lookup = _mm_setr_epi8(0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4);
+            const __m128i nibble = _mm_set1_epi8(0x0F);
+            return _mm_add_epi8(_mm_shuffle_epi8(lookup, _mm_and_si128(value, nibble)), _mm_shuffle_epi8(lookup, _mm_and_si128(_mm_srli_epi16(value, 4), nibble)));
+        }
+
+        // Bit counts by nibble lookup, summed over each 64-bit lane, so no 64-bit general purpose register (absent on 32-bit targets) is needed.
+        __m128i lane_counts(const __m128i query_low, const __m128i query_high, const unsigned char* __restrict const data) {
+            const __m128i low = _mm_xor_si128(query_low, _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + 0)));
+            const __m128i high = _mm_xor_si128(query_high, _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + 16)));
+            return _mm_sad_epu8(_mm_add_epi8(byte_counts(low), byte_counts(high)), _mm_setzero_si128());
+        }
+
+        unsigned int total(const __m128i lanes) {
+            return static_cast<unsigned int>(_mm_cvtsi128_si32(_mm_add_epi64(lanes, _mm_unpackhi_epi64(lanes, lanes))));
+        }
+
+        template <typename descriptor_source>
+        void distances_of(const feature::descriptor::binary<256>& query, const descriptor_source& descriptor_of, const size_t count, unsigned int* __restrict const results) {
+            const __m128i query_low = _mm_loadu_si128(reinterpret_cast<const __m128i*>(query.data + 0));
+            const __m128i query_high = _mm_loadu_si128(reinterpret_cast<const __m128i*>(query.data + 16));
+            size_t index = 0;
+            for (; index + 4 <= count; index += 4) {
+                const __m128i lanes_0 = lane_counts(query_low, query_high, descriptor_of(index + 0));
+                const __m128i lanes_1 = lane_counts(query_low, query_high, descriptor_of(index + 1));
+                const __m128i lanes_2 = lane_counts(query_low, query_high, descriptor_of(index + 2));
+                const __m128i lanes_3 = lane_counts(query_low, query_high, descriptor_of(index + 3));
+                // Reduce the four descriptors together, then gather the low half of each 64-bit sum.
+                const __m128i sums_01 = _mm_add_epi64(_mm_unpacklo_epi64(lanes_0, lanes_1), _mm_unpackhi_epi64(lanes_0, lanes_1));
+                const __m128i sums_23 = _mm_add_epi64(_mm_unpacklo_epi64(lanes_2, lanes_3), _mm_unpackhi_epi64(lanes_2, lanes_3));
+                const __m128i sums = _mm_unpacklo_epi64(_mm_shuffle_epi32(sums_01, 0x08), _mm_shuffle_epi32(sums_23, 0x08));
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(results + index), sums);
+            }
+            for (; index < count; ++index) {
+                results[index] = total(lane_counts(query_low, query_high, descriptor_of(index)));
+            }
+        }
+    }
 
     unsigned int distance_avx(
         const unsigned char* __restrict const data_lhs,
         const unsigned char* __restrict const data_rhs
     ) {
-        const __m128i low = _mm_xor_si128(
-            _mm_loadu_si128(reinterpret_cast<const __m128i*>(data_lhs + 0)),
-            _mm_loadu_si128(reinterpret_cast<const __m128i*>(data_rhs + 0))
-        );
-        const __m128i high = _mm_xor_si128(
-            _mm_loadu_si128(reinterpret_cast<const __m128i*>(data_lhs + 16)),
-            _mm_loadu_si128(reinterpret_cast<const __m128i*>(data_rhs + 16))
-        );
-        const long long sum0 = _mm_popcnt_u64(static_cast<unsigned long long>(_mm_extract_epi64(low, 0)));
-        const long long sum1 = _mm_popcnt_u64(static_cast<unsigned long long>(_mm_extract_epi64(low, 1)));
-        const long long sum2 = _mm_popcnt_u64(static_cast<unsigned long long>(_mm_extract_epi64(high, 0)));
-        const long long sum3 = _mm_popcnt_u64(static_cast<unsigned long long>(_mm_extract_epi64(high, 1)));
-        return static_cast<unsigned int>((sum0 + sum1) + (sum2 + sum3));
+        return total(lane_counts(_mm_loadu_si128(reinterpret_cast<const __m128i*>(data_lhs + 0)), _mm_loadu_si128(reinterpret_cast<const __m128i*>(data_lhs + 16)), data_rhs));
+    }
+
+    void distances_avx(const feature::descriptor::binary<256>& query, const feature::descriptor::binary<256>* __restrict const descriptors, const size_t descriptors_size, unsigned int* __restrict const results) {
+        distances_of(query, contiguous{ descriptors }, descriptors_size, results);
+    }
+
+    void distances_indexed_avx(const feature::descriptor::binary<256>& query, const feature::descriptor::binary<256>* __restrict const descriptors, const size_t* __restrict const indices, const size_t indices_size, unsigned int* __restrict const results) {
+        distances_of(query, indexed{ descriptors, indices }, indices_size, results);
     }
 }

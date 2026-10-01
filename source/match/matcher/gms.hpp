@@ -26,6 +26,8 @@ namespace {
 }
 
 namespace match::matcher {
+    // Grid-based motion statistics (Bian et al. 2017): keeps the matches whose grid cell pair is supported by the matches of the
+    // neighbouring cell pairs. Each rotation and scale hypothesis enabled is tried and the one keeping the most matches is used.
     class gms final {
     public:
         struct options final {
@@ -35,9 +37,15 @@ namespace match::matcher {
             int grid_size_minimum = 4;
             float alpha = 6.0f;
             float margin = 0.1f;
+            // Pair the neighbourhoods turned by each multiple of 45 degrees too, for an in-plane rotation between the images.
+            bool rotation = true;
+            // Try the right grid at 1/2, 1/sqrt(2), sqrt(2) and 2 times the left resolution too, for a change of scale between the images.
+            // Off by default: with a few tens of matches the extra hypotheses let some false matches of an unrelated pair through.
+            bool scale = false;
         };
 
     public:
+        // Moves the kept matches to the front, in their original order, and returns how many were kept.
         static size_t filter(
             const feature::point* const lhs_points,
             const float lhs_width,

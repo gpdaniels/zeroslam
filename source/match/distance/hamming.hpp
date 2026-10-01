@@ -21,11 +21,29 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "feature/descriptor/binary.hpp"
 
 namespace match::distance {
+    // The simd tier is chosen once, on first use, and every tier gives the same distances.
     class hamming final {
     public:
         static unsigned int distance(
             const feature::descriptor::binary<256>& lhs,
             const feature::descriptor::binary<256>& rhs
+        );
+
+        // The distance from the query to each of the descriptors, results[i] for descriptors[i].
+        static void distances(
+            const feature::descriptor::binary<256>& query,
+            const feature::descriptor::binary<256>* __restrict const descriptors,
+            const size_t descriptors_size,
+            unsigned int* __restrict const results
+        );
+
+        // The distance from the query to each indexed descriptor, results[i] for descriptors[indices[i]].
+        static void distances(
+            const feature::descriptor::binary<256>& query,
+            const feature::descriptor::binary<256>* __restrict const descriptors,
+            const size_t* __restrict const indices,
+            const size_t indices_size,
+            unsigned int* __restrict const results
         );
     };
 }

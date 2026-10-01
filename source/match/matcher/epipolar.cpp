@@ -16,12 +16,39 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "match/matcher/epipolar.hpp"
 
+#include "core/arena.hpp"
+#include "core/arena_allocator.hpp"
 #include "core/assert.hpp"
 #include "geometry/fundamental.hpp"
 #include "match/distance/hamming.hpp"
 #include "math/math.hpp"
 
 namespace match::matcher {
+    namespace {
+        // The brute force matcher's ordering: ascending, after any equal score so the earlier candidate wins a tie.
+        void insert(pair* const best, const size_t best_size, const size_t rhs_index, const float score) {
+            size_t slot = best_size - 1;
+            while ((slot > 0) && (score < best[slot - 1].score)) {
+                best[slot] = best[slot - 1];
+                --slot;
+            }
+            best[slot].rhs_index = rhs_index;
+            best[slot].score = score;
+        }
+
+        // Nothing unless the best is under the threshold, otherwise every candidate found.
+        size_t reported(const pair* const best, const size_t best_size, const float threshold) {
+            if (!(best[0].score < threshold)) {
+                return 0;
+            }
+            size_t count = 1;
+            while ((count < best_size) && math::isfinite(best[count].score)) {
+                ++count;
+            }
+            return count;
+        }
+    }
+
     double epipolar::reduce_angle(double angle) {
         constexpr static const double pi = math::pi<double>();
         double reduced = math::fmod(angle, pi);
@@ -483,39 +510,30 @@ namespace match::matcher {
         }
         ASSERT(rhs_index.size() == rhs_descriptors_size, "The index must be built over the same right-hand keypoints as these descriptors.");
 
-        std::vector<size_t> candidates(rhs_descriptors_size);
+        core::arena::scope scratch;
+        std::vector<size_t, core::arena_allocator<size_t>> candidates(rhs_descriptors_size);
+        std::vector<unsigned int, core::arena_allocator<unsigned int>> distances(rhs_descriptors_size);
 
         size_t count = 0;
         for (size_t lhs_index = 0; lhs_index < lhs_descriptors_size; ++lhs_index) {
             if (count + matches_count > matches_size) {
                 break;
             }
+            pair* const best = &matches[count];
             for (size_t matches_index = 0; matches_index < matches_count; ++matches_index) {
-                matches[count + matches_index].lhs_index = lhs_index;
-                matches[count + matches_index].score = threshold;
+                best[matches_index] = pair{ lhs_index, 0, math::inf<float>() };
             }
             const size_t candidates_count = rhs_index.query(lhs_points[lhs_index].x, lhs_points[lhs_index].y, candidates.data(), candidates.size());
+            distance::hamming::distances(lhs_descriptors[lhs_index], rhs_descriptors, candidates.data(), candidates_count, distances.data());
+            float worst = math::inf<float>();
             for (size_t candidate_index = 0; candidate_index < candidates_count; ++candidate_index) {
-                const size_t rhs_index_value = candidates[candidate_index];
-                const float score = static_cast<float>(distance::hamming::distance(lhs_descriptors[lhs_index], rhs_descriptors[rhs_index_value]));
-                for (size_t matches_index = 0; matches_index < matches_count; ++matches_index) {
-                    if (score < matches[count + matches_index].score) {
-                        for (size_t shift_index = matches_count - 1; shift_index > matches_index; --shift_index) {
-                            matches[count + shift_index].score = matches[count + shift_index - 1].score;
-                            matches[count + shift_index].rhs_index = matches[count + shift_index - 1].rhs_index;
-                        }
-                        matches[count + matches_index].score = score;
-                        matches[count + matches_index].rhs_index = rhs_index_value;
-                        break;
-                    }
+                const float score = static_cast<float>(distances[candidate_index]);
+                if (score < worst) {
+                    insert(best, matches_count, candidates[candidate_index], score);
+                    worst = best[matches_count - 1].score;
                 }
             }
-            const size_t save_index = count;
-            for (size_t matches_index = 0; matches_index < matches_count; ++matches_index) {
-                if (matches[save_index + matches_index].score < threshold) {
-                    ++count;
-                }
-            }
+            count += reported(best, matches_count, threshold);
         }
         return count;
     }

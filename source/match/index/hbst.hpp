@@ -58,8 +58,12 @@ namespace match::index {
         class node final {
         public:
             int split_bit = -1;
+            // Every descriptor in the leaf is identical, so no bit splits it, until a differing descriptor arrives.
+            bool unsplittable = false;
             size_t child[2] = { 0, 0 };
-            std::vector<entry> entries;
+            std::vector<feature::descriptor::binary<descriptor_bits>> descriptors;
+            std::vector<int> keyframe_ids;
+            std::vector<size_t> descriptor_indices;
         };
 
     private:
@@ -82,7 +86,11 @@ namespace match::index {
 
         void remove(const int keyframe_id);
 
+        // The best entry of each keyframe in the query's leaf under max_distance, by ascending distance then keyframe id.
         std::vector<hit> search(const feature::descriptor::binary<descriptor_bits>& query, const unsigned int max_distance) const;
+
+        // The same hits, replacing the contents of a caller owned vector so its capacity is reused from query to query.
+        void search(const feature::descriptor::binary<descriptor_bits>& query, const unsigned int max_distance, std::vector<hit>& hits) const;
 
     private:
         size_t find_leaf(const feature::descriptor::binary<descriptor_bits>& descriptor) const;

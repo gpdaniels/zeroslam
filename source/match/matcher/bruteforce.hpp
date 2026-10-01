@@ -24,6 +24,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 namespace match::matcher {
     class bruteforce final {
     public:
+        // The matches_count nearest right descriptors of each left descriptor, ascending, a tie going to the lower right index.
+        // A left descriptor is reported only when its best score is under the threshold, and then with every runner up it has (fewer only
+        // when there are fewer right descriptors) whatever their scores, so a caller can ratio test the best against the second.
+        // Each left descriptor needs matches_count free slots, matching stops at the first without room, and the count written is returned.
         static size_t find_matches(
             const feature::descriptor::binary<256>* lhs_descriptors,
             const size_t lhs_descriptors_size,
