@@ -67,6 +67,63 @@ int main(int argc, char* argv[]) {
     }
 
     {
+        // Plateaus of exactly equal values keep one extremum, the last pixel in raster order.
+        const int width = 24;
+        const int height = 16;
+        std::vector<std::int64_t> kappa(static_cast<size_t>(width * height), 0);
+        std::vector<feature::detector::curvature_extrema::extremum> extrema;
+        feature::detector::curvature_extrema::options settings;
+        settings.quantile = 0.0f;
+        settings.subpixel = false;
+        for (int y = 7; y <= 8; ++y) {
+            for (int x = 10; x <= 11; ++x) {
+                kappa[static_cast<size_t>(y * width + x)] = 500;
+            }
+        }
+        for (int x = 3; x <= 5; ++x) {
+            kappa[static_cast<size_t>(4 * width + x)] = -300;
+        }
+        for (int y = 10; y <= 12; ++y) {
+            kappa[static_cast<size_t>(y * width + 18)] = 200;
+        }
+        REQUIRE(feature::detector::curvature_extrema::detect(kappa.data(), width, height, width, settings, extrema) == 3);
+        REQUIRE((extrema[0].cell_x == 5) && (extrema[0].cell_y == 4) && (extrema[0].sign == -1) && (extrema[0].response == 300));
+        REQUIRE((extrema[1].cell_x == 11) && (extrema[1].cell_y == 8) && (extrema[1].sign == 1) && (extrema[1].response == 500));
+        REQUIRE((extrema[2].cell_x == 18) && (extrema[2].cell_y == 12) && (extrema[2].sign == 1) && (extrema[2].response == 200));
+    }
+
+    {
+        // Bright 4x4 dots centred on pixel boundaries give symmetric curvature, every value ties with a mirror image.
+        const int width = 160;
+        const int height = 120;
+        std::vector<unsigned char> data(static_cast<size_t>(width * height), 30);
+        for (int centre_y = 20; centre_y <= 100; centre_y += 20) {
+            for (int centre_x = 20; centre_x <= 140; centre_x += 20) {
+                for (int y = centre_y - 2; y < centre_y + 2; ++y) {
+                    for (int x = centre_x - 2; x < centre_x + 2; ++x) {
+                        data[static_cast<size_t>(y * width + x)] = 220;
+                    }
+                }
+            }
+        }
+        std::vector<std::int64_t> kappa;
+        std::vector<feature::detector::curvature_extrema::extremum> extrema;
+        feature::detector::curvature_extrema::options settings;
+        settings.quantile = 0.0f;
+        settings.subpixel = false;
+        feature::detector::curvature_extrema::detect(data.data(), width, height, width, settings, kappa, extrema);
+        for (int centre_y = 20; centre_y <= 100; centre_y += 20) {
+            for (int centre_x = 20; centre_x <= 140; centre_x += 20) {
+                bool found = false;
+                for (const feature::detector::curvature_extrema::extremum& candidate : extrema) {
+                    found = found || ((math::abs(static_cast<float>(candidate.cell_x) - (static_cast<float>(centre_x) - 0.5f)) <= 0.5f) && (math::abs(static_cast<float>(candidate.cell_y) - (static_cast<float>(centre_y) - 0.5f)) <= 0.5f));
+                }
+                REQUIRE(found);
+            }
+        }
+    }
+
+    {
         const int width = 16;
         const int height = 16;
         std::vector<std::int64_t> kappa(static_cast<size_t>(width * height), 0);

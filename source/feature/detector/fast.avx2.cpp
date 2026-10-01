@@ -88,7 +88,7 @@ namespace feature::detector {
         const __m256i consec = _mm256_set1_epi8(8);
 
         // Bounded memcpy lambda for handling the last partial chunk of columns.
-        const auto bounded_load = [&ushft](const unsigned char* src, int remaining) -> __m256i {
+        const auto bounded_load = [](const unsigned char* src, int remaining) -> __m256i {
             alignas(32) unsigned char buf[32] = {};
             const int count = (remaining > 32) ? 32 : ((remaining > 0) ? remaining : 0);
             for (int i = 0; i < count; ++i) {

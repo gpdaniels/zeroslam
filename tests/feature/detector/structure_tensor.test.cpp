@@ -70,5 +70,36 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    {
+        // A checkerboard's junctions sit on pixel boundaries, so each response peak is a plateau of four exactly equal pixels.
+        constexpr static const size_t data_width = 160;
+        constexpr static const size_t data_height = 120;
+        constexpr static const size_t square = 20;
+        unsigned char data[data_height][data_width] = {};
+        for (size_t y = 0; y < data_height; ++y) {
+            for (size_t x = 0; x < data_width; ++x) {
+                data[y][x] = static_cast<unsigned char>((((x / square) + (y / square)) % 2) ? 220 : 30);
+            }
+        }
+        feature::point features[256];
+        for (measure kind : { measure::klt, measure::forstner, measure::harris, measure::rohr, measure::kenney }) {
+            for (float sigma : { 1.0f, 1.5f, 2.5f }) {
+                const size_t count = feature::detector::structure_tensor::detect(&data[0][0], data_width, data_height, data_width, kind, sigma, 2.0f, 256, features);
+                REQUIRE(count == 35);
+                bool found[5][7] = {};
+                for (size_t i = 0; i < count; ++i) {
+                    const float junction_x = std::round((features[i].x + 0.5f) / static_cast<float>(square));
+                    const float junction_y = std::round((features[i].y + 0.5f) / static_cast<float>(square));
+                    REQUIRE(std::abs(features[i].x - (junction_x * static_cast<float>(square) - 0.5f)) <= 0.5f);
+                    REQUIRE(std::abs(features[i].y - (junction_y * static_cast<float>(square) - 0.5f)) <= 0.5f);
+                    REQUIRE((junction_x >= 1.0f) && (junction_x <= 7.0f) && (junction_y >= 1.0f) && (junction_y <= 5.0f));
+                    bool& junction = found[static_cast<int>(junction_y) - 1][static_cast<int>(junction_x) - 1];
+                    REQUIRE(!junction);
+                    junction = true;
+                }
+            }
+        }
+    }
+
     return EXIT_SUCCESS;
 }

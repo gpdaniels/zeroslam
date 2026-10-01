@@ -288,6 +288,7 @@ namespace feature::descriptor {
         };
 
     public:
+        // The learned test pairs assume a smoothed image, as in OpenCV's ORB: data must be the level after image::blur::gaussian_7x7, with angle_radians measured by angle::orb::dominant_angle on the raw level.
         static void describe(
             const unsigned char* __restrict const data,
             const int stride,

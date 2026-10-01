@@ -57,7 +57,8 @@ namespace feature::detector {
                 }
                 const float* __restrict const above = row - width;
                 const float* __restrict const below = row + width;
-                if ((above[x - 1] >= value) || (above[x] >= value) || (above[x + 1] >= value) || (row[x - 1] >= value) || (row[x + 1] >= value) || (below[x - 1] >= value) || (below[x] >= value) || (below[x + 1] >= value)) {
+                // Note: Ties with the earlier neighbours are kept and ties with the later ones are not, so a plateau keeps its last pixel in raster order instead of none.
+                if ((above[x - 1] > value) || (above[x] > value) || (above[x + 1] > value) || (row[x - 1] > value) || (row[x + 1] >= value) || (below[x - 1] >= value) || (below[x] >= value) || (below[x + 1] >= value)) {
                     continue;
                 }
                 feature_point_buffer[feature_count].x = static_cast<float>(x);

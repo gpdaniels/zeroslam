@@ -69,21 +69,50 @@ namespace feature::refiner {
         }
 
         const float* __restrict const centre = response.data() + static_cast<size_t>(peak_y) * static_cast<size_t>(size) + static_cast<size_t>(peak_x);
-        const float left = centre[-1];
-        const float right = centre[1];
-        const float above = centre[-size];
-        const float below = centre[size];
-        if ((left > peak) || (right > peak) || (above > peak) || (below > peak) || (centre[-size - 1] > peak) || (centre[-size + 1] > peak) || (centre[size - 1] > peak) || (centre[size + 1] > peak)) {
+        if ((centre[-1] > peak) || (centre[1] > peak) || (centre[-size] > peak) || (centre[size] > peak) || (centre[-size - 1] > peak) || (centre[-size + 1] > peak) || (centre[size - 1] > peak) || (centre[size + 1] > peak)) {
             return false;
         }
 
-        const float curvature_x = left - 2.0f * peak + right;
-        const float curvature_y = above - 2.0f * peak + below;
-        const float subpixel_x = (curvature_x < 0.0f) ? math::min(0.5f, math::max(-0.5f, (0.5f * (left - right)) / curvature_x)) : 0.0f;
-        const float subpixel_y = (curvature_y < 0.0f) ? math::min(0.5f, math::max(-0.5f, (0.5f * (above - below)) / curvature_y)) : 0.0f;
+        // Note: The response of a corner peaks about sigma inside its wedge, so move to the point nearest every gradient line in the smoothing window (Forstner).
+        const int radius = score::structure_tensor::smoothing_radius(sigma);
+        float weights[2 * score::structure_tensor::smoothing_radius_maximum + 1];
+        score::structure_tensor::smoothing_weights(sigma, weights);
+        const unsigned char* __restrict const window = data + (peak_y - half) * stride + (peak_x - half);
+        float a11 = 0.0f;
+        float a12 = 0.0f;
+        float a22 = 0.0f;
+        float b1 = 0.0f;
+        float b2 = 0.0f;
+        for (int v = -radius; v <= radius; ++v) {
+            const unsigned char* __restrict const row = window + v * stride;
+            for (int u = -radius; u <= radius; ++u) {
+                const float gx = 0.5f * (static_cast<float>(row[u + 1]) - static_cast<float>(row[u - 1]));
+                const float gy = 0.5f * (static_cast<float>(row[u + stride]) - static_cast<float>(row[u - stride]));
+                const float weight = weights[v + radius] * weights[u + radius];
+                const float wxx = weight * gx * gx;
+                const float wxy = weight * gx * gy;
+                const float wyy = weight * gy * gy;
+                a11 += wxx;
+                a12 += wxy;
+                a22 += wyy;
+                b1 += wxx * static_cast<float>(u) + wxy * static_cast<float>(v);
+                b2 += wxy * static_cast<float>(u) + wyy * static_cast<float>(v);
+            }
+        }
+        const float trace = a11 + a22;
+        const float determinant = a11 * a22 - a12 * a12;
+        if (!(determinant > 1.0e-6f * trace * trace)) {
+            return false;
+        }
+        const float refined_x = static_cast<float>(peak_x - half) + (a22 * b1 - a12 * b2) / determinant;
+        const float refined_y = static_cast<float>(peak_y - half) + (a11 * b2 - a12 * b1) / determinant;
+        // Note: The intersection must lie inside the pixels read, beyond them it is an extrapolation.
+        if ((math::abs(refined_x) >= static_cast<float>(half)) || (math::abs(refined_y) >= static_cast<float>(half))) {
+            return false;
+        }
 
-        offset_x = static_cast<float>(peak_x - half) + subpixel_x;
-        offset_y = static_cast<float>(peak_y - half) + subpixel_y;
+        offset_x = refined_x;
+        offset_y = refined_y;
         return true;
     }
 }

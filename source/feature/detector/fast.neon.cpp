@@ -21,6 +21,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 #include <arm_neon.h>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -39,6 +42,15 @@ namespace feature::detector {
             return vget_lane_u64(vreinterpret_u64_u8(packed), 0) & 0x1111111111111111ull;
         }
 
+        static inline unsigned int count_trailing_zeros(const unsigned long long mask) {
+#if defined(_MSC_VER)
+            unsigned long index = 0;
+            _BitScanForward64(&index, mask);
+            return static_cast<unsigned int>(index);
+#else
+            return static_cast<unsigned int>(__builtin_ctzll(mask));
+#endif
+        }
     }
 
     size_t detect_neon(
@@ -157,7 +169,7 @@ namespace feature::detector {
                 unsigned long long m = lane_mask(vcgtq_u8(vmaxq_u8(ppt_max, pmt_max), consec));
 
                 while (m) {
-                    const int lane = __builtin_ctzll(m) / 4;
+                    const int lane = static_cast<int>(count_trailing_zeros(m) / 4);
                     m &= (m - 1);
 
                     if (feature_count < feature_point_buffer_size) {
@@ -227,7 +239,7 @@ namespace feature::detector {
                     m = lane_mask(vcgtq_u8(vmaxq_u8(ppt_max, pmt_max), consec)) & last_cols_mask;
 
                     while (m) {
-                        const int lane = __builtin_ctzll(m) / 4;
+                        const int lane = static_cast<int>(count_trailing_zeros(m) / 4);
                         m &= (m - 1);
 
                         if (feature_count < feature_point_buffer_size) {

@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "feature/detector/fast.hpp"
 
 #include "core/cpu.hpp"
+#include "math/math.hpp"
 
 namespace feature::detector {
 #if defined(ZEROSLAM_SIMD_NEON)
@@ -36,16 +37,18 @@ namespace feature::detector {
         const size_t feature_point_buffer_size,
         point* __restrict feature_point_buffer
     ) {
+        // Note: The simd tiers hold the threshold in a byte, so clamp it to the pixel range for every tier to agree.
+        const int threshold_clamped = math::min(math::max(threshold, 0), 255);
 #if defined(ZEROSLAM_SIMD_NEON)
         if (core::cpu::has_neon()) {
-            return detect_neon(data, width, height, stride, threshold, feature_point_buffer_size, feature_point_buffer);
+            return detect_neon(data, width, height, stride, threshold_clamped, feature_point_buffer_size, feature_point_buffer);
         }
 #endif
 #if defined(ZEROSLAM_SIMD_AVX2)
         if (core::cpu::has_avx2()) {
-            return detect_avx2(data, width, height, stride, threshold, feature_point_buffer_size, feature_point_buffer);
+            return detect_avx2(data, width, height, stride, threshold_clamped, feature_point_buffer_size, feature_point_buffer);
         }
 #endif
-        return detect_cpu(data, width, height, stride, threshold, feature_point_buffer_size, feature_point_buffer);
+        return detect_cpu(data, width, height, stride, threshold_clamped, feature_point_buffer_size, feature_point_buffer);
     }
 }

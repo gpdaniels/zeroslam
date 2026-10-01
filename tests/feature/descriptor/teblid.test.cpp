@@ -95,5 +95,107 @@ int main(int argc, char* argv[]) {
     feature::descriptor::binary<256> descriptor_elsewhere;
     feature::descriptor::teblid::describe(elsewhere, size, feature::angle::orb::dominant_angle(elsewhere, size), descriptor_elsewhere);
     REQUIRE(match::distance::hamming::distance(first, descriptor_elsewhere) > 70);
+
+    {
+        // The level sums, on a region narrower than its stride.
+        const int width = 7;
+        const int height = 5;
+        const int stride = 9;
+        std::vector<unsigned char> data(static_cast<size_t>(stride * height));
+        for (size_t i = 0; i < data.size(); ++i) {
+            data[i] = static_cast<unsigned char>((i * 37) % 251);
+        }
+        std::vector<unsigned int> sums(static_cast<size_t>((width + 1) * (height + 1)), 12345u);
+        feature::descriptor::teblid::integral(data.data(), width, height, stride, sums.data());
+        for (int y = 0; y <= height; ++y) {
+            for (int x = 0; x <= width; ++x) {
+                unsigned int expected = 0;
+                for (int v = 0; v < y; ++v) {
+                    for (int u = 0; u < x; ++u) {
+                        expected += data[static_cast<size_t>(v * stride + u)];
+                    }
+                }
+                REQUIRE(sums[static_cast<size_t>(y * (width + 1) + x)] == expected);
+            }
+        }
+    }
+
+    {
+        std::vector<unsigned int> sums(static_cast<size_t>((size + 1) * (size + 1)));
+        feature::descriptor::teblid::integral(plain.data(), size, size, size, sums.data());
+        const int radius = feature::descriptor::teblid::window_radius;
+
+        // Integral centres match the per keypoint description bit for bit, and a wrapped sum leaves every box sum exact.
+        std::vector<unsigned int> wrapped(sums);
+        for (unsigned int& sum : wrapped) {
+            sum += 0xFFFFF000u;
+        }
+        for (int y = radius; y < size - radius; y += 3) {
+            for (int x = radius; x < size - radius; x += 5) {
+                const float keypoint_angle = static_cast<float>(x * 7 + y * 3) * 0.1f;
+                feature::descriptor::binary<256> expected;
+                feature::descriptor::binary<256> described;
+                feature::descriptor::binary<256> described_wrapped;
+                feature::descriptor::teblid::describe(plain.data() + (y * size) + x, size, keypoint_angle, expected);
+                feature::descriptor::teblid::describe_integral(sums.data(), size + 1, static_cast<float>(x), static_cast<float>(y), keypoint_angle, described);
+                feature::descriptor::teblid::describe_integral(wrapped.data(), size + 1, static_cast<float>(x), static_cast<float>(y), keypoint_angle, described_wrapped);
+                REQUIRE(match::distance::hamming::distance(expected, described) == 0);
+                REQUIRE(match::distance::hamming::distance(expected, described_wrapped) == 0);
+                if ((x < size - radius - 1) && (y < size - radius - 1)) {
+                    feature::descriptor::teblid::describe_integral(sums.data(), size + 1, static_cast<float>(x) + 0.37f, static_cast<float>(y) + 0.81f, keypoint_angle, described);
+                    feature::descriptor::teblid::describe_integral(wrapped.data(), size + 1, static_cast<float>(x) + 0.37f, static_cast<float>(y) + 0.81f, keypoint_angle, described_wrapped);
+                    REQUIRE(match::distance::hamming::distance(described, described_wrapped) == 0);
+                }
+            }
+        }
+
+        // A fractional centre blends the four surrounding integral centres, so a bit they all agree on keeps its value.
+        for (int y = radius; y < size - radius - 1; y += 7) {
+            for (int x = radius; x < size - radius - 1; x += 7) {
+                const float keypoint_angle = static_cast<float>(x - y) * 0.05f;
+                feature::descriptor::binary<256> corners[4];
+                for (int corner = 0; corner < 4; ++corner) {
+                    feature::descriptor::teblid::describe(plain.data() + ((y + corner / 2) * size) + x + (corner % 2), size, keypoint_angle, corners[corner]);
+                }
+                feature::descriptor::binary<256> fractional;
+                feature::descriptor::teblid::describe_integral(sums.data(), size + 1, static_cast<float>(x) + 0.25f, static_cast<float>(y) + 0.5f, keypoint_angle, fractional);
+                for (int byte = 0; byte < 32; ++byte) {
+                    const unsigned int agree_set = static_cast<unsigned int>(corners[0].data[byte] & corners[1].data[byte] & corners[2].data[byte] & corners[3].data[byte]);
+                    const unsigned int agree_clear = static_cast<unsigned int>(~(corners[0].data[byte] | corners[1].data[byte] | corners[2].data[byte] | corners[3].data[byte])) & 0xFFu;
+                    REQUIRE((static_cast<unsigned int>(fractional.data[byte]) & agree_set) == agree_set);
+                    REQUIRE((static_cast<unsigned int>(fractional.data[byte]) & agree_clear) == 0u);
+                }
+            }
+        }
+
+        // Content shifted by a fraction of a pixel is found again by describing at the fractional centre, not at the nearest pixel.
+        int fractional_total = 0;
+        int nearest_total = 0;
+        for (int shift = 0; shift < 3; ++shift) {
+            const double shift_x = 0.13 + 0.3 * static_cast<double>(shift);
+            const double shift_y = -0.41 + 0.35 * static_cast<double>(shift);
+            const std::vector<unsigned char> moved = render(size, 0.0, shift_x, shift_y);
+            std::vector<unsigned int> moved_sums(sums.size());
+            feature::descriptor::teblid::integral(moved.data(), size, size, size, moved_sums.data());
+            for (int y = centre - 12; y <= centre + 12; y += 12) {
+                for (int x = centre - 12; x <= centre + 12; x += 12) {
+                    const float keypoint_angle = feature::angle::orb::dominant_angle(plain.data() + (y * size) + x, size);
+                    feature::descriptor::binary<256> reference;
+                    feature::descriptor::binary<256> fractional;
+                    feature::descriptor::binary<256> nearest;
+                    feature::descriptor::teblid::describe(plain.data() + (y * size) + x, size, keypoint_angle, reference);
+                    const float moved_x = static_cast<float>(static_cast<double>(x) - shift_x);
+                    const float moved_y = static_cast<float>(static_cast<double>(y) - shift_y);
+                    feature::descriptor::teblid::describe_integral(moved_sums.data(), size + 1, moved_x, moved_y, keypoint_angle, fractional);
+                    feature::descriptor::teblid::describe_integral(moved_sums.data(), size + 1, std::floor(moved_x + 0.5f), std::floor(moved_y + 0.5f), keypoint_angle, nearest);
+                    const unsigned int fractional_distance = match::distance::hamming::distance(reference, fractional);
+                    REQUIRE(fractional_distance <= 8);
+                    fractional_total += static_cast<int>(fractional_distance);
+                    nearest_total += static_cast<int>(match::distance::hamming::distance(reference, nearest));
+                }
+            }
+        }
+        REQUIRE(4 * fractional_total < nearest_total);
+    }
     return EXIT_SUCCESS;
 }

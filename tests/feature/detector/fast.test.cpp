@@ -25,6 +25,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -96,6 +97,67 @@ int main(int argc, char* argv[]) {
         }
         const size_t features_255_count = feature::detector::fast::detect(&data[0][0], data_width, data_height, data_width, 255, data_width * data_height, features);
         REQUIRE(features_255_count == 0);
+    }
+    {
+        // Every tier finds the same corners for any size, stride and threshold, and none writes past the buffer it is given.
+        using detect_function = size_t (*)(const unsigned char*, const int, const int, const int, const int, const size_t, feature::point*);
+        std::vector<detect_function> tiers = { &feature::detector::detect_cpu };
+#if defined(ZEROSLAM_SIMD_AVX2)
+        if (core::cpu::has_avx2()) {
+            tiers.push_back(&feature::detector::detect_avx2);
+        }
+#endif
+#if defined(ZEROSLAM_SIMD_NEON)
+        if (core::cpu::has_neon()) {
+            tiers.push_back(&feature::detector::detect_neon);
+        }
+#endif
+        const feature::point sentinel = { -1.0f, -1.0f, -1.0f, -1.0f, -1 };
+        unsigned long long state = 12345;
+        for (int width : { 7, 8, 16, 21, 38, 39, 40, 71, 100 }) {
+            for (int padding : { 0, 5 }) {
+                const int height = 23;
+                const int stride = width + padding;
+                std::vector<unsigned char> data(static_cast<size_t>(stride * height));
+                for (unsigned char& value : data) {
+                    state = state * 6364136223846793005ull + 1442695040888963407ull;
+                    value = static_cast<unsigned char>(state >> 56);
+                }
+                for (int threshold : { 0, 1, 7, 20, 60, 128, 254, 255 }) {
+                    std::vector<feature::point> expected(static_cast<size_t>(width * height), sentinel);
+                    const size_t expected_count = feature::detector::detect_cpu(data.data(), width, height, stride, threshold, expected.size(), expected.data());
+                    for (detect_function detect : tiers) {
+                        std::vector<feature::point> features(static_cast<size_t>(width * height), sentinel);
+                        REQUIRE(detect(data.data(), width, height, stride, threshold, features.size(), features.data()) == expected_count);
+                        for (size_t i = 0; i < expected_count; ++i) {
+                            REQUIRE((features[i].x == expected[i].x) && (features[i].y == expected[i].y));
+                        }
+                        const size_t buffer_sizes[4] = { 0, 1, 3, expected_count / 2 };
+                        for (const size_t buffer_size : buffer_sizes) {
+                            if (buffer_size >= expected_count) {
+                                continue;
+                            }
+                            std::vector<feature::point> limited(buffer_size + 1, sentinel);
+                            REQUIRE(detect(data.data(), width, height, stride, threshold, buffer_size, limited.data()) == buffer_size);
+                            for (size_t i = 0; i < buffer_size; ++i) {
+                                REQUIRE((limited[i].x == expected[i].x) && (limited[i].y == expected[i].y));
+                            }
+                            REQUIRE(limited[buffer_size].response == sentinel.response);
+                        }
+                    }
+                }
+                // The dispatcher clamps thresholds outside the pixel range, a tier holding it in a byte would wrap them instead.
+                std::vector<feature::point> clamped(static_cast<size_t>(width * height));
+                std::vector<feature::point> features(static_cast<size_t>(width * height));
+                for (const int threshold : { -7, 256, 300, 1000 }) {
+                    const size_t clamped_count = feature::detector::detect_cpu(data.data(), width, height, stride, (threshold < 0) ? 0 : 255, clamped.size(), clamped.data());
+                    REQUIRE(feature::detector::fast::detect(data.data(), width, height, stride, threshold, features.size(), features.data()) == clamped_count);
+                    for (size_t i = 0; i < clamped_count; ++i) {
+                        REQUIRE((features[i].x == clamped[i].x) && (features[i].y == clamped[i].y));
+                    }
+                }
+            }
+        }
     }
 #if defined(ZEROSLAM_SIMD_AVX2)
     {

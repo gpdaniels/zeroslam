@@ -84,10 +84,10 @@ namespace feature::detector {
                         if (pixel < pixel_threshold) {
                             ++valid_pixels;
                             if (valid_pixels > pattern_size_half) {
-                                feature_point_buffer[feature_count++] = { static_cast<float>(x), static_cast<float>(y), 0, 0, 0 };
-                                if (feature_count == feature_point_buffer_size) {
+                                if (feature_count >= feature_point_buffer_size) {
                                     return feature_count;
                                 }
+                                feature_point_buffer[feature_count++] = { static_cast<float>(x), static_cast<float>(y), 0, 0, 0 };
                                 break;
                             }
                         }
@@ -107,10 +107,10 @@ namespace feature::detector {
                         if (pixel > pixel_threshold) {
                             ++valid_pixels;
                             if (valid_pixels > pattern_size_half) {
-                                feature_point_buffer[feature_count++] = { static_cast<float>(x), static_cast<float>(y), 0, 0, 0 };
-                                if (feature_count == feature_point_buffer_size) {
+                                if (feature_count >= feature_point_buffer_size) {
                                     return feature_count;
                                 }
+                                feature_point_buffer[feature_count++] = { static_cast<float>(x), static_cast<float>(y), 0, 0, 0 };
                                 break;
                             }
                         }

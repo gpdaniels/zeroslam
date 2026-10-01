@@ -25,6 +25,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cstdio>
 #include <cstdlib>
 #include <initializer_list>
+#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -70,6 +71,40 @@ int main(int argc, char* argv[]) {
             REQUIRE(!refiner::refine(&data[44][44], data_width, kind, 1.5f, offset_x, offset_y));
             REQUIRE((offset_x == 0.0f) && (offset_y == 0.0f));
             REQUIRE(!refiner::refine(&data[20][70], data_width, kind, 1.5f, offset_x, offset_y));
+        }
+    }
+
+    {
+        // An anti-aliased right angled corner at a known subpixel position, whose response peaks about sigma inside the wedge.
+        constexpr static const int data_size = 64;
+        constexpr static const double pi = 3.14159265358979323846;
+        std::vector<unsigned char> data(static_cast<size_t>(data_size * data_size));
+        for (int orientation = 0; orientation < 8; ++orientation) {
+            const double corner_x = 32.0 + 0.13 * static_cast<double>(orientation);
+            const double corner_y = 31.6 + 0.11 * static_cast<double>(orientation);
+            const double theta = (2.0 * pi * static_cast<double>(orientation)) / 8.0 + 0.3;
+            for (int y = 0; y < data_size; ++y) {
+                for (int x = 0; x < data_size; ++x) {
+                    int inside = 0;
+                    for (int sample = 0; sample < 64; ++sample) {
+                        const double sample_x = static_cast<double>(x) + (static_cast<double>(sample % 8) + 0.5) / 8.0 - corner_x;
+                        const double sample_y = static_cast<double>(y) + (static_cast<double>(sample / 8) + 0.5) / 8.0 - corner_y;
+                        const double angle = std::remainder(std::atan2(sample_y, sample_x) - theta - 0.25 * pi, 2.0 * pi);
+                        inside += (std::abs(angle) < 0.25 * pi) ? 1 : 0;
+                    }
+                    data[static_cast<size_t>(y * data_size + x)] = static_cast<unsigned char>(40 + (200 * inside + 32) / 64);
+                }
+            }
+            const int start_x = static_cast<int>(std::floor(corner_x));
+            const int start_y = static_cast<int>(std::floor(corner_y));
+            for (measure kind : { measure::klt, measure::forstner, measure::harris, measure::rohr, measure::kenney }) {
+                float offset_x = 0;
+                float offset_y = 0;
+                REQUIRE(refiner::refine(&data[static_cast<size_t>(start_y * data_size + start_x)], data_size, kind, 1.5f, offset_x, offset_y));
+                const double error_x = (static_cast<double>(start_x) + static_cast<double>(offset_x)) - (corner_x - 0.5);
+                const double error_y = (static_cast<double>(start_y) + static_cast<double>(offset_y)) - (corner_y - 0.5);
+                REQUIRE(std::sqrt((error_x * error_x) + (error_y * error_y)) < 0.6);
+            }
         }
     }
 

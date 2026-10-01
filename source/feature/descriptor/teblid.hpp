@@ -50,6 +50,25 @@ namespace feature::descriptor {
             const float angle_radians,
             binary<256>& descriptor
         );
+
+        // Sums of a whole level for describe_integral, (width + 1) by (height + 1) entries with a zero first row and column; no sum wraps up to 4096 by 4096 pixels, and beyond that the wrap still leaves every box sum exact.
+        static void integral(
+            const unsigned char* __restrict const data,
+            const int width,
+            const int height,
+            const int stride,
+            unsigned int* __restrict const integral_data
+        );
+
+        // Describe at a centre in the level's pixel index space, which needs window_radius <= x <= width - window_radius - 1 and the same for y; a fractional centre moves every box by the fraction and area samples it, an integral centre matches describe on that pixel bit for bit.
+        static void describe_integral(
+            const unsigned int* __restrict const integral_data,
+            const int integral_stride,
+            const float x,
+            const float y,
+            const float angle_radians,
+            binary<256>& descriptor
+        );
     };
 }
 

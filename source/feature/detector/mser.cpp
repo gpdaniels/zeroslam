@@ -57,6 +57,7 @@ namespace feature::detector {
                     order[fill[level[p]]++] = static_cast<int>(p);
                 }
             }
+            // Note: A root holds its tree size negated, so every pixel starts as a root of size one.
             std::vector<int, core::arena_allocator<int>> parent(pixels, -1);
             std::vector<int, core::arena_allocator<int>> node_of(pixels, -1);
 
@@ -116,6 +117,7 @@ namespace feature::detector {
                 nodes[static_cast<size_t>(current)].sum_x += static_cast<double>(px);
                 nodes[static_cast<size_t>(current)].sum_y += static_cast<double>(py);
                 node_of[static_cast<size_t>(p)] = current;
+                int root = p;
                 for (int n = 0; n < 4; ++n) {
                     const int nx = px + neighbours[n][0];
                     const int ny = py + neighbours[n][1];
@@ -127,7 +129,7 @@ namespace feature::detector {
                         continue;
                     }
                     const int other_root = find(q);
-                    if (other_root == p) {
+                    if (other_root == root) {
                         continue;
                     }
                     const int other = node_of[static_cast<size_t>(other_root)];
@@ -144,8 +146,17 @@ namespace feature::detector {
                             other_node.parent = current;
                         }
                     }
-                    parent[static_cast<size_t>(other_root)] = p;
+                    if (parent[static_cast<size_t>(other_root)] < parent[static_cast<size_t>(root)]) {
+                        parent[static_cast<size_t>(other_root)] += parent[static_cast<size_t>(root)];
+                        parent[static_cast<size_t>(root)] = other_root;
+                        root = other_root;
+                    }
+                    else {
+                        parent[static_cast<size_t>(root)] += parent[static_cast<size_t>(other_root)];
+                        parent[static_cast<size_t>(other_root)] = root;
+                    }
                 }
+                node_of[static_cast<size_t>(root)] = current;
             }
             for (node& n : nodes) {
                 if ((n.merged_into >= 0) || (n.parent < 0)) {

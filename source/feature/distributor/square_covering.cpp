@@ -18,6 +18,16 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "math/math.hpp"
 
+#if defined(_MSC_VER)
+#pragma warning(push, 0)
+#endif
+
+#include <vector>
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
 namespace feature::distributor {
     int square_covering::distribute(
         const point* __restrict const features_detected_sorted,
@@ -35,6 +45,13 @@ namespace feature::distributor {
             }
             return features_detected_sorted_size;
         }
+        if (max_features <= 1) {
+            const int count = math::max(0, max_features);
+            for (int i = 0; i < count; ++i) {
+                features_distributed[i] = features_detected_sorted[i];
+            }
+            return count;
+        }
         const long long int delta =
             4ll * static_cast<long long int>(max_width) +
             4ll * static_cast<long long int>(max_features) +
@@ -48,14 +65,28 @@ namespace feature::distributor {
         const int denominator = 2 * (max_features - 1);
         int square_size_max = numerator / denominator;
         int square_size_min = math::max(1, static_cast<int>(math::sqrt(static_cast<double>(features_detected_sorted_size) / static_cast<double>(2 * max_features))));
+        if (square_size_max <= square_size_min) {
+            // Note: The size estimate fails when nearly every pixel may hold a feature, so search every size, the largest covers the image with one square.
+            square_size_min = 1;
+            square_size_max = math::max(max_width, max_height) + 1;
+        }
         const size_t covered_squares_size = static_cast<size_t>(max_width + 1) * static_cast<size_t>(max_height + 1);
-        bool* const covered_squares = new bool[covered_squares_size];
-        int* const indexes = new int[static_cast<unsigned long int>(features_detected_sorted_size)];
+        std::vector<unsigned char> covered_squares(covered_squares_size);
+        std::vector<int> indexes(static_cast<size_t>(features_detected_sorted_size));
+        std::vector<int> indexes_best(static_cast<size_t>(features_detected_sorted_size));
         int indexes_size = 0;
+        int indexes_best_size = 0;
+        bool best_too_many = false;
         int square_size_previous = 0;
         while ((indexes_size < min_features) || (indexes_size > max_features)) {
             const int square_size = (square_size_max + square_size_min) / 2;
             if (square_size == square_size_previous) {
+                // Note: The smallest size estimated can already be too sparse for clustered features, so search the sizes below it before settling for too few.
+                if (!best_too_many && (square_size_min > 1)) {
+                    square_size_max = square_size_min;
+                    square_size_min = 1;
+                    continue;
+                }
                 break;
             }
             square_size_previous = square_size;
@@ -64,13 +95,13 @@ namespace feature::distributor {
             const int grid_height = max_height / square_size;
             const int grid_stride = grid_width + 1;
             for (int i = 0; i < (grid_width + 1) * (grid_height + 1); ++i) {
-                covered_squares[i] = false;
+                covered_squares[static_cast<size_t>(i)] = 0;
             }
             for (int i = 0; i < features_detected_sorted_size; ++i) {
                 const int cell_x = static_cast<int>(features_detected_sorted[i].x) / square_size;
                 const int cell_y = static_cast<int>(features_detected_sorted[i].y) / square_size;
-                if (covered_squares[cell_y * grid_stride + cell_x] == false) {
-                    indexes[indexes_size++] = i;
+                if (covered_squares[static_cast<size_t>(cell_y * grid_stride + cell_x)] == 0) {
+                    indexes[static_cast<size_t>(indexes_size++)] = i;
                     const int cell_x_min = math::max(0, cell_x - square_covering_radius);
                     const int cell_x_max = math::min(grid_width, cell_x + square_covering_radius);
                     const int cell_y_min = math::max(0, cell_y - square_covering_radius);
@@ -78,23 +109,30 @@ namespace feature::distributor {
                     // Mark all squares within as covered.
                     for (int y = cell_y_min; y <= cell_y_max; ++y) {
                         for (int x = cell_x_min; x <= cell_x_max; ++x) {
-                            covered_squares[y * grid_stride + x] = true;
+                            covered_squares[static_cast<size_t>(y * grid_stride + x)] = 1;
                         }
                     }
                 }
             }
-            if (indexes_size < min_features) {
+            const bool too_few = (indexes_size < min_features);
+            const bool too_many = (indexes_size > max_features);
+            if (too_few) {
                 square_size_max = square_size;
             }
-            else if (indexes_size > max_features) {
+            else if (too_many) {
                 square_size_min = square_size;
             }
+            // Note: The count can jump over the range between two sizes, so keep the sparsest covering with too many features, truncated to its strongest features it beats every covering with too few.
+            if (!too_few || !best_too_many) {
+                indexes.swap(indexes_best);
+                indexes_best_size = indexes_size;
+                best_too_many = too_many;
+            }
         }
-        for (int i = 0; i < indexes_size; ++i) {
-            features_distributed[i] = features_detected_sorted[indexes[i]];
+        const int features_distributed_size = math::min(indexes_best_size, max_features);
+        for (int i = 0; i < features_distributed_size; ++i) {
+            features_distributed[i] = features_detected_sorted[indexes_best[static_cast<size_t>(i)]];
         }
-        delete[] indexes;
-        delete[] covered_squares;
-        return indexes_size;
+        return features_distributed_size;
     }
 }

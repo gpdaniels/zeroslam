@@ -23,6 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -121,6 +122,101 @@ int main(int argc, char* argv[]) {
                 REQUIRE(is_value_approx(features_distributed[j].angle, features_detected_sorted_by_response[distributed_index].angle));
             }
         }
+    }
+
+    {
+        // Clusters of 3x3 detections 3 px apart: square size 2 keeps only the 165 centres and size 1 keeps all 1485, so no size lands inside [200, 800].
+        std::vector<feature::point> features_detected_sorted;
+        for (int cluster = 0; cluster < 165; ++cluster) {
+            feature::point centre = {};
+            centre.x = static_cast<float>(20 + 40 * (cluster % 15));
+            centre.y = static_cast<float>(20 + 40 * (cluster / 15));
+            centre.response = 100.0f;
+            features_detected_sorted.push_back(centre);
+        }
+        for (int cluster = 0; cluster < 165; ++cluster) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if ((dx != 0) || (dy != 0)) {
+                        feature::point neighbour = features_detected_sorted[static_cast<size_t>(cluster)];
+                        neighbour.x += static_cast<float>(3 * dx);
+                        neighbour.y += static_cast<float>(3 * dy);
+                        neighbour.response = 10.0f;
+                        features_detected_sorted.push_back(neighbour);
+                    }
+                }
+            }
+        }
+        const int min_features = 200;
+        const int max_features = 800;
+        const int guard = 64;
+        std::vector<feature::point> features_distributed(static_cast<size_t>(max_features + guard), feature::point{ -1.0f, -1.0f, -1.0f, -1.0f, -1 });
+        const int features = feature::distributor::square_covering::distribute(features_detected_sorted.data(), static_cast<int>(features_detected_sorted.size()), 640, 480, min_features, max_features, features_distributed.data());
+        REQUIRE(features == max_features);
+        for (int i = 0; i < 165; ++i) {
+            REQUIRE(features_distributed[static_cast<size_t>(i)].response == 100.0f);
+        }
+        for (int i = max_features; i < max_features + guard; ++i) {
+            REQUIRE(features_distributed[static_cast<size_t>(i)].response == -1.0f);
+        }
+    }
+
+    {
+        // Forty clusters with a feature on every pixel: the smallest size the estimate allows, 2, keeps 16 per cluster, too few, while size 1 keeps every third pixel.
+        std::vector<feature::point> features_detected_sorted;
+        for (int cluster = 0; cluster < 40; ++cluster) {
+            const int centre_x = 40 + 80 * (cluster % 8);
+            const int centre_y = 48 + 96 * (cluster / 8);
+            for (int y = centre_y - 10; y <= centre_y + 10; ++y) {
+                for (int x = centre_x - 10; x <= centre_x + 10; ++x) {
+                    feature::point detection = {};
+                    detection.x = static_cast<float>(x);
+                    detection.y = static_cast<float>(y);
+                    detection.response = static_cast<float>(100000 - static_cast<int>(features_detected_sorted.size()));
+                    features_detected_sorted.push_back(detection);
+                }
+            }
+        }
+        const int min_features = 700;
+        const int max_features = 2000;
+        std::vector<feature::point> features_distributed(static_cast<size_t>(max_features));
+        const int features = feature::distributor::square_covering::distribute(features_detected_sorted.data(), static_cast<int>(features_detected_sorted.size()), 640, 480, min_features, max_features, features_distributed.data());
+        REQUIRE(features == 40 * 49);
+        for (int i = 0; i < features; ++i) {
+            for (int j = i + 1; j < features; ++j) {
+                const float dx = std::abs(features_distributed[static_cast<size_t>(i)].x - features_distributed[static_cast<size_t>(j)].x);
+                const float dy = std::abs(features_distributed[static_cast<size_t>(i)].y - features_distributed[static_cast<size_t>(j)].y);
+                REQUIRE((dx >= 3.0f) || (dy >= 3.0f));
+            }
+        }
+    }
+
+    {
+        std::vector<feature::point> features_detected_sorted;
+        for (int i = 0; i < 400; ++i) {
+            features_detected_sorted.push_back(feature::point{ static_cast<float>(i % 20), static_cast<float>(i / 20), static_cast<float>(400 - i), 0.0f, 0 });
+        }
+        std::vector<feature::point> features_distributed(features_detected_sorted.size() + 1, feature::point{ -1.0f, -1.0f, -1.0f, -1.0f, -1 });
+
+        // A budget of one keeps the strongest feature and a budget of zero writes nothing.
+        REQUIRE(feature::distributor::square_covering::distribute(features_detected_sorted.data(), 400, 20, 20, 1, 1, features_distributed.data()) == 1);
+        REQUIRE(features_distributed[0].response == 400.0f);
+        REQUIRE(features_distributed[1].response == -1.0f);
+        features_distributed[0].response = -1.0f;
+        REQUIRE(feature::distributor::square_covering::distribute(features_detected_sorted.data(), 400, 20, 20, 0, 0, features_distributed.data()) == 0);
+        REQUIRE(features_distributed[0].response == -1.0f);
+
+        // A feature on every pixel defeats the square size estimate, the densest covering keeps every third pixel in each direction.
+        const int features = feature::distributor::square_covering::distribute(features_detected_sorted.data(), 400, 20, 20, 100, 300, features_distributed.data());
+        REQUIRE(features == 49);
+        for (int i = 0; i < features; ++i) {
+            for (int j = i + 1; j < features; ++j) {
+                const float dx = std::abs(features_distributed[static_cast<size_t>(i)].x - features_distributed[static_cast<size_t>(j)].x);
+                const float dy = std::abs(features_distributed[static_cast<size_t>(i)].y - features_distributed[static_cast<size_t>(j)].y);
+                REQUIRE((dx >= 3.0f) || (dy >= 3.0f));
+            }
+        }
+        REQUIRE(features_distributed[static_cast<size_t>(features)].response == -1.0f);
     }
 
     return EXIT_SUCCESS;

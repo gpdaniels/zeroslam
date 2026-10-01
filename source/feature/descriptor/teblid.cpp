@@ -278,56 +278,119 @@ namespace feature::descriptor {
         { 16, 20, 12, 19, 1, 2.75f }
     };
 
+    namespace {
+        // Every test compares the means of two boxes centred on rotated pattern points, box_sum takes a box [x0, x1) by [y0, y1) in the coordinates of the window around the centre pixel.
+        template <typename box_sum_type>
+        void describe_boxes(const float angle_radians, const box_sum_type& box_sum, binary<256>& descriptor) {
+            constexpr static const int window_size = (2 * teblid::window_radius) + 1;
+            const auto box_mean = [&](int x0, int y0, int x1, int y1) {
+                x0 = math::max(0, math::min(x0, window_size - 1));
+                y0 = math::max(0, math::min(y0, window_size - 1));
+                x1 = math::max(x0 + 1, math::min(x1, window_size));
+                y1 = math::max(y0 + 1, math::min(y1, window_size));
+                return box_sum(x0, y0, x1, y1) / static_cast<float>((x1 - x0) * (y1 - y0));
+            };
+            // Note: Every rounded value lies between 0.5 and 2^22, where adding a half and truncating equals math::round without its library call.
+            const auto round_positive = [](const float value) {
+                return static_cast<int>(value + 0.5f);
+            };
+            const float scale = teblid::keypoint_size / static_cast<float>(teblid::patch_size);
+            const float cosine = scale * math::cos(angle_radians);
+            const float sine = scale * math::sin(angle_radians);
+            const float half_patch = 0.5f * static_cast<float>(teblid::patch_size);
+            const auto rectify = [&](const int patch_x, const int patch_y, int& window_x, int& window_y) {
+                const float px = static_cast<float>(patch_x) - half_patch;
+                const float py = static_cast<float>(patch_y) - half_patch;
+                window_x = round_positive((cosine * px) - (sine * py) + static_cast<float>(teblid::window_radius));
+                window_y = round_positive((sine * px) + (cosine * py) + static_cast<float>(teblid::window_radius));
+            };
+            for (int byte = 0; byte < 32; ++byte) {
+                descriptor.data[byte] = 0;
+            }
+            for (int index = 0; index < teblid::test_count; ++index) {
+                const teblid::test& t = teblid::tests[index];
+                int x1 = 0;
+                int y1 = 0;
+                int x2 = 0;
+                int y2 = 0;
+                rectify(t.x1, t.y1, x1, y1);
+                rectify(t.x2, t.y2, x2, y2);
+                const int radius = round_positive(scale * static_cast<float>(t.radius));
+                const float response = box_mean(x1 - radius, y1 - radius, x1 + radius + 1, y1 + radius + 1) - box_mean(x2 - radius, y2 - radius, x2 + radius + 1, y2 + radius + 1);
+                if (response <= t.threshold) {
+                    descriptor.data[index >> 3] = static_cast<unsigned char>(descriptor.data[index >> 3] | (1u << (index & 7)));
+                }
+            }
+        }
+    }
+
     void teblid::describe(const unsigned char* __restrict const data, const int stride, const float angle_radians, binary<256>& descriptor) {
         constexpr static const int window_size = (2 * teblid::window_radius) + 1;
         constexpr static const int integral_size = window_size + 1;
-        int integral[integral_size * integral_size];
+        int integral_window[integral_size * integral_size];
         for (int x = 0; x < integral_size; ++x) {
-            integral[x] = 0;
+            integral_window[x] = 0;
         }
         for (int y = 1; y < integral_size; ++y) {
             const unsigned char* const row = data + static_cast<long>(y - 1 - teblid::window_radius) * stride - teblid::window_radius;
             int row_sum = 0;
-            integral[y * integral_size] = 0;
+            integral_window[y * integral_size] = 0;
             for (int x = 1; x < integral_size; ++x) {
                 row_sum += row[x - 1];
-                integral[(y * integral_size) + x] = integral[((y - 1) * integral_size) + x] + row_sum;
+                integral_window[(y * integral_size) + x] = integral_window[((y - 1) * integral_size) + x] + row_sum;
             }
         }
-        const auto box_mean = [&](int x0, int y0, int x1, int y1) {
-            x0 = math::max(0, math::min(x0, window_size - 1));
-            y0 = math::max(0, math::min(y0, window_size - 1));
-            x1 = math::max(x0 + 1, math::min(x1, window_size));
-            y1 = math::max(y0 + 1, math::min(y1, window_size));
-            const int sum = integral[(y1 * integral_size) + x1] - integral[(y0 * integral_size) + x1] - integral[(y1 * integral_size) + x0] + integral[(y0 * integral_size) + x0];
-            return static_cast<float>(sum) / static_cast<float>((x1 - x0) * (y1 - y0));
+        const auto box_sum = [&](const int x0, const int y0, const int x1, const int y1) {
+            const int sum = integral_window[(y1 * integral_size) + x1] - integral_window[(y0 * integral_size) + x1] - integral_window[(y1 * integral_size) + x0] + integral_window[(y0 * integral_size) + x0];
+            return static_cast<float>(sum);
         };
-        const float scale = teblid::keypoint_size / static_cast<float>(teblid::patch_size);
-        const float cosine = scale * math::cos(angle_radians);
-        const float sine = scale * math::sin(angle_radians);
-        const float half_patch = 0.5f * static_cast<float>(teblid::patch_size);
-        const auto rectify = [&](const int patch_x, const int patch_y, int& window_x, int& window_y) {
-            const float px = static_cast<float>(patch_x) - half_patch;
-            const float py = static_cast<float>(patch_y) - half_patch;
-            window_x = static_cast<int>(math::round((cosine * px) - (sine * py) + static_cast<float>(teblid::window_radius)));
-            window_y = static_cast<int>(math::round((sine * px) + (cosine * py) + static_cast<float>(teblid::window_radius)));
-        };
-        for (int byte = 0; byte < 32; ++byte) {
-            descriptor.data[byte] = 0;
+        describe_boxes(angle_radians, box_sum, descriptor);
+    }
+
+    void teblid::integral(const unsigned char* __restrict const data, const int width, const int height, const int stride, unsigned int* __restrict const integral_data) {
+        const size_t integral_stride = static_cast<size_t>(width) + 1;
+        for (size_t x = 0; x < integral_stride; ++x) {
+            integral_data[x] = 0;
         }
-        for (int index = 0; index < teblid::test_count; ++index) {
-            const teblid::test& t = teblid::tests[index];
-            int x1 = 0;
-            int y1 = 0;
-            int x2 = 0;
-            int y2 = 0;
-            rectify(t.x1, t.y1, x1, y1);
-            rectify(t.x2, t.y2, x2, y2);
-            const int radius = static_cast<int>(math::round(scale * static_cast<float>(t.radius)));
-            const float response = box_mean(x1 - radius, y1 - radius, x1 + radius + 1, y1 + radius + 1) - box_mean(x2 - radius, y2 - radius, x2 + radius + 1, y2 + radius + 1);
-            if (response <= t.threshold) {
-                descriptor.data[index >> 3] = static_cast<unsigned char>(descriptor.data[index >> 3] | (1u << (index & 7)));
+        for (int y = 0; y < height; ++y) {
+            const unsigned char* __restrict const row = data + static_cast<size_t>(y) * static_cast<size_t>(stride);
+            const unsigned int* __restrict const above = integral_data + static_cast<size_t>(y) * integral_stride;
+            unsigned int* __restrict const current = integral_data + static_cast<size_t>(y + 1) * integral_stride;
+            unsigned int row_sum = 0;
+            current[0] = 0;
+            for (int x = 0; x < width; ++x) {
+                row_sum += row[x];
+                current[x + 1] = above[x + 1] + row_sum;
             }
         }
+    }
+
+    void teblid::describe_integral(const unsigned int* __restrict const integral_data, const int integral_stride, const float x, const float y, const float angle_radians, binary<256>& descriptor) {
+        const float pixel_x = math::floor(x);
+        const float pixel_y = math::floor(y);
+        const float fraction_x = x - pixel_x;
+        const float fraction_y = y - pixel_y;
+        const unsigned int* __restrict const window = integral_data + static_cast<long>(static_cast<int>(pixel_y) - teblid::window_radius) * integral_stride + (static_cast<int>(pixel_x) - teblid::window_radius);
+        // Note: Large levels wrap the sums, so combine the four corners in unsigned arithmetic before anything else.
+        const auto pixel_box_sum = [&](const int x0, const int y0, const int x1, const int y1) {
+            const unsigned int sum = window[(y1 * integral_stride) + x1] - window[(y0 * integral_stride) + x1] - window[(y1 * integral_stride) + x0] + window[(y0 * integral_stride) + x0];
+            return static_cast<float>(sum);
+        };
+        // Note: The corners of a moved box all share the centre's fraction, so its area sampled sum blends the box with its copies one pixel right and one pixel down.
+        const auto row_box_sum = [&](const int x0, const int y0, const int x1, const int y1) {
+            const float sum = pixel_box_sum(x0, y0, x1, y1);
+            if (fraction_x == 0.0f) {
+                return sum;
+            }
+            return sum + fraction_x * (pixel_box_sum(x0 + 1, y0, x1 + 1, y1) - sum);
+        };
+        const auto box_sum = [&](const int x0, const int y0, const int x1, const int y1) {
+            const float sum = row_box_sum(x0, y0, x1, y1);
+            if (fraction_y == 0.0f) {
+                return sum;
+            }
+            return sum + fraction_y * (row_box_sum(x0, y0 + 1, x1, y1 + 1) - sum);
+        };
+        describe_boxes(angle_radians, box_sum, descriptor);
     }
 }

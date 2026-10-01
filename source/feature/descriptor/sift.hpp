@@ -44,11 +44,32 @@ namespace feature::descriptor {
             float (&vector)[dimensions]
         );
 
+        // Describe with the sampling grid centred offset_x, offset_y pixels from the data pixel, a refined subpixel position; without an affine the samples reach radius pixels around it, and a zero offset matches the overload without one bit for bit.
+        static void describe_float(
+            const unsigned char* __restrict const data,
+            const int stride,
+            const float offset_x,
+            const float offset_y,
+            const float angle_radians,
+            const float* const affine,
+            float (&vector)[dimensions]
+        );
+
         static void binarise(const float (&vector)[dimensions], binary<256>& descriptor);
 
         static void describe(
             const unsigned char* __restrict const data,
             const int stride,
+            const float angle_radians,
+            binary<256>& descriptor
+        );
+
+        // Describe with the sampling grid centred offset_x, offset_y pixels from the data pixel, as describe_float does.
+        static void describe(
+            const unsigned char* __restrict const data,
+            const int stride,
+            const float offset_x,
+            const float offset_y,
             const float angle_radians,
             binary<256>& descriptor
         );

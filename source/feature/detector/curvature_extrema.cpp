@@ -101,13 +101,18 @@ namespace feature::detector {
             const std::int64_t* __restrict const row_below = kappa + (y + 1) * stride;
             for (int x = border; x < width - border; ++x) {
                 const std::int64_t centre = row_centre[x];
+                // Note: Flat regions have zero curvature, a plateau of zeros is no extremum even where it survives the tie breaking.
+                if (centre == 0) {
+                    continue;
+                }
+                // Note: Ties with the earlier neighbours are kept and ties with the later ones are not, so a plateau keeps its last pixel in raster order instead of none.
                 const bool is_maximum =
-                    (centre > row_above[x - 1]) && (centre > row_above[x]) && (centre > row_above[x + 1]) &&
-                    (centre > row_centre[x - 1]) && (centre > row_centre[x + 1]) &&
+                    (centre >= row_above[x - 1]) && (centre >= row_above[x]) && (centre >= row_above[x + 1]) &&
+                    (centre >= row_centre[x - 1]) && (centre > row_centre[x + 1]) &&
                     (centre > row_below[x - 1]) && (centre > row_below[x]) && (centre > row_below[x + 1]);
                 const bool is_minimum =
-                    (centre < row_above[x - 1]) && (centre < row_above[x]) && (centre < row_above[x + 1]) &&
-                    (centre < row_centre[x - 1]) && (centre < row_centre[x + 1]) &&
+                    (centre <= row_above[x - 1]) && (centre <= row_above[x]) && (centre <= row_above[x + 1]) &&
+                    (centre <= row_centre[x - 1]) && (centre < row_centre[x + 1]) &&
                     (centre < row_below[x - 1]) && (centre < row_below[x]) && (centre < row_below[x + 1]);
                 if (!is_maximum && !is_minimum) {
                     continue;
