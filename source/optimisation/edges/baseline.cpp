@@ -51,7 +51,7 @@ namespace optimisation::edges {
                 jacobian_b[3 + axis] = rotated_b[axis];
             }
         }
-        jacobians[0] = math::matrix<double, 0, 0>(1, 6, jacobian_a.data());
-        jacobians[1] = math::matrix<double, 0, 0>(1, 6, jacobian_b.data());
+        edge::set_jacobian(jacobians[0], 1, 6, jacobian_a.data());
+        edge::set_jacobian(jacobians[1], 1, 6, jacobian_b.data());
     }
 }

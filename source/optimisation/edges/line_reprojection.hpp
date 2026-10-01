@@ -42,7 +42,8 @@ namespace optimisation::edges {
         sensor::camera::model<double> camera;
         double measured_normalised[2][2] = { { 0.0, 0.0 }, { 0.0, 0.0 } };
         bool measured_valid = false;
-        double focal = 1.0;
+        double focal_x = 1.0;
+        double focal_y = 1.0;
         constexpr static const double minimum_line_norm = 1.0e-9;
 
     private:

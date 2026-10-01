@@ -68,6 +68,7 @@ namespace optimisation {
             const char* name;
             void (*compute)(const void* object, const double error_squared, math::matrix<double, 3, 1>& rho);
             void (*copy)(const void* from, void* to);
+            void (*move)(void* from, void* to);
             void (*destroy)(void* object);
         };
 
@@ -80,6 +81,9 @@ namespace optimisation {
                 },
                 [](const void* from, void* to) -> void {
                     new (to, static_cast<loss*>(nullptr)) loss_type(*static_cast<const loss_type*>(from));
+                },
+                [](void* from, void* to) -> void {
+                    new (to, static_cast<loss*>(nullptr)) loss_type(static_cast<loss_type&&>(*static_cast<loss_type*>(from)));
                 },
                 [](void* object) -> void {
                     static_cast<loss_type*>(object)->~loss_type();

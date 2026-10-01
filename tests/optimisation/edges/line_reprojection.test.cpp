@@ -88,7 +88,8 @@ int main(int argc, char* argv[]) {
         REQUIRE(std::abs(edge.get_residual()[1][0]) < 1.0e-9);
     }
 
-    {
+    for (const double focal_y : { 500.0, 400.0 }) {
+        const sensor::camera::pinhole<double> camera_model_xy(std::vector<double>{ 500.0, focal_y, 320.0, 240.0 }.data(), 4);
         geometry::plucker perturbed = line;
         REQUIRE(perturbed.oplus(0.02, -0.03, 0.01, 0.02));
         optimisation::vertex pose_vertex{ optimisation::vertices::pose() };
@@ -99,15 +100,31 @@ int main(int argc, char* argv[]) {
         const math::matrix<double, 3, 1> points[2] = { { { -1.0, 0.5, 4.0 } }, { { 1.0, 0.7, 5.0 } } };
         for (int i = 0; i < 2; ++i) {
             const math::matrix<double, 3, 1> camera_point = pose * points[i];
-            REQUIRE(camera_model.project(camera_point.data(), &pixels[i][0]));
+            REQUIRE(camera_model_xy.project(camera_point.data(), &pixels[i][0]));
         }
-        optimisation::edges::line_reprojection policy{ sensor::camera::model<double>(camera_model) };
+        optimisation::edges::line_reprojection policy{ sensor::camera::model<double>(camera_model_xy) };
         REQUIRE(policy.set_measured_segment(pixels[0][0], pixels[0][1], pixels[1][0], pixels[1][1]));
         optimisation::edge edge{ policy };
         edge.add_vertex(&pose_vertex);
         edge.add_vertex(&line_vertex);
         edge.compute_residual();
         REQUIRE(std::abs(edge.get_residual()[0][0]) > 1.0);
+        // The residual is the distance in pixels from each measured end to the projected line, also when fx differs from fy.
+        {
+            const math::matrix<double, 3, 3> rotation = pose.rotation().get_matrix();
+            const math::matrix<double, 3, 1> closest = geometry::plucker::cross(perturbed.direction, perturbed.moment);
+            double line_pixels[2][2];
+            for (int i = 0; i < 2; ++i) {
+                const math::matrix<double, 3, 1> on_line = closest + (perturbed.direction * (4.0 + static_cast<double>(i)));
+                REQUIRE(camera_model_xy.project(((rotation * on_line) + pose.translation()).data(), &line_pixels[i][0]));
+            }
+            const double along[2] = { line_pixels[1][0] - line_pixels[0][0], line_pixels[1][1] - line_pixels[0][1] };
+            const double length = std::sqrt((along[0] * along[0]) + (along[1] * along[1]));
+            for (int i = 0; i < 2; ++i) {
+                const double distance = std::abs(((pixels[i][0] - line_pixels[0][0]) * along[1]) - ((pixels[i][1] - line_pixels[0][1]) * along[0])) / length;
+                REQUIRE(std::abs(std::abs(edge.get_residual()[static_cast<size_t>(i)][0]) - distance) < 1.0e-6 * (1.0 + distance));
+            }
+        }
         edge.compute_jacobians();
         const math::matrix<double, 0, 0> jacobian_pose = edge.get_jacobians()[0];
         const math::matrix<double, 0, 0> jacobian_line = edge.get_jacobians()[1];

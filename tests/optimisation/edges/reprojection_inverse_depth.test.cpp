@@ -152,5 +152,49 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    {
+        // A negative inverse depth is projected like any other, as the point beyond infinity it describes, so the cost is
+        // smooth through infinity and the map clamps the inverse depth after each adjustment. Treating it as behind the
+        // camera, with a step in the cost or a barrier at infinity, lost tracking on LaMAria and EuRoC.
+        const double mirrored[3] = { landmark[0], landmark[1], -landmark[2] };
+        const math::matrix<double, 3, 3> rotation_combined = pose.rotation().get_matrix() * anchor.rotation().get_matrix();
+        const math::matrix<double, 3, 1> rho_column = (pose.rotation().get_matrix() * anchor.translation()) + pose.translation();
+        const math::matrix<double, 3, 1> q = (rotation_combined * math::matrix<double, 3, 1>{ { mirrored[0], mirrored[1], 1.0 } }) + (rho_column * mirrored[2]);
+        math::matrix<double, 2, 1> projected;
+        REQUIRE(camera_model.project(q.data(), projected.data()));
+        optimisation::vertex pose_vertex{ optimisation::vertices::pose() };
+        set_pose(pose_vertex, pose);
+        optimisation::vertex point_vertex{ optimisation::vertices::point() };
+        REQUIRE(point_vertex.set_parameters(&mirrored[0], 3));
+        optimisation::edge edge{ optimisation::edges::reprojection_inverse_depth(sensor::camera::model<double>(camera_model), anchor.rotation().get_matrix(), anchor.translation()) };
+        const double observation[2] = { 300.0, 250.0 };
+        edge.set_observation(math::matrix<double, 0, 0>(2, 1, &observation[0]));
+        edge.add_vertex(&pose_vertex);
+        edge.add_vertex(&point_vertex);
+        edge.compute_residual();
+        REQUIRE(std::abs(edge.get_residual()[0][0] - (observation[0] - projected[0])) < 1.0e-9);
+        REQUIRE(std::abs(edge.get_residual()[1][0] - (observation[1] - projected[1])) < 1.0e-9);
+        edge.compute_jacobians();
+        const math::matrix<double, 0, 0> jacobian_point = edge.get_jacobians()[1];
+        const double step = 1.0e-6;
+        for (size_t column = 0; column < 3; ++column) {
+            double delta[3] = { 0.0, 0.0, 0.0 };
+            delta[column] = step;
+            REQUIRE(point_vertex.set_parameters(&mirrored[0], 3));
+            point_vertex.plus(&delta[0]);
+            edge.compute_residual();
+            const double forward[2] = { edge.get_residual()[0][0], edge.get_residual()[1][0] };
+            delta[column] = -step;
+            REQUIRE(point_vertex.set_parameters(&mirrored[0], 3));
+            point_vertex.plus(&delta[0]);
+            edge.compute_residual();
+            const double backward[2] = { edge.get_residual()[0][0], edge.get_residual()[1][0] };
+            for (size_t row = 0; row < 2; ++row) {
+                const double numeric = (forward[row] - backward[row]) / (2.0 * step);
+                REQUIRE(std::abs(numeric - jacobian_point[row][column]) < 1.0e-4 * (1.0 + std::abs(numeric)));
+            }
+        }
+    }
+
     return EXIT_SUCCESS;
 }

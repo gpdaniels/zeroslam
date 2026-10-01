@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "geometry/plucker.hpp"
 #include "math/lie.hpp"
 #include "math/matrix.hpp"
+#include "math/matrix_decomposition_cholesky.hpp"
 #include "optimisation/edge.hpp"
 #include "optimisation/edges/baseline.hpp"
 #include "optimisation/edges/line_reprojection.hpp"
@@ -43,6 +44,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
+#include <type_traits>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -56,6 +59,111 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 static inline bool is_value_approx(double lhs, double rhs, double epsilon = 1e-8) {
     return std::abs(lhs - rhs) <= (epsilon * (std::abs(lhs) + std::abs(rhs))) + epsilon;
+}
+
+// A residual that can only be evaluated at the start of its vertex, as one outside its domain would be anywhere else.
+class pinned_edge final {
+public:
+    constexpr static const char* name = "pinned";
+    constexpr static const int residual_count = 1;
+    constexpr static const int vertex_count = 1;
+
+    double start;
+
+    void compute_residual(const optimisation::edge& context, math::matrix<double, 0, 0>& residual) const {
+        const double value = context.get_vertex(0)->get_parameters()[0];
+        residual[0][0] = (value == this->start) ? (value - 1.0) : std::numeric_limits<double>::quiet_NaN();
+    }
+
+    void compute_jacobians(const optimisation::edge& context, std::vector<math::matrix<double, 0, 0>>& jacobians) const {
+        static_cast<void>(context);
+        const double values[3] = { 1.0, 0.0, 0.0 };
+        jacobians[0] = math::matrix<double, 0, 0>(1, 3, &values[0]);
+    }
+};
+
+// A linear residual of two points, A x + B y - t, which holds the same vertex in both slots in the tests, so that one edge adds
+// two Hessian terms of the same block, one of them transposed.
+class twice_edge final {
+public:
+    constexpr static const char* name = "twice";
+    constexpr static const int residual_count = 2;
+    constexpr static const int vertex_count = 2;
+
+    constexpr static const double first[6] = { 1.0, 0.5, -0.2, 0.3, -1.0, 0.4 };
+    constexpr static const double second[6] = { 0.2, 0.7, 1.1, -0.6, 0.1, 0.9 };
+    constexpr static const double target[2] = { 0.3, -0.2 };
+
+    void compute_residual(const optimisation::edge& context, math::matrix<double, 0, 0>& residual) const {
+        const double* const x = context.get_vertex(0)->get_parameters();
+        const double* const y = context.get_vertex(1)->get_parameters();
+        for (size_t r = 0; r < 2; ++r) {
+            double sum = -twice_edge::target[r];
+            for (size_t c = 0; c < 3; ++c) {
+                sum += (twice_edge::first[(r * 3) + c] * x[c]) + (twice_edge::second[(r * 3) + c] * y[c]);
+            }
+            residual[r][0] = sum;
+        }
+    }
+
+    void compute_jacobians(const optimisation::edge& context, std::vector<math::matrix<double, 0, 0>>& jacobians) const {
+        static_cast<void>(context);
+        jacobians[0] = math::matrix<double, 0, 0>(2, 3, &twice_edge::first[0]);
+        jacobians[1] = math::matrix<double, 0, 0>(2, 3, &twice_edge::second[0]);
+    }
+};
+
+// The damped step of the whole linear system, assembled densely from the linearised edges and solved without the Schur complement.
+static std::vector<double> dense_damped_step(const std::vector<optimisation::edge*>& edges, const size_t count, const double lambda) {
+    std::vector<double> hessian(count * count, 0.0);
+    std::vector<double> gradient(count, 0.0);
+    for (const optimisation::edge* const factor : edges) {
+        const size_t residuals = factor->get_residual().rows();
+        const double weight = factor->robust_weight();
+        for (size_t i = 0; i < factor->get_vertices().size(); ++i) {
+            const optimisation::vertex* const first = factor->get_vertices()[i];
+            if (first->is_fixed()) {
+                continue;
+            }
+            const math::matrix<double, 0, 0>& jacobian_i = factor->get_jacobians()[i];
+            for (size_t a = 0; a < jacobian_i.cols(); ++a) {
+                double sum = 0.0;
+                for (size_t r = 0; r < residuals; ++r) {
+                    for (size_t c = 0; c < residuals; ++c) {
+                        sum += jacobian_i[r][a] * weight * factor->get_information()[r][c] * factor->get_residual()[c][0];
+                    }
+                }
+                gradient[static_cast<size_t>(first->get_ordering_id()) + a] -= sum;
+            }
+            for (size_t j = 0; j < factor->get_vertices().size(); ++j) {
+                const optimisation::vertex* const second = factor->get_vertices()[j];
+                if (second->is_fixed()) {
+                    continue;
+                }
+                const math::matrix<double, 0, 0>& jacobian_j = factor->get_jacobians()[j];
+                for (size_t a = 0; a < jacobian_i.cols(); ++a) {
+                    for (size_t b = 0; b < jacobian_j.cols(); ++b) {
+                        double sum = 0.0;
+                        for (size_t r = 0; r < residuals; ++r) {
+                            for (size_t c = 0; c < residuals; ++c) {
+                                sum += jacobian_i[r][a] * weight * factor->get_information()[r][c] * jacobian_j[c][b];
+                            }
+                        }
+                        hessian[((static_cast<size_t>(first->get_ordering_id()) + a) * count) + static_cast<size_t>(second->get_ordering_id()) + b] += sum;
+                    }
+                }
+            }
+        }
+    }
+    for (size_t i = 0; i < count; ++i) {
+        const double root = std::sqrt(std::max(hessian[(i * count) + i], 0.0));
+        hessian[(i * count) + i] += lambda * (1.0 + root) * (1.0 + root);
+    }
+    std::vector<double> lower(count * count, 0.0);
+    std::vector<double> step(count, 0.0);
+    REQUIRE(math::decompose_cholesky(hessian.data(), static_cast<int>(count), static_cast<int>(count), lower.data()));
+    REQUIRE(math::solve_cholesky(lower.data(), gradient.data(), static_cast<int>(count), static_cast<int>(count), step.data()));
+    return step;
 }
 
 class problem final {
@@ -218,6 +326,11 @@ int main(int argc, char* argv[]) {
         optimisation::factor_graph factor_graph;
     }
 
+    static_assert(!std::is_copy_constructible<optimisation::factor_graph>::value, "The graph holds pointers into its own storage and must not be copied.");
+    static_assert(!std::is_copy_assignable<optimisation::factor_graph>::value, "The graph holds pointers into its own storage and must not be copied.");
+    static_assert(!std::is_move_constructible<optimisation::factor_graph>::value, "The graph holds pointers into its own storage and must not be moved.");
+    static_assert(!std::is_move_assignable<optimisation::factor_graph>::value, "The graph holds pointers into its own storage and must not be moved.");
+
     {
         optimisation::factor_graph factor_graph;
         std::vector<optimisation::vertex*> added;
@@ -237,6 +350,39 @@ int main(int argc, char* argv[]) {
         REQUIRE(factor_graph.remove_vertex(added[0]));
         REQUIRE(!factor_graph.remove_vertex(added[0]));
         REQUIRE(added[1]->get_parameters()[0] == 1.0);
+
+        // An edge must hold exactly the vertices its type takes, all of them vertices of this graph.
+        const sensor::camera::pinhole<double> camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
+        optimisation::vertex camera_vertex{ optimisation::vertices::pose() };
+        const double camera_pose[7] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 };
+        REQUIRE(camera_vertex.set_parameters(&camera_pose[0], 7));
+        optimisation::vertex* const camera = factor_graph.add_vertex(static_cast<optimisation::vertex&&>(camera_vertex));
+        REQUIRE(camera != nullptr);
+        const auto make_edge = [&camera_model](optimisation::vertex* const first, optimisation::vertex* const second) {
+            optimisation::edge factor{ optimisation::edges::reprojection(sensor::camera::model<double>(camera_model)) };
+            factor.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { 0.0, 0.0 } }.data()));
+            if (first != nullptr) {
+                REQUIRE(factor.add_vertex(first));
+            }
+            if (second != nullptr) {
+                REQUIRE(factor.add_vertex(second));
+            }
+            return factor;
+        };
+        REQUIRE(factor_graph.add_edge(make_edge(camera, nullptr)) == nullptr);
+        REQUIRE(factor_graph.add_edge(make_edge(nullptr, nullptr)) == nullptr);
+        REQUIRE(factor_graph.add_edge(make_edge(camera, added[0])) == nullptr);
+        optimisation::factor_graph other_graph;
+        optimisation::vertex foreign_vertex{ optimisation::vertices::point() };
+        const double foreign_location[3] = { 0.0, 0.0, 1.0 };
+        REQUIRE(foreign_vertex.set_parameters(&foreign_location[0], 3));
+        optimisation::vertex* const foreign = other_graph.add_vertex(static_cast<optimisation::vertex&&>(foreign_vertex));
+        REQUIRE(foreign != nullptr);
+        REQUIRE(factor_graph.add_edge(make_edge(camera, foreign)) == nullptr);
+        optimisation::edge* const valid = factor_graph.add_edge(make_edge(camera, added[1]));
+        REQUIRE(valid != nullptr);
+        REQUIRE(factor_graph.get_connected_edges(camera).size() == 1);
+        REQUIRE(factor_graph.get_connected_edges(added[1]).size() == 1);
     }
 
     {
@@ -667,6 +813,152 @@ int main(int argc, char* argv[]) {
         const double before = unsupported.landmarks[0]->get_parameters()[0];
         REQUIRE(unsupported.graph.solve(5, true) == 0);
         REQUIRE(unsupported.landmarks[0]->get_parameters()[0] == before);
+    }
+
+    {
+        // Removing edges keeps the order of the others whatever the order of removal, so two graphs with the same edges
+        // removed in different orders, one with extra edges added and removed in between, solve identically.
+        core::random_pcg rng_first(0x5eed00ddull);
+        core::random_pcg rng_second(0x5eed00ddull);
+        problem first;
+        problem second;
+        build_problem(first, rng_first, 6, 25, true, false);
+        build_problem(second, rng_second, 6, 25, true, false);
+        std::vector<optimisation::edge*> first_removed;
+        std::vector<optimisation::edge*> second_removed;
+        for (size_t l = 0; l < first.landmarks.size(); l += 3) {
+            first_removed.push_back(first.graph.get_connected_edges(first.landmarks[l]).front());
+            second_removed.push_back(second.graph.get_connected_edges(second.landmarks[l]).front());
+        }
+        for (optimisation::edge* const factor : first_removed) {
+            REQUIRE(first.graph.remove_edge(factor));
+        }
+        const sensor::camera::pinhole<double> camera_model(std::vector<double>{ 1.0, 1.0, 0.0, 0.0 }.data(), 4);
+        std::vector<optimisation::edge*> extra;
+        for (size_t i = 0; i < 10; ++i) {
+            optimisation::edge factor{ optimisation::edges::reprojection(sensor::camera::model<double>(camera_model)) };
+            factor.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { 0.3, -0.2 } }.data()));
+            REQUIRE(factor.add_vertex(second.cameras[1 + (i % 5)]));
+            REQUIRE(factor.add_vertex(second.landmarks[i]));
+            extra.push_back(second.graph.add_edge(static_cast<optimisation::edge&&>(factor)));
+            REQUIRE(extra.back() != nullptr);
+        }
+        for (size_t i = second_removed.size(); i-- > 0;) {
+            REQUIRE(second.graph.remove_edge(second_removed[i]));
+            if (i < extra.size()) {
+                REQUIRE(second.graph.remove_edge(extra[i]));
+            }
+        }
+        for (optimisation::edge* const factor : extra) {
+            static_cast<void>(second.graph.remove_edge(factor));
+        }
+        REQUIRE(!second.graph.remove_edge(second_removed[0]));
+        REQUIRE(!first.graph.remove_edge(second_removed[0]));
+        for (size_t l = 0; l < first.landmarks.size(); ++l) {
+            REQUIRE(first.graph.get_connected_edges(first.landmarks[l]).size() == second.graph.get_connected_edges(second.landmarks[l]).size());
+        }
+        REQUIRE(first.graph.solve(20, true) == second.graph.solve(20, true));
+        for (size_t c = 0; c < first.cameras.size(); ++c) {
+            for (size_t p = 0; p < 7; ++p) {
+                REQUIRE(first.cameras[c]->get_parameters()[p] == second.cameras[c]->get_parameters()[p]);
+            }
+        }
+        for (size_t l = 0; l < first.landmarks.size(); ++l) {
+            for (size_t p = 0; p < 3; ++p) {
+                REQUIRE(first.landmarks[l]->get_parameters()[p] == second.landmarks[l]->get_parameters()[p]);
+            }
+        }
+        // A removed vertex takes its edges with it.
+        const size_t connected = second.graph.get_connected_edges(second.cameras[2]).size();
+        REQUIRE(connected > 0);
+        REQUIRE(second.graph.remove_vertex(second.landmarks[1]));
+        REQUIRE(second.graph.get_connected_edges(second.landmarks[1]).empty());
+        REQUIRE(second.graph.get_connected_edges(second.cameras[2]).size() == connected - 1);
+        REQUIRE(second.graph.solve(5, true) > 0);
+    }
+
+    for (const int variant : { 0, 1, 2 }) {
+        // The damped step of the Schur complement solved with the sparse block Cholesky equals the dense solve of the whole
+        // system, with pair blocks from a baseline edge, fixed and correlated landmarks, lines, and a landmark kept general.
+        core::random_pcg rng(0x5eed00ccull);
+        problem built;
+        build_problem(built, rng, 7, 30, true, false);
+        static_cast<void>(add_mixed_blocks(built, rng));
+        std::vector<geometry::plucker> true_lines;
+        add_lines(built, rng, 8, true_lines);
+        if (variant > 0) {
+            built.landmarks[3]->set_marginalised(false);
+            optimisation::edge twice{ twice_edge() };
+            REQUIRE(twice.add_vertex(built.landmarks[3]));
+            REQUIRE(twice.add_vertex(built.landmarks[3]));
+            twice.set_information(math::matrix<double, 0, 0>::identity(2, 2) * 1e2);
+            REQUIRE(built.graph.add_edge(static_cast<optimisation::edge&&>(twice)) != nullptr);
+        }
+        if (variant > 1) {
+            built.cameras[2]->set_fixed(true);
+            built.landmarks[5]->set_marginalised(false);
+        }
+        std::vector<optimisation::edge*> edges;
+        for (const std::vector<optimisation::vertex*>* group : { &built.cameras, &built.landmarks, &built.lines }) {
+            for (optimisation::vertex* const node : *group) {
+                for (optimisation::edge* const connected : built.graph.get_connected_edges(node)) {
+                    if (std::find(edges.begin(), edges.end(), connected) == edges.end()) {
+                        edges.push_back(connected);
+                    }
+                }
+            }
+        }
+        built.graph.set_strategy(optimisation::factor_graph::strategy::dense_schur);
+        for (const double lambda : { 1e-6, 1e-2, 1.0 }) {
+            math::matrix<double, 0, 0> step;
+            REQUIRE(built.graph.compute_damped_step(lambda, step));
+            REQUIRE(!built.graph.get_diagnostics().used_square_root);
+            const std::vector<double> expected = dense_damped_step(edges, step.rows(), lambda);
+            double largest = 0.0;
+            for (const double value : expected) {
+                largest = std::max(largest, std::abs(value));
+            }
+            REQUIRE(largest > 0.0);
+            // Barely damped the system is conditioned near 1e8, so both solves carry errors near 1e-8 of the step there.
+            const double tolerance = (lambda < 1e-3) ? 1e-6 : 1e-11;
+            for (size_t i = 0; i < step.rows(); ++i) {
+                REQUIRE(std::abs(step[i][0] - expected[i]) < tolerance * largest);
+            }
+        }
+    }
+
+    {
+        // The gain ratio is relative to the cost: a tiny cost gets the ratio of a large one, which an absolute 1e-3 in the
+        // predicted reduction pushed to about 0.
+        REQUIRE(is_value_approx(optimisation::factor_graph::gain_ratio(1e-6, 0.5e-6, 0.5e-6), 1.0, 1e-9));
+        REQUIRE(is_value_approx(optimisation::factor_graph::gain_ratio(1e6, 0.5e6, 0.5e6), 1.0, 1e-9));
+        // A step the model does not predict to reduce the cost is rejected, including a cost increase over a negative
+        // prediction, whose ratio was positive before.
+        REQUIRE(optimisation::factor_graph::gain_ratio(1.0, 2.0, -0.1) == 0.0);
+        REQUIRE(optimisation::factor_graph::gain_ratio(1.0, 0.5, 0.0) == 0.0);
+        REQUIRE(!(optimisation::factor_graph::gain_ratio(1.0, 0.5, std::numeric_limits<double>::quiet_NaN()) > 0.0));
+        // An infinite starting cost still takes a step to a finite one.
+        REQUIRE(optimisation::factor_graph::gain_ratio(std::numeric_limits<double>::infinity(), 1.0, 1.0) > 0.0);
+    }
+
+    {
+        // Every step of this edge leaves the domain of its residual, so the solve ends on rejected attempts, and the residual,
+        // and the robust weight it gives, must describe the vertex after the last rollback, not the last rejected state.
+        optimisation::factor_graph graph;
+        optimisation::vertex node{ optimisation::vertices::point() };
+        const double start[3] = { 5.0, 0.0, 0.0 };
+        REQUIRE(node.set_parameters(&start[0], 3));
+        optimisation::vertex* const stored = graph.add_vertex(static_cast<optimisation::vertex&&>(node));
+        optimisation::edge factor{ pinned_edge{ start[0] } };
+        REQUIRE(factor.add_vertex(stored));
+        optimisation::edge* const added = graph.add_edge(static_cast<optimisation::edge&&>(factor));
+        REQUIRE(added != nullptr);
+        REQUIRE(graph.solve(10, true) == 0);
+        REQUIRE(graph.get_diagnostics().rejected_attempts >= 10);
+        REQUIRE(stored->get_parameters()[0] == start[0]);
+        REQUIRE(added->get_residual()[0][0] == (start[0] - 1.0));
+        REQUIRE(added->robust_weight() == 1.0);
+        REQUIRE(graph.get_current_chi(false) == ((start[0] - 1.0) * (start[0] - 1.0)));
     }
 
     return EXIT_SUCCESS;

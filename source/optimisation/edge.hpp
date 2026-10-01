@@ -96,6 +96,7 @@ namespace optimisation {
             void (*compute_residual)(const void* object, const edge& context, math::matrix<double, 0, 0>& residual);
             void (*compute_jacobians)(const void* object, const edge& context, std::vector<math::matrix<double, 0, 0>>& jacobians);
             void (*copy)(const void* from, void* to);
+            void (*move)(void* from, void* to);
             void (*destroy)(void* object);
         };
 
@@ -123,6 +124,9 @@ namespace optimisation {
                 edge::jacobians_for<edge_type>(),
                 [](const void* from, void* to) -> void {
                     new (to, static_cast<edge*>(nullptr)) edge_type(*static_cast<const edge_type*>(from));
+                },
+                [](void* from, void* to) -> void {
+                    new (to, static_cast<edge*>(nullptr)) edge_type(static_cast<edge_type&&>(*static_cast<edge_type*>(from)));
                 },
                 [](void* object) -> void {
                     static_cast<edge_type*>(object)->~edge_type();
@@ -177,6 +181,7 @@ namespace optimisation {
         int get_ordering_id() const;
         void set_ordering_id(int id);
         size_t num_vertices() const;
+        size_t required_vertices() const;
         bool add_vertex(vertex* node);
         const std::vector<vertex*>& get_vertices() const;
         bool set_vertices(const std::vector<vertex*>& vertices_value);
@@ -199,6 +204,9 @@ namespace optimisation {
         void compute_residual();
         void compute_jacobians();
         bool has_analytic_jacobians() const;
+
+        // Writes a jacobian block, reusing its storage when the shape is unchanged.
+        static void set_jacobian(math::matrix<double, 0, 0>& jacobian, const size_t rows, const size_t cols, const double* values);
     };
 }
 

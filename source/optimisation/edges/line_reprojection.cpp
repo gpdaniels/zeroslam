@@ -25,8 +25,9 @@ namespace optimisation::edges {
         : camera(camera_model) {
         double parameters[32] = {};
         const size_t count = math::min<size_t>(this->camera.get_parameter_count(), 32);
-        if ((count > 0) && this->camera.get_parameters(parameters, count)) {
-            this->focal = parameters[0];
+        if ((count >= 2) && this->camera.get_parameters(parameters, count)) {
+            this->focal_x = parameters[0];
+            this->focal_y = parameters[1];
         }
     }
 
@@ -69,9 +70,13 @@ namespace optimisation::edges {
             residual[1][0] = 0.0;
             return;
         }
+        // The distance in pixels to the image line (m0 / fx, m1 / fy, ...) of the camera line m0 x + m1 y + m2 = 0.
+        const double pixel_x = moment_camera[0] / this->focal_x;
+        const double pixel_y = moment_camera[1] / this->focal_y;
+        const double pixel_norm = math::sqrt((pixel_x * pixel_x) + (pixel_y * pixel_y));
         for (size_t i = 0; i < 2; ++i) {
             const double alignment = (moment_camera[0] * this->measured_normalised[i][0]) + (moment_camera[1] * this->measured_normalised[i][1]) + moment_camera[2];
-            residual[i][0] = this->focal * alignment / line_norm;
+            residual[i][0] = alignment / pixel_norm;
         }
     }
 
@@ -84,18 +89,23 @@ namespace optimisation::edges {
         const double line_norm_squared = (moment_camera[0] * moment_camera[0]) + (moment_camera[1] * moment_camera[1]);
         const double line_norm = math::sqrt(line_norm_squared);
         if (!this->measured_valid || (line_norm < line_reprojection::minimum_line_norm)) {
-            jacobians[0] = math::matrix<double, 0, 0>::zero(2, 6);
-            jacobians[1] = math::matrix<double, 0, 0>::zero(2, 4);
+            const double zeros[12] = {};
+            edge::set_jacobian(jacobians[0], 2, 6, &zeros[0]);
+            edge::set_jacobian(jacobians[1], 2, 4, &zeros[0]);
             return;
         }
+        const double pixel_x = moment_camera[0] / this->focal_x;
+        const double pixel_y = moment_camera[1] / this->focal_y;
+        const double pixel_norm_squared = (pixel_x * pixel_x) + (pixel_y * pixel_y);
+        const double pixel_norm = math::sqrt(pixel_norm_squared);
         math::matrix<double, 2, 3> jacobian_residual_line;
         for (size_t i = 0; i < 2; ++i) {
             const double x[3] = { this->measured_normalised[i][0], this->measured_normalised[i][1], 1.0 };
             const double alignment = (moment_camera[0] * x[0]) + (moment_camera[1] * x[1]) + moment_camera[2];
-            const double alignment_over_cubed = alignment / (line_norm_squared * line_norm);
-            jacobian_residual_line[i][0] = this->focal * ((x[0] / line_norm) - (moment_camera[0] * alignment_over_cubed));
-            jacobian_residual_line[i][1] = this->focal * ((x[1] / line_norm) - (moment_camera[1] * alignment_over_cubed));
-            jacobian_residual_line[i][2] = this->focal * (x[2] / line_norm);
+            const double alignment_over_cubed = alignment / (pixel_norm_squared * pixel_norm);
+            jacobian_residual_line[i][0] = (x[0] / pixel_norm) - ((pixel_x / this->focal_x) * alignment_over_cubed);
+            jacobian_residual_line[i][1] = (x[1] / pixel_norm) - ((pixel_y / this->focal_y) * alignment_over_cubed);
+            jacobian_residual_line[i][2] = x[2] / pixel_norm;
         }
         math::matrix<double, 3, 6> jacobian_line_pose;
         jacobian_line_pose[0][0] = 0.0;
@@ -117,7 +127,7 @@ namespace optimisation::edges {
         jacobian_line_pose[2][4] = -direction_camera[0];
         jacobian_line_pose[2][5] = 0.0;
         const math::matrix<double, 2, 6> jacobian_pose_res = jacobian_residual_line * jacobian_line_pose;
-        jacobians[0] = math::matrix<double, 0, 0>(2, 6, jacobian_pose_res.data());
+        edge::set_jacobian(jacobians[0], 2, 6, jacobian_pose_res.data());
         const double* const line_params = context.get_vertex(1)->get_parameters();
         const geometry::plucker line_world(
             math::matrix<double, 3, 1>({ line_params[0], line_params[1], line_params[2] }),
@@ -142,6 +152,6 @@ namespace optimisation::edges {
                 jacobian_landmark_res[i][column] = (jacobian_residual_line[i][0] * line_column[0]) + (jacobian_residual_line[i][1] * line_column[1]) + (jacobian_residual_line[i][2] * line_column[2]);
             }
         }
-        jacobians[1] = math::matrix<double, 0, 0>(2, 4, jacobian_landmark_res.data());
+        edge::set_jacobian(jacobians[1], 2, 4, jacobian_landmark_res.data());
     }
 }

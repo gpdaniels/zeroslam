@@ -31,7 +31,11 @@ namespace optimisation {
     }
 
     loss::loss(loss&& other)
-        : loss(static_cast<const loss&>(other)) {
+        : storage{}
+        , functions(other.functions) {
+        if (this->functions != nullptr) {
+            this->functions->move(other.storage, this->storage);
+        }
     }
 
     loss& loss::operator=(const loss& other) {
@@ -46,7 +50,14 @@ namespace optimisation {
     }
 
     loss& loss::operator=(loss&& other) {
-        return *this = static_cast<const loss&>(other);
+        if (this != &other) {
+            this->clear();
+            this->functions = other.functions;
+            if (this->functions != nullptr) {
+                this->functions->move(other.storage, this->storage);
+            }
+        }
+        return *this;
     }
 
     loss::~loss() {

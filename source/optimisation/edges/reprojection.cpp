@@ -23,6 +23,10 @@ namespace optimisation::edges {
         : camera(camera_model) {
     }
 
+    double reprojection::behind_camera_residual(const double depth) {
+        return -reprojection::behind_camera_slope * depth;
+    }
+
     void reprojection::compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const {
         const double* const pose_params = context.get_vertex(0)->get_parameters();
         const math::se3<double> pose(math::so3<double>(pose_params[6], pose_params[3], pose_params[4], pose_params[5]), { { pose_params[0], pose_params[1], pose_params[2] } });
@@ -31,7 +35,7 @@ namespace optimisation::edges {
         const math::matrix<double, 3, 1> landmark_camera = pose * landmark_world;
         math::matrix<double, 2, 1> projected = { { 0.0, 0.0 } };
         if (!this->camera.project(landmark_camera.data(), projected.data())) {
-            const double penalty = -reprojection::behind_camera_penalty * landmark_camera[2];
+            const double penalty = reprojection::behind_camera_residual(landmark_camera[2]);
             residual[0][0] = penalty;
             residual[1][0] = penalty;
             return;
@@ -52,10 +56,10 @@ namespace optimisation::edges {
         if (!this->camera.project(landmark_camera.data(), projected, jacobian_camera.data())) {
             jacobian_camera[0][0] = 0.0;
             jacobian_camera[0][1] = 0.0;
-            jacobian_camera[0][2] = reprojection::behind_camera_penalty;
+            jacobian_camera[0][2] = reprojection::behind_camera_slope;
             jacobian_camera[1][0] = 0.0;
             jacobian_camera[1][1] = 0.0;
-            jacobian_camera[1][2] = reprojection::behind_camera_penalty;
+            jacobian_camera[1][2] = reprojection::behind_camera_slope;
         }
 
         const double X = landmark_camera[0];
@@ -83,9 +87,9 @@ namespace optimisation::edges {
         jacobian_point_pose[2][5] = 1;
 
         const math::matrix<double, 2, 6> jacobian_pose_res = -(jacobian_camera * jacobian_point_pose);
-        jacobians[0] = math::matrix<double, 0, 0>(2, 6, jacobian_pose_res.data());
+        edge::set_jacobian(jacobians[0], 2, 6, jacobian_pose_res.data());
 
         const math::matrix<double, 2, 3> jacobian_landmark_res = -(jacobian_camera * pose.rotation().get_matrix());
-        jacobians[1] = math::matrix<double, 0, 0>(2, 3, jacobian_landmark_res.data());
+        edge::set_jacobian(jacobians[1], 2, 3, jacobian_landmark_res.data());
     }
 }

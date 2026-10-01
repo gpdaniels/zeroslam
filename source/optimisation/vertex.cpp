@@ -45,7 +45,20 @@ namespace optimisation {
     }
 
     vertex::vertex(vertex&& other)
-        : vertex(static_cast<const vertex&>(other)) {
+        : storage{}
+        , functions(other.functions)
+        , ordering_id(other.ordering_id)
+        , fixed(other.fixed)
+        , marginalised(other.marginalised)
+        , parameters{}
+        , parameters_backup{} {
+        for (size_t i = 0; i < vertex::maximum_parameters; ++i) {
+            this->parameters[i] = other.parameters[i];
+            this->parameters_backup[i] = other.parameters_backup[i];
+        }
+        if (this->functions != nullptr) {
+            this->functions->move(other.storage, this->storage);
+        }
     }
 
     vertex& vertex::operator=(const vertex& other) {
@@ -67,7 +80,21 @@ namespace optimisation {
     }
 
     vertex& vertex::operator=(vertex&& other) {
-        return *this = static_cast<const vertex&>(other);
+        if (this != &other) {
+            this->clear();
+            this->functions = other.functions;
+            if (this->functions != nullptr) {
+                this->functions->move(other.storage, this->storage);
+            }
+            this->ordering_id = other.ordering_id;
+            this->fixed = other.fixed;
+            this->marginalised = other.marginalised;
+            for (size_t i = 0; i < vertex::maximum_parameters; ++i) {
+                this->parameters[i] = other.parameters[i];
+                this->parameters_backup[i] = other.parameters_backup[i];
+            }
+        }
+        return *this;
     }
 
     vertex::~vertex() {

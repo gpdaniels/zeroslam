@@ -16,6 +16,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "optimisation/edges/similarity_reprojection.hpp"
 
+#include "optimisation/edges/reprojection.hpp"
+
 namespace optimisation::edges {
     similarity_reprojection::similarity_reprojection(const sensor::camera::model<double>& camera_model, const math::matrix<double, 3, 1>& point_location, const math::se3<double>& observer_pose, const bool apply_inverse)
         : camera(camera_model)
@@ -31,7 +33,7 @@ namespace optimisation::edges {
         const math::matrix<double, 3, 1> in_camera = this->observer * transferred;
         math::matrix<double, 2, 1> projected = { { 0.0, 0.0 } };
         if (!this->camera.project(in_camera.data(), projected.data())) {
-            const double penalty = -similarity_reprojection::behind_camera_penalty * in_camera[2];
+            const double penalty = reprojection::behind_camera_residual(in_camera[2]);
             residual[0][0] = penalty;
             residual[1][0] = penalty;
             return;
@@ -51,10 +53,10 @@ namespace optimisation::edges {
         if (!this->camera.project(in_camera.data(), projected, jacobian_camera.data())) {
             jacobian_camera[0][0] = 0.0;
             jacobian_camera[0][1] = 0.0;
-            jacobian_camera[0][2] = similarity_reprojection::behind_camera_penalty;
+            jacobian_camera[0][2] = reprojection::behind_camera_slope;
             jacobian_camera[1][0] = 0.0;
             jacobian_camera[1][1] = 0.0;
-            jacobian_camera[1][2] = similarity_reprojection::behind_camera_penalty;
+            jacobian_camera[1][2] = reprojection::behind_camera_slope;
         }
 
         const math::matrix<double, 3, 1>& acted = this->inverted ? this->location : transferred;
@@ -88,6 +90,6 @@ namespace optimisation::edges {
         const math::matrix<double, 3, 3> jacobian_transfer = this->inverted ? ((rotation_observer * math::transpose(similarity.transformation().rotation().get_matrix())) * (-1.0 / similarity.scale())) : rotation_observer;
 
         const math::matrix<double, 2, 7> jacobian_similarity_res = -((jacobian_camera * jacobian_transfer) * jacobian_point_similarity);
-        jacobians[0] = math::matrix<double, 0, 0>(2, 7, jacobian_similarity_res.data());
+        edge::set_jacobian(jacobians[0], 2, 7, jacobian_similarity_res.data());
     }
 }

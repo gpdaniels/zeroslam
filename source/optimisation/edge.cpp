@@ -47,7 +47,20 @@ namespace optimisation {
     }
 
     edge::edge(edge&& other)
-        : edge(static_cast<const edge&>(other)) {
+        : storage{}
+        , functions(other.functions)
+        , ordering_id(other.ordering_id)
+        , vertices(static_cast<std::vector<vertex*>&&>(other.vertices))
+        , residual(static_cast<math::matrix<double, 0, 0>&&>(other.residual))
+        , jacobians(static_cast<std::vector<math::matrix<double, 0, 0>>&&>(other.jacobians))
+        , information(static_cast<math::matrix<double, 0, 0>&&>(other.information))
+        , observation(static_cast<math::matrix<double, 0, 0>&&>(other.observation))
+        , robust_loss(static_cast<loss&&>(other.robust_loss)) {
+        if (this->functions != nullptr) {
+            this->functions->move(other.storage, this->storage);
+        }
+        // The moved from edge gave away its residual and jacobian storage, so it becomes an empty edge.
+        other.clear();
     }
 
     edge& edge::operator=(const edge& other) {
@@ -69,7 +82,22 @@ namespace optimisation {
     }
 
     edge& edge::operator=(edge&& other) {
-        return *this = static_cast<const edge&>(other);
+        if (this != &other) {
+            this->clear();
+            this->functions = other.functions;
+            if (this->functions != nullptr) {
+                this->functions->move(other.storage, this->storage);
+            }
+            this->ordering_id = other.ordering_id;
+            this->vertices = static_cast<std::vector<vertex*>&&>(other.vertices);
+            this->residual = static_cast<math::matrix<double, 0, 0>&&>(other.residual);
+            this->jacobians = static_cast<std::vector<math::matrix<double, 0, 0>>&&>(other.jacobians);
+            this->information = static_cast<math::matrix<double, 0, 0>&&>(other.information);
+            this->observation = static_cast<math::matrix<double, 0, 0>&&>(other.observation);
+            this->robust_loss = static_cast<loss&&>(other.robust_loss);
+            other.clear();
+        }
+        return *this;
     }
 
     edge::~edge() {
@@ -101,6 +129,10 @@ namespace optimisation {
 
     size_t edge::num_vertices() const {
         return this->vertices.size();
+    }
+
+    size_t edge::required_vertices() const {
+        return (this->functions != nullptr) ? static_cast<size_t>(this->functions->vertex_count) : 0;
     }
 
     bool edge::add_vertex(vertex* node) {
@@ -222,10 +254,17 @@ namespace optimisation {
         const double scalar = 1.0 / (2.0 * delta);
 
         const math::matrix<double, 0, 0> backup_residual = this->residual;
+        const size_t rows = this->residual.rows();
 
         for (size_t i = 0; i < this->vertices.size(); ++i) {
             const size_t vertex_dimensions = static_cast<size_t>(this->vertices[i]->get_local_dimensions());
-            this->jacobians[i] = math::matrix<double, 0, 0>::zero(this->residual.rows(), vertex_dimensions);
+            math::matrix<double, 0, 0>& jacobian = this->jacobians[i];
+            if ((jacobian.rows() != rows) || (jacobian.cols() != vertex_dimensions)) {
+                jacobian = math::matrix<double, 0, 0>(rows, vertex_dimensions);
+            }
+            for (size_t k = 0; k < jacobian.size(); ++k) {
+                jacobian.data()[k] = 0.0;
+            }
 
             if (this->vertices[i]->is_fixed()) {
                 continue;
@@ -243,23 +282,35 @@ namespace optimisation {
                 add_delta[d] = delta;
                 this->vertices[i]->plus(&add_delta[0]);
                 this->functions->compute_residual(this->storage, *this, this->residual);
-                const math::matrix<double, 0, 0> error_addition = this->residual;
+                for (size_t r = 0; r < rows; ++r) {
+                    jacobian[r][d] = this->residual[r][0];
+                }
 
                 static_cast<void>(this->vertices[i]->set_parameters(&backup[0], parameter_dimensions));
 
                 add_delta[d] = -delta;
                 this->vertices[i]->plus(&add_delta[0]);
                 this->functions->compute_residual(this->storage, *this, this->residual);
-                const math::matrix<double, 0, 0> error_subtract = this->residual;
+                for (size_t r = 0; r < rows; ++r) {
+                    jacobian[r][d] = scalar * (jacobian[r][d] - this->residual[r][0]);
+                }
 
                 static_cast<void>(this->vertices[i]->set_parameters(&backup[0], parameter_dimensions));
-
-                for (size_t r = 0; r < this->residual.rows(); ++r) {
-                    this->jacobians[i][r][d] = scalar * (error_addition[r][0] - error_subtract[r][0]);
-                }
             }
         }
 
-        this->residual = backup_residual;
+        for (size_t r = 0; r < rows; ++r) {
+            this->residual[r][0] = backup_residual[r][0];
+        }
+    }
+
+    void edge::set_jacobian(math::matrix<double, 0, 0>& jacobian, const size_t rows, const size_t cols, const double* values) {
+        if ((jacobian.rows() != rows) || (jacobian.cols() != cols)) {
+            jacobian = math::matrix<double, 0, 0>(rows, cols);
+        }
+        double* const data = jacobian.data();
+        for (size_t i = 0; i < (rows * cols); ++i) {
+            data[i] = values[i];
+        }
     }
 }

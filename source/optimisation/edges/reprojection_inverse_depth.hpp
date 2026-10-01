@@ -43,7 +43,6 @@ namespace optimisation::edges {
         sensor::camera::model<double> camera;
         math::matrix<double, 3, 3> anchor_rotation;
         math::matrix<double, 3, 1> anchor_translation;
-        constexpr static const double behind_camera_penalty = 0.3;
 
     private:
         void compute_scaled_point(const edge& context, math::matrix<double, 3, 1>& q, math::matrix<double, 3, 3>& rotation_combined, math::matrix<double, 3, 1>& rho_column, double& rho) const;

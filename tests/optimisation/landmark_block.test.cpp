@@ -537,5 +537,39 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    {
+        // One pass over the reduced rows gives every pose slot exactly the sums a pass per slot gives: over the rows in
+        // order, each row's value of R x times the slot's entries.
+        const int poses = 4;
+        const std::vector<synthetic_observation> observations = make_observations(rng, 11, poses, 2);
+        optimisation::landmark_block<double> block = build_block(observations, poses, true);
+        block.perform_qr();
+        block.set_damping(0.3);
+        std::vector<double> input(static_cast<size_t>(6 * poses));
+        for (double& value : input) {
+            value = random_signed(rng);
+        }
+        REQUIRE(block.compute_operator_image(input.data()));
+        for (int slot = 0; slot < poses; ++slot) {
+            double target[6] = { 0.5, -0.25, 0.125, 1.0, -1.0, 2.0 };
+            const double start[6] = { 0.5, -0.25, 0.125, 1.0, -1.0, 2.0 };
+            block.add_operator_slot(slot, &target[0]);
+            double accumulated[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            for (int r = 0; r < block.reduced_rows(); ++r) {
+                const double* const source = block.row(block.rows() - block.reduced_rows() + r);
+                double value = 0.0;
+                for (int c = 0; c < 6 * poses; ++c) {
+                    value += source[c] * input[static_cast<size_t>(block.get_pose_offset(c / 6) + (c % 6))];
+                }
+                for (int c = 0; c < 6; ++c) {
+                    accumulated[c] += source[(6 * slot) + c] * value;
+                }
+            }
+            for (int c = 0; c < 6; ++c) {
+                REQUIRE(target[c] == (start[c] + accumulated[c]));
+            }
+        }
+    }
+
     return EXIT_SUCCESS;
 }

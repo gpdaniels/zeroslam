@@ -334,6 +334,8 @@ namespace optimisation {
             }
         }
 
+        // Computes R^T R x over the pose columns in one pass over the reduced rows, each row read once for R x and again from
+        // cache for R^T, keeping the product of every pose slot for add_operator_slot.
         bool compute_operator_image(const type* column_x) {
             const int reduced = this->reduced_rows();
             const int pose_columns = this->landmark_col;
@@ -341,11 +343,15 @@ namespace optimisation {
                 return false;
             }
             type* const gathered = this->scratch.data();
-            type* const image = this->scratch.data() + pose_columns;
+            type* const image = gathered + pose_columns;
+            type* const output = image + reduced;
             for (size_t slot = 0; slot < this->pose_offsets.size(); ++slot) {
                 for (int c = 0; c < 6; ++c) {
                     gathered[(6 * static_cast<int>(slot)) + c] = column_x[this->pose_offsets[slot] + c];
                 }
+            }
+            for (int c = 0; c < pose_columns; ++c) {
+                output[c] = 0;
             }
             for (int r = 0; r < reduced; ++r) {
                 const type* const source = this->row(this->reduced_row + r);
@@ -354,23 +360,17 @@ namespace optimisation {
                     sum += source[c] * gathered[c];
                 }
                 image[r] = sum;
+                for (int c = 0; c < pose_columns; ++c) {
+                    output[c] += source[c] * sum;
+                }
             }
             return true;
         }
 
         void add_operator_slot(const int slot, type* target) const {
-            const int reduced = this->reduced_rows();
-            const type* const image = this->scratch.data() + this->landmark_col;
-            type accumulated[6] = { 0, 0, 0, 0, 0, 0 };
-            for (int r = 0; r < reduced; ++r) {
-                const type* const source = this->row(this->reduced_row + r) + (6 * slot);
-                const type value = image[r];
-                for (int c = 0; c < 6; ++c) {
-                    accumulated[c] += source[c] * value;
-                }
-            }
+            const type* const output = this->scratch.data() + this->landmark_col + this->reduced_rows() + (6 * slot);
             for (int c = 0; c < 6; ++c) {
-                target[c] += accumulated[c];
+                target[c] += output[c];
             }
         }
 

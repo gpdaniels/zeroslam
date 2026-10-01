@@ -50,8 +50,6 @@ namespace optimisation::edges {
         math::se3<double> observer;
         bool inverted;
 
-        constexpr static const double behind_camera_penalty = 0.3;
-
     public:
         similarity_reprojection(const sensor::camera::model<double>& camera_model, const math::matrix<double, 3, 1>& point_location, const math::se3<double>& observer_pose, const bool apply_inverse);
 

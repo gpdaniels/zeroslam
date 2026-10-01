@@ -150,5 +150,31 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    {
+        // A point the camera cannot project, here one behind it, gives both rows minus the slope times its depth, a weak
+        // pull back in front that costs little just behind the camera, and the Jacobian of that.
+        const sensor::camera::pinhole<double> camera_model(std::vector<double>{ 500.0, 500.0, 320.0, 240.0 }.data(), 4);
+        optimisation::vertex camera_vertex{ optimisation::vertices::pose() };
+        const double camera_parameters_pose[7] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 };
+        REQUIRE(camera_vertex.set_parameters(&camera_parameters_pose[0], 7));
+        for (const double depth : { -1.0e-9, -5.0, -40.0 }) {
+            optimisation::vertex landmark_vertex{ optimisation::vertices::point() };
+            const double landmark_location[3] = { 0.3, -0.2, depth };
+            REQUIRE(landmark_vertex.set_parameters(&landmark_location[0], 3));
+            optimisation::edge edge{ optimisation::edges::reprojection(sensor::camera::model<double>(camera_model)) };
+            edge.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { 320.0, 240.0 } }.data()));
+            edge.add_vertex(&camera_vertex);
+            edge.add_vertex(&landmark_vertex);
+            edge.compute_residual();
+            REQUIRE(edge.get_residual()[0][0] == edge.get_residual()[1][0]);
+            REQUIRE(is_value_approx(edge.get_residual()[0][0], -optimisation::edges::reprojection::behind_camera_slope * depth));
+            edge.compute_jacobians();
+            REQUIRE(edge.get_jacobians()[1][0][2] == -optimisation::edges::reprojection::behind_camera_slope);
+            REQUIRE(edge.get_jacobians()[1][1][2] == -optimisation::edges::reprojection::behind_camera_slope);
+            REQUIRE(edge.get_jacobians()[1][0][0] == 0.0);
+            REQUIRE(edge.get_jacobians()[1][0][1] == 0.0);
+        }
+    }
+
     return EXIT_SUCCESS;
 }

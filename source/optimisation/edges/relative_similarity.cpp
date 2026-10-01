@@ -46,7 +46,7 @@ namespace optimisation::edges {
 
         const math::matrix<double, 7, 7> jacobian_first = -(left_jacobian_inverse * adjoint);
         const math::matrix<double, 7, 7> jacobian_second = +(left_jacobian_inverse * adjoint);
-        jacobians[0] = math::matrix<double, 0, 0>(7, 7, jacobian_first.data());
-        jacobians[1] = math::matrix<double, 0, 0>(7, 7, jacobian_second.data());
+        edge::set_jacobian(jacobians[0], 7, 7, jacobian_first.data());
+        edge::set_jacobian(jacobians[1], 7, 7, jacobian_second.data());
     }
 }

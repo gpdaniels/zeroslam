@@ -69,6 +69,7 @@ namespace optimisation {
             int local_count;
             void (*plus)(const void* object, double* const parameters, const double* const delta);
             void (*copy)(const void* from, void* to);
+            void (*move)(void* from, void* to);
             void (*destroy)(void* object);
         };
 
@@ -83,6 +84,9 @@ namespace optimisation {
                 },
                 [](const void* from, void* to) -> void {
                     new (to, static_cast<vertex*>(nullptr)) vertex_type(*static_cast<const vertex_type*>(from));
+                },
+                [](void* from, void* to) -> void {
+                    new (to, static_cast<vertex*>(nullptr)) vertex_type(static_cast<vertex_type&&>(*static_cast<vertex_type*>(from)));
                 },
                 [](void* object) -> void {
                     static_cast<vertex_type*>(object)->~vertex_type();

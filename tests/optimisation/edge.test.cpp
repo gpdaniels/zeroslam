@@ -94,10 +94,30 @@ int main(int argc, char* argv[]) {
     REQUIRE(is_value_approx(edge.get_jacobians()[1][0][1], -0.8, 1e-6));
     REQUIRE(is_value_approx(edge.get_residual()[0][0], 1.0));
 
+    // Linearising again reuses the jacobian storage.
+    const double* const jacobian_storage = edge.get_jacobians()[1].data();
+    edge.compute_jacobians();
+    REQUIRE(edge.get_jacobians()[1].data() == jacobian_storage);
+    REQUIRE(is_value_approx(edge.get_jacobians()[1][0][1], -0.8, 1e-6));
+
     lhs.set_fixed();
     edge.compute_jacobians();
     REQUIRE(edge.get_jacobians()[0][0][0] == 0.0);
     REQUIRE(is_value_approx(edge.get_jacobians()[1][0][1], -0.8, 1e-6));
+
+    {
+        // A block of the same shape is written in place, another shape gets new storage.
+        math::matrix<double, 0, 0> block;
+        const double values[6] = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 };
+        optimisation::edge::set_jacobian(block, 2, 3, &values[0]);
+        REQUIRE((block.rows() == 2) && (block.cols() == 3) && (block[1][2] == 6.0));
+        const double* const storage = block.data();
+        const double other[6] = { 6.0, 5.0, 4.0, 3.0, 2.0, 1.0 };
+        optimisation::edge::set_jacobian(block, 2, 3, &other[0]);
+        REQUIRE((block.data() == storage) && (block[0][0] == 6.0) && (block[1][2] == 1.0));
+        optimisation::edge::set_jacobian(block, 3, 2, &values[0]);
+        REQUIRE((block.rows() == 3) && (block.cols() == 2) && (block[2][1] == 6.0));
+    }
 
     edge.set_loss(optimisation::loss(optimisation::losses::huber(1.0)));
     REQUIRE(edge.get_loss().is_valid());
