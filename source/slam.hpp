@@ -974,8 +974,8 @@ private:
         inliers = 0;
 
         std::vector<pose_correspondence> correspondences;
-        double intrinsics[4] = { 1.0, 1.0, 0.0, 0.0 };
-        frame_current.camera.get_parameters(&intrinsics[0], 4);
+        double intrinsics[4];
+        slam::pinhole_intrinsics(frame_current, intrinsics);
         for (feature::tracker::tracker::track* const t : this->active_point_tracks()) {
             if ((t->landmark_id < 0) || (this->reconstruction.landmarks.count(t->landmark_id) == 0)) {
                 continue;
@@ -2037,8 +2037,8 @@ private:
                 continue;
             }
             mapping::frame& frame = frame_it->second;
-            double intrinsics[4] = { 1.0, 1.0, 0.0, 0.0 };
-            frame.camera.get_parameters(&intrinsics[0], 4);
+            double intrinsics[4];
+            slam::pinhole_intrinsics(frame, intrinsics);
             correspondences.clear();
             for (const anchored_observation& recorded : anchor.observations) {
                 const std::unordered_map<decltype(mapping::point::id), mapping::point>::const_iterator landmark_it = this->reconstruction.landmarks.find(recorded.landmark_id);
