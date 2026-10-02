@@ -2105,6 +2105,35 @@ private:
     static constexpr int keyframe_interval = 5;
     static constexpr int keyframe_min_interval = 2;
     static constexpr double keyframe_tracked_ratio = 0.5;
+    static constexpr double keyframe_motion_pixels = 2.0;
+
+    // The median distance, in pixels, the tracks with a landmark have moved since the given frame, or infinity when none was
+    // seen in it.
+    double median_track_motion_since(const int frame_id) {
+        std::vector<double> moved;
+        for (const feature::tracker::tracker::track* const t : this->active_point_tracks()) {
+            if ((t->landmark_id < 0) || t->history.empty()) {
+                continue;
+            }
+            for (size_t h = t->history.size(); h-- > 0;) {
+                const feature::tracker::tracker::observation& seen = t->history[h];
+                if (seen.frame_id < frame_id) {
+                    break;
+                }
+                if (seen.frame_id == frame_id) {
+                    const double dx = static_cast<double>(t->x) - static_cast<double>(seen.x);
+                    const double dy = static_cast<double>(t->y) - static_cast<double>(seen.y);
+                    moved.push_back(math::sqrt((dx * dx) + (dy * dy)));
+                    break;
+                }
+            }
+        }
+        if (moved.empty()) {
+            return 1.0e300;
+        }
+        std::nth_element(moved.begin(), moved.begin() + static_cast<std::ptrdiff_t>(moved.size() / 2), moved.end());
+        return moved[moved.size() / 2];
+    }
 
     static constexpr int local_map_covisibility_minimum = 15;
     static constexpr double local_map_projection_radius = 8.0;
@@ -3620,7 +3649,11 @@ public:
                 }
             }
             const double tracked_ratio = static_cast<double>(tracked_count) / ((active_count > 0) ? static_cast<double>(active_count) : 1.0);
-            is_keyframe = pnp_success && (tracked_count >= 3) && (frames_since_last_kf >= keyframe_min_interval) && ((frames_since_last_kf >= keyframe_interval) || (tracked_ratio < keyframe_tracked_ratio));
+            // A keyframe falls due on the interval only once the tracked points have moved since the last one: while the camera
+            // holds still it would add no baseline, and a window of such keyframes leaves the adjustment free to shrink or grow
+            // the map (ORB-SLAM3 inserts none while tracking holds). Tracking that weakens still takes one at once.
+            const bool interval_due = (frames_since_last_kf >= keyframe_interval) && (this->median_track_motion_since(this->last_keyframe_id_) >= slam::keyframe_motion_pixels);
+            is_keyframe = pnp_success && (tracked_count >= 3) && (frames_since_last_kf >= keyframe_min_interval) && (interval_due || (tracked_ratio < keyframe_tracked_ratio));
         }
         is_keyframe = is_keyframe && (this->relocalisation_probation_ == 0) && !relocalised && !posed_from_tracks;
 
