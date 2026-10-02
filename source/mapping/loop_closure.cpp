@@ -38,7 +38,7 @@ namespace mapping {
         , keyframes() {
     }
 
-    loop_closure::result loop_closure::detect(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const covisibility& graph, const record* const keyframe_records, const size_t keyframe_records_size, const int submap_start_id) const {
+    loop_closure::result loop_closure::detect(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const covisibility& graph, const record* const keyframe_records, const size_t keyframe_records_size, const int submap_start_id, const bool seek_foreign) const {
         const auto unfound = []() {
             result empty;
             empty.found = false;
@@ -112,6 +112,23 @@ namespace mapping {
                 outcome.inliers = attempt.inliers;
             }
             ++verified;
+        }
+        if (seek_foreign && (submap_start_id > 0)) {
+            size_t foreign_verified = 0;
+            for (const place_recognition::candidate& candidate : this->recognition.get_candidates(query.data(), query.size(), keyframe_id, loop_closure::max_candidates, submap_start_id)) {
+                if (foreign_verified >= loop_closure::max_verified_candidates) {
+                    break;
+                }
+                const std::unordered_map<int, keyframe>::const_iterator found = this->keyframes.find(candidate.keyframe_id);
+                if (found == this->keyframes.end()) {
+                    continue;
+                }
+                result attempt = unfound();
+                if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found->second, attempt)) {
+                    return attempt;
+                }
+                ++foreign_verified;
+            }
         }
         return outcome;
     }

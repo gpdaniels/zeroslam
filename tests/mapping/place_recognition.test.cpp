@@ -99,6 +99,14 @@ int main(int argc, char* argv[]) {
         for (const mapping::place_recognition::candidate& other : others) {
             REQUIRE(other.keyframe_id != 1);
         }
+
+        // Only the keyframes before a given one are ranked when it is given, as for a submap looking for the map it lost.
+        const std::vector<mapping::place_recognition::candidate> earlier = recognition.get_candidates(base.data(), 30, 100, 10, 3);
+        REQUIRE(earlier.size() == 2);
+        for (const mapping::place_recognition::candidate& candidate : earlier) {
+            REQUIRE(candidate.keyframe_id < 3);
+        }
+        REQUIRE(earlier[0].keyframe_id == 1);
     }
 
     {

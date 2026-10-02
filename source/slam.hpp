@@ -3072,8 +3072,11 @@ public:
             this->covisibility_.end_update();
             this->rebuild_local_map(frame_current.id);
             const math::se3<double> pose(frame_current.rotation, frame_current.translation);
-            const mapping::loop_closure::result loop = this->loop_closure_.detect(frame_current.id, pose, frame_current.camera, this->covisibility_, records.data(), records.size(), this->submap_start_of(frame_current.id));
-            if (loop.found) {
+            const mapping::loop_closure::result loop = this->loop_closure_.detect(frame_current.id, pose, frame_current.camera, this->covisibility_, records.data(), records.size(), this->submap_start_of(frame_current.id), this->map_component(frame_current.id) != 0);
+            // A loop between two submaps that both stand apart cannot be recorded as a join to the map, so it waits until
+            // one of them meets the map.
+            const bool between_apart = loop.found && (this->map_component(loop.keyframe_id) != 0) && (this->map_component(loop.keyframe_id) != this->map_component(frame_current.id));
+            if (loop.found && !between_apart) {
                 this->close_loop(frame_current.id, loop, records);
             }
             this->loop_closure_.add_keyframe(frame_current.id, pose, frame_current.camera, records.data(), records.size());

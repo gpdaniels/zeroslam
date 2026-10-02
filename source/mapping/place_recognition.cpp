@@ -67,14 +67,15 @@ namespace mapping {
         const feature::descriptor::binary<256>* const query_descriptors,
         const size_t query_descriptors_size,
         const int current_keyframe_id,
-        const size_t max_candidates
+        const size_t max_candidates,
+        const int before_keyframe_id
     ) const {
         std::vector<candidate> candidates;
         std::vector<match::index::hbst::hit> hits;
         for (size_t query_index = 0; query_index < query_descriptors_size; ++query_index) {
             this->index.search(query_descriptors[query_index], this->max_distance, hits);
             for (const match::index::hbst::hit& found : hits) {
-                if (found.keyframe_id == current_keyframe_id) {
+                if ((found.keyframe_id == current_keyframe_id) || ((before_keyframe_id >= 0) && (found.keyframe_id >= before_keyframe_id))) {
                     continue;
                 }
                 size_t candidate_index = 0;

@@ -110,7 +110,9 @@ namespace mapping {
         loop_closure();
 
     public:
-        result detect(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const covisibility& graph, const record* const keyframe_records, const size_t keyframe_records_size, const int submap_start_id = 0) const;
+        // With seek_foreign the keyframes before the submap's start are searched as well on their own, so that the recent
+        // keyframes of a submap that stands apart, which the place recognition ranks highest, cannot hide the map it lost.
+        result detect(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const covisibility& graph, const record* const keyframe_records, const size_t keyframe_records_size, const int submap_start_id = 0, const bool seek_foreign = false) const;
 
         void add_keyframe(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size);
 

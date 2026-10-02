@@ -63,11 +63,13 @@ namespace mapping {
         void clear();
         size_t num_keyframes() const;
 
+        // The keyframes most voted for by the query's descriptors, among those before before_keyframe_id when one is given.
         std::vector<candidate> get_candidates(
             const feature::descriptor::binary<256>* const query_descriptors,
             const size_t query_descriptors_size,
             const int current_keyframe_id,
-            const size_t max_candidates
+            const size_t max_candidates,
+            const int before_keyframe_id = -1
         ) const;
     };
 }
