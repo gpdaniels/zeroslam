@@ -1064,6 +1064,38 @@ private:
         return spacings[spacings.size() / 2];
     }
 
+    // The median distance the camera moved per frame between the newest keyframes, in the map's units.
+    double recent_keyframe_speed() const {
+        std::vector<int> ordered;
+        for (const int id : this->keyframe_ids_) {
+            if (this->reconstruction.frames.count(id) != 0) {
+                ordered.push_back(id);
+            }
+        }
+        std::sort(ordered.begin(), ordered.end());
+        std::vector<double> speeds;
+        for (size_t i = (ordered.size() > slam::speed_keyframes) ? (ordered.size() - slam::speed_keyframes) : 1; i < ordered.size(); ++i) {
+            if ((i == 0) || (this->map_component(ordered[i - 1]) != this->map_component(ordered[i]))) {
+                continue;
+            }
+            const mapping::frame& previous = this->reconstruction.frames.at(ordered[i - 1]);
+            const mapping::frame& current = this->reconstruction.frames.at(ordered[i]);
+            const math::matrix<double, 3, 1> previous_centre = -(math::transpose(previous.rotation) * previous.translation);
+            const math::matrix<double, 3, 1> current_centre = -(math::transpose(current.rotation) * current.translation);
+            speeds.push_back(math::sqrt((current_centre - previous_centre).get_length_squared()) / static_cast<double>(ordered[i] - ordered[i - 1]));
+        }
+        if (speeds.empty()) {
+            return 0.0;
+        }
+        std::sort(speeds.begin(), speeds.end());
+        return speeds[speeds.size() / 2];
+    }
+
+    static constexpr size_t speed_keyframes = 10;
+    // The speed of the map that was lost, which a new submap's first baseline takes, so that its scale continues the map's
+    // rather than being a unit baseline that can be tens of times off until a loop joins it.
+    double submap_speed_ = 0.0;
+
     int init_anchor_frame_id_ = 0;
 
     std::vector<submap> submaps_;
@@ -1092,6 +1124,7 @@ private:
     }
 
     void begin_submap(mapping::frame& frame_current) {
+        this->submap_speed_ = this->recent_keyframe_speed();
         const std::unordered_map<int, mapping::frame>::const_iterator last = this->reconstruction.frames.find(this->last_tracked_frame_id_);
         if (last != this->reconstruction.frames.end()) {
             frame_current.rotation = last->second.rotation;
@@ -2625,6 +2658,12 @@ public:
             // Recover pose returns pose 2 to pose 1 rather than pose 1 to pose 2, so invert it.
             rotation = math::transpose(rotation);
             translation = -rotation * translation;
+            if (this->reinitialising_ && (this->submap_speed_ > 0.0)) {
+                const double length = math::sqrt(translation.get_length_squared());
+                if (length > 0.0) {
+                    translation = translation * (this->submap_speed_ * static_cast<double>(frame_current.id - frame_anchor.id) / length);
+                }
+            }
 
             frame_current.rotation = rotation * frame_anchor.rotation;
             frame_current.translation = (rotation * frame_anchor.translation) + translation;
