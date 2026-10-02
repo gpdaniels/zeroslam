@@ -129,12 +129,12 @@ The `process` and `regression` tools pass any setting through with `--config key
 | `outliers` | `0` | Unlink a track from its landmark after this many outlier frames, `0` never. |
 | `anchor` | `off` | Track patches anchored to their first frame: `translation`, `affine`, `translation_illumination`, `affine_illumination`, or `off`. |
 | `anchor_refresh` | `off` | Re-anchor a patch whose alignment error exceeds this fraction (up to `1`) of its flow's rejection gate (the klt error limit for patch anchors, the wavelet phase limit for wavelet anchors), or `off`. |
-| `flow` | `intensity` | `intensity` flow, or `wavelet` quaternion wavelet phase flow. |
+| `flow` | `wavelet` | `wavelet` quaternion wavelet phase flow, or `intensity` flow (about four times faster, and loses tracking more often under fast motion and blur). |
 | `wavelet_window` | `2` | The wavelet flow's half window, `1` to `6`. |
 | `wavelet_levels` | `6` | The wavelet decomposition levels, `2` to `8`. |
 | `wavelet_robust` | `off` | Huber weight the wavelet flow's phase residuals. |
 | `wavelet_undecimated` | `off` | Use an undecimated wavelet decomposition. |
-| `wavelet_seed` | `rest` | Start the wavelet flow at `rest`, from the `klt` flow, or from the klt flow and fall back to it where the wavelet flow fails (`klt_fallback`). |
+| `wavelet_seed` | `klt_fallback` | Start the wavelet flow at `rest`, from the `klt` flow, or from the klt flow and fall back to it where the wavelet flow fails (`klt_fallback`). |
 | `solver` | `dense_schur` | The bundle adjustment's linear solver: `dense_schur`, `square_root` (landmarks eliminated by QR), or `automatic` (square root once there are enough poses). Graphs the square root solver cannot take fall back to the dense one. |
 | `solver_precision` | `double` | The linear solver's precision, `double` or `single`. |
 

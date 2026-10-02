@@ -119,12 +119,15 @@ namespace mapping {
             int pose_outlier_limit = 0;
             bool klt_damped_steps = false;
             float track_collision_distance = 2.0f;
-            feature::tracker::tracker::flow_kind flow = feature::tracker::tracker::flow_kind::intensity;
+            // The wavelet phase flow seeded by the klt flow, falling back to it where the wavelet flow fails: on the EuRoC
+            // stretches where the klt flow alone lost tracking it carries 1.5-2 times the tracks, with fewer of them off the
+            // true epipolar geometry and two to three times as many alive five frames on, at about four times the cost.
+            feature::tracker::tracker::flow_kind flow = feature::tracker::tracker::flow_kind::wavelet;
             int wavelet_half_window = 2;
             int wavelet_levels = 6;
             bool wavelet_robust = false;
             bool wavelet_undecimated = false;
-            feature::tracker::tracker::wavelet_seed_kind wavelet_seed = feature::tracker::tracker::wavelet_seed_kind::rest;
+            feature::tracker::tracker::wavelet_seed_kind wavelet_seed = feature::tracker::tracker::wavelet_seed_kind::klt_fallback;
             bool anchored_patches = false;
             feature::tracker::patch_flow::model_kind anchor_model = feature::tracker::patch_flow::model_kind::translation;
             float anchor_refresh_error = 0.0f;
