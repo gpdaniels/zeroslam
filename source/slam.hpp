@@ -702,6 +702,82 @@ private:
 
     static constexpr size_t pose_bounded_minimum = 20;
 
+    // A track the solved pose puts further than this many measurement sigmas (squared) from its landmark, or whose landmark it
+    // puts behind the camera, no longer follows that landmark: a wrong association by projection, or a track that slid onto
+    // another point. A link lost is lost for good, and in fast motion a sound one can be several sigma off a pose solved from
+    // few, so a link beyond the near bound but within the far one is only taken for a stray while such links are few; when
+    // many are, it is the pose or the map that is off. Without a depth a landmark only has to land within the pixel bound, as
+    // its depth may be far from its guess.
+    static constexpr double stray_bound_squared = 25.0;
+    static constexpr double stray_far_bound_squared = 100.0;
+    static constexpr double stray_band_fraction_maximum = 0.2;
+    static constexpr double stray_unbounded_pixels = 100.0;
+
+    // How far, in squared sigmas, the frame's pose puts the landmark from the track (a landmark without a depth is at zero
+    // within its pixel bound and beyond the far bound outside it), or a negative value when the camera does not see it.
+    static double stray_distance(const mapping::frame& frame_current, const feature::tracker::tracker::track& t, const mapping::point& landmark) {
+        math::matrix<double, 2, 1> projected;
+        if (!mapping::map::project_landmark(frame_current, landmark, projected)) {
+            return -1.0;
+        }
+        const double scale = static_cast<double>(1u << static_cast<unsigned int>(math::max(0, math::min(t.measurement_octave, 16))));
+        const double error_squared = (math::matrix<double, 2, 1>({ static_cast<double>(t.x), static_cast<double>(t.y) }) - projected).get_length_squared();
+        if (landmark.uncertainty == mapping::point::uncertainty_kind::unbounded) {
+            return (error_squared <= (slam::stray_unbounded_pixels * slam::stray_unbounded_pixels * scale * scale)) ? 0.0 : (slam::stray_far_bound_squared + 1.0);
+        }
+        const double sigma = frame_current.measurement_sigma * scale;
+        return error_squared / (sigma * sigma);
+    }
+
+    // Whether the frame's pose puts the landmark where the track is, within the near stray bound.
+    static bool follows(const mapping::frame& frame_current, const feature::tracker::tracker::track& t, const mapping::point& landmark) {
+        const double distance = slam::stray_distance(frame_current, t, landmark);
+        return (distance >= 0.0) && (distance <= slam::stray_bound_squared);
+    }
+
+    // Unlinks the active tracks whose landmarks the frame's pose does not bear out, as ORB-SLAM drops the matches its pose solve
+    // rejects, so that such a link neither adds an observation to a keyframe (one far outside the view can drag the keyframe's
+    // pose adjustment off and with it every recent landmark into the cull) nor keeps the landmark from being matched again. The
+    // history starts again at the frame so that a new landmark is not triangulated across the slip.
+    size_t unlink_strays(const mapping::frame& frame_current) {
+        std::vector<std::pair<feature::tracker::tracker::track*, double>> linked;
+        size_t in_band = 0;
+        for (feature::tracker::tracker::track* const t : this->active_point_tracks()) {
+            if (t->landmark_id < 0) {
+                continue;
+            }
+            const std::unordered_map<int, mapping::point>::const_iterator landmark = this->reconstruction.landmarks.find(t->landmark_id);
+            if (landmark == this->reconstruction.landmarks.end()) {
+                continue;
+            }
+            const double distance = slam::stray_distance(frame_current, *t, landmark->second);
+            linked.push_back({ t, distance });
+            in_band += ((distance > slam::stray_bound_squared) && (distance <= slam::stray_far_bound_squared)) ? 1 : 0;
+        }
+        // Links in the band between the bounds are taken for strays only while they are few.
+        const bool band_strays = static_cast<double>(in_band) <= (slam::stray_band_fraction_maximum * static_cast<double>(linked.size()));
+        size_t unlinked = 0;
+        for (const std::pair<feature::tracker::tracker::track*, double>& entry : linked) {
+            feature::tracker::tracker::track* const t = entry.first;
+            const double distance = entry.second;
+            if ((distance >= 0.0) && (distance <= slam::stray_far_bound_squared) && (!band_strays || (distance <= slam::stray_bound_squared))) {
+                continue;
+            }
+            size_t keep = 0;
+            for (size_t h = 0; h < t->history.size(); ++h) {
+                if (t->history[h].frame_id >= frame_current.id) {
+                    t->history[keep] = t->history[h];
+                    ++keep;
+                }
+            }
+            t->history.resize(keep);
+            t->landmark_id = -1;
+            t->outliers = 0;
+            ++unlinked;
+        }
+        return unlinked;
+    }
+
     bool pose_from_tracks(mapping::frame& frame_current, size_t& correspondences) {
         std::vector<estimation::correspondence_2d_3d<double>> pnp_correspondencies;
         {
@@ -1919,6 +1995,9 @@ private:
                     if (!within_depth_bound(best.lhs_index, orphan, rhs_points[best.rhs_index])) {
                         continue;
                     }
+                    if (!slam::follows(frame_current, *t, orphan)) {
+                        continue;
+                    }
                     reattach(orphan, t);
                     claimed[track_index] = static_cast<unsigned char>(1);
                     ++reacquired_epipolar_now;
@@ -2662,6 +2741,10 @@ public:
         this->last_keyframe_id_ = frame_current.id;
 
         {
+            const size_t strays = this->unlink_strays(frame_current);
+            if (strays > 0) {
+                core::logger::log(core::logger::level::info, "Keyframe %d: %zu tracks the pose puts off their landmarks unlinked.", frame_current.id, strays);
+            }
             const std::vector<feature::tracker::tracker::track*> active = this->active_point_tracks();
             for (feature::tracker::tracker::track* const t : active) {
                 if (t->landmark_id < 0) {
