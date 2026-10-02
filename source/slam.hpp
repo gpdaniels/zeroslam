@@ -140,6 +140,7 @@ private:
     static constexpr size_t pose_inliers_minimum = 10;
     static constexpr size_t relocalise_inliers_minimum = 15;
     static constexpr size_t relocalise_candidates = 3;
+    static constexpr size_t recovery_candidates = 5;
     static constexpr double relocalise_distance_spacings = 4.0;
     static constexpr int relocalisation_probation_frames = 5;
     int relocalisation_probation_ = 0;
@@ -851,7 +852,39 @@ private:
             return false;
         }
         const std::vector<int> recalled = this->loop_closure_.recall(frame_current.descriptors.data(), frame_current.descriptors.size(), slam::relocalise_candidates);
-        for (const int keyframe_id : recalled) {
+        return this->relocalise_against(frame_current, recalled, true);
+    }
+
+    // When the tracks no longer pose the frame, as fast motion or blur can leave them, the frame is matched against what
+    // the newest keyframe and the keyframes most covisible with it recorded, without a pose to search around, as ORB-SLAM
+    // tracks its reference keyframe before it gives a frame up. The tracks at the matched detections take the landmarks.
+    bool recover_from_recent_keyframes(mapping::frame& frame_current) {
+        if (frame_current.descriptors.empty() || (this->reconstruction.frames.count(this->last_keyframe_id_) == 0)) {
+            return false;
+        }
+        std::vector<std::pair<int, int>> weighted;
+        for (const int neighbour_id : this->covisibility_.neighbours(this->last_keyframe_id_, slam::local_map_covisibility_minimum)) {
+            if ((this->keyframe_ids_.count(neighbour_id) != 0) && (this->reconstruction.frames.count(neighbour_id) != 0)) {
+                weighted.push_back({ this->covisibility_.weight(this->last_keyframe_id_, neighbour_id), neighbour_id });
+            }
+        }
+        std::sort(weighted.begin(), weighted.end(), [](const std::pair<int, int>& lhs, const std::pair<int, int>& rhs) {
+            return (lhs.first != rhs.first) ? (lhs.first > rhs.first) : (lhs.second > rhs.second);
+        });
+        std::vector<int> candidates = { this->last_keyframe_id_ };
+        for (size_t index = 0; (index < weighted.size()) && (candidates.size() < slam::recovery_candidates); ++index) {
+            candidates.push_back(weighted[index].second);
+        }
+        return this->relocalise_against(frame_current, candidates, false);
+    }
+
+    // Poses the frame against the landmarks each candidate keyframe recorded, the first that gives a consistent pose near
+    // it. Relocalisation after the frames were lost puts the tracks it links on probation.
+    bool relocalise_against(mapping::frame& frame_current, const std::vector<int>& candidates, const bool on_probation) {
+        if (frame_current.descriptors.empty()) {
+            return false;
+        }
+        for (const int keyframe_id : candidates) {
             size_t records_size = 0;
             const mapping::loop_closure::record* const records = this->loop_closure_.records_of(keyframe_id, records_size);
             if ((records == nullptr) || (records_size < slam::relocalise_inliers_minimum)) {
@@ -962,7 +995,9 @@ private:
                 for (feature::tracker::tracker::track* const t : active) {
                     if ((t->landmark_id < 0) && (math::abs(t->x - keypoint.x) < 0.5f) && (math::abs(t->y - keypoint.y) < 0.5f)) {
                         t->landmark_id = landmark_id;
-                        this->probation_track_links_.push_back({ t->id, landmark_id });
+                        if (on_probation) {
+                            this->probation_track_links_.push_back({ t->id, landmark_id });
+                        }
                         linked.insert(landmark_id);
                         ++relinked;
                         break;
@@ -970,7 +1005,7 @@ private:
                 }
             }
             const math::matrix<double, 3, 1> relocalised_centre = -(math::transpose(rotation) * translation);
-            core::logger::log(core::logger::level::note, "Relocalised frame %d against keyframe %d: %zu inliers of %zu pairs, %zu tracks relinked, centre (%.3f, %.3f, %.3f).", frame_current.id, keyframe_id, inliers_size, correspondences.size(), relinked, relocalised_centre[0], relocalised_centre[1], relocalised_centre[2]);
+            core::logger::log(core::logger::level::note, "%s frame %d against keyframe %d: %zu inliers of %zu pairs, %zu tracks relinked, centre (%.3f, %.3f, %.3f).", on_probation ? "Relocalised" : "Recovered", frame_current.id, keyframe_id, inliers_size, correspondences.size(), relinked, relocalised_centre[0], relocalised_centre[1], relocalised_centre[2]);
             return true;
         }
         return false;
@@ -2679,6 +2714,9 @@ public:
                     else if (this->refine_pose_from_prior(frame_current, refined_inliers)) {
                         pnp_success = true;
                         core::logger::log(core::logger::level::note, "PnP found no consensus (%zu correspondencies): pose refined from the constant-velocity prior with %zu inliers.", pnp_correspondencies_size, refined_inliers);
+                    }
+                    else if (this->recover_from_recent_keyframes(frame_current)) {
+                        pnp_success = true;
                     }
                     else {
                         core::logger::log(core::logger::level::warn, "PnP FAILED (%zu correspondencies, %zu agree with the refined prior): using constant-velocity predicted pose (from frames %d and %d).", pnp_correspondencies_size, refined_inliers, previous_id, last_id);
