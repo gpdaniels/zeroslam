@@ -747,7 +747,7 @@ static void test_predict_constant_velocity() {
     }
 }
 
-static void test_loop_closure(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer, const mapping::frame::settings::association_kind association = mapping::frame::settings::association_kind::klt, const mapping::frame::settings::adjustment_kind adjustment = mapping::frame::settings::adjustment_kind::absolute) {
+static void test_loop_closure(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer, const mapping::frame::settings::association_kind association = mapping::frame::settings::association_kind::klt, const mapping::frame::settings::adjustment_kind adjustment = mapping::frame::settings::adjustment_kind::absolute, const mapping::frame::settings::local_map_kind local_map = mapping::frame::settings::local_map_kind::covisible) {
     constexpr static const int approach_frames = 8;
     constexpr static const int circle_frames = 72;
     constexpr static const int overlap_frames = 18;
@@ -768,6 +768,7 @@ static void test_loop_closure(const int width, const int height, const math::mat
     system.frontend.association = association;
     system.frontend.track_collision_distance = 0.0f;
     system.frontend.adjustment = adjustment;
+    system.frontend.local_map = local_map;
     for (const math::se3<double>& pose : trajectory) {
         image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
         renderer.render_frame(pose, intrinsics, frame);
@@ -775,8 +776,13 @@ static void test_loop_closure(const int width, const int height, const math::mat
     }
 
     REQUIRE(system.state() == slam::tracking_state::tracking);
-    REQUIRE(!system.verified_loops.empty());
-    if (adjustment == mapping::frame::settings::adjustment_kind::relative) {
+    // With the covisible keyframes as the local map, the landmarks at the start of the circle return only through the loop
+    // closure. The voxel map's rays find them as soon as they are back in view, and matching them by projection joins the
+    // loop before any closure is needed, so then only the trajectory is checked.
+    if (local_map == mapping::frame::settings::local_map_kind::covisible) {
+        REQUIRE(!system.verified_loops.empty());
+    }
+    if ((local_map == mapping::frame::settings::local_map_kind::covisible) && (adjustment == mapping::frame::settings::adjustment_kind::relative)) {
         // Every keyframe is a frame of the graph, and the loop is a similarity in it besides the chain.
         const mapping::relative_graph& graph = system.relative_graph();
         size_t keyframes = 0;
@@ -1166,6 +1172,7 @@ int main(int argc, char* argv[]) {
     test_loop_closure(width, height, intrinsics, room);
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::match);
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::both);
+    test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::both, mapping::frame::settings::adjustment_kind::absolute, mapping::frame::settings::local_map_kind::voxels);
     test_relocalisation(width, height, intrinsics, renderer);
     test_submap_join(width, height, intrinsics, renderer);
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::klt, mapping::frame::settings::adjustment_kind::relative);

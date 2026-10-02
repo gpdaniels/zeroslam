@@ -115,7 +115,7 @@ namespace mapping {
                 both,
                 fallback
             };
-            local_map_kind local_map = local_map_kind::covisible;
+            local_map_kind local_map = local_map_kind::voxels;
             int global_adjustment_keyframes = 10;
             // How the map is adjusted as keyframes arrive: absolute, a window of world poses with periodic global adjustments
             // and a pose graph at each loop, or relative, an adaptive region of a graph of relative transforms (see
