@@ -52,6 +52,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "match/pair.hpp"
 #include "math/lie.hpp"
 #include "math/matrix.hpp"
+#include "math/matrix_decomposition_singular_value.hpp"
 #include "optimisation/edge.hpp"
 #include "optimisation/edges/line_reprojection.hpp"
 #include "optimisation/edges/relative_similarity.hpp"
@@ -779,6 +780,208 @@ private:
         return unlinked;
     }
 
+    static constexpr size_t turn_tracks_minimum = 20;
+    static constexpr double turn_inlier_degrees = 1.0;
+    static constexpr int turn_samples = 64;
+
+    // The turn from an earlier frame to this one (camera from camera) that the tracks seen in both agree on. The tracks mostly
+    // survive the fast turns that blur the map's landmarks out of them, so this carries the camera's orientation where nothing
+    // else poses it. Between frames this close the parallax of a small room is as large as the turn, so the turn is taken
+    // from the essential matrix the tracks fit; when they favour a homography, as a pure turn does, two bearings fix the
+    // rotation and the largest consensus of sampled pairs is refined by the orthogonal fit of its inliers.
+    bool turn_from_tracks(const mapping::frame& frame_current, const int earlier_id, math::matrix<double, 3, 3>& turn) {
+        std::vector<math::matrix<double, 3, 1>> before;
+        std::vector<math::matrix<double, 3, 1>> after;
+        std::vector<estimation::correspondence_2d_2d<double>> correspondences;
+        for (const feature::tracker::tracker::track* const t : this->active_point_tracks()) {
+            const feature::tracker::tracker::observation* earlier = nullptr;
+            for (std::vector<feature::tracker::tracker::observation>::const_reverse_iterator it = t->history.rbegin(); it != t->history.rend(); ++it) {
+                if (it->frame_id == earlier_id) {
+                    earlier = &(*it);
+                    break;
+                }
+                if (it->frame_id < earlier_id) {
+                    break;
+                }
+            }
+            if (earlier == nullptr) {
+                continue;
+            }
+            const double pixel_before[2] = { static_cast<double>(earlier->x), static_cast<double>(earlier->y) };
+            const double pixel_after[2] = { static_cast<double>(t->x), static_cast<double>(t->y) };
+            math::matrix<double, 3, 1> ray_before;
+            math::matrix<double, 3, 1> ray_after;
+            if (!frame_current.camera.unproject(&pixel_before[0], ray_before.data()) || !frame_current.camera.unproject(&pixel_after[0], ray_after.data())) {
+                continue;
+            }
+            if (!(ray_before[2] > 0.0) || !(ray_after[2] > 0.0)) {
+                continue;
+            }
+            before.push_back(ray_before * (1.0 / math::sqrt(ray_before.get_length_squared())));
+            after.push_back(ray_after * (1.0 / math::sqrt(ray_after.get_length_squared())));
+            correspondences.push_back({ { { ray_after[0] / ray_after[2], ray_after[1] / ray_after[2] } }, { { ray_before[0] / ray_before[2], ray_before[1] / ray_before[2] } } });
+        }
+        if (before.size() < slam::turn_tracks_minimum) {
+            return false;
+        }
+        {
+            const double noise_normalised = slam::two_view_noise_pixels * frame_current.measurement_sigma / slam::focal_length(frame_current.camera);
+            const two_view_models fitted = slam::fit_two_view_models(correspondences.data(), correspondences.size(), noise_normalised);
+            if (fitted.essential_ok && !fitted.use_homography && (fitted.essential_inliers_size >= slam::turn_tracks_minimum)) {
+                std::vector<math::matrix<double, 2, 1>> inlier_after;
+                std::vector<math::matrix<double, 2, 1>> inlier_before;
+                for (size_t index = 0; index < fitted.essential_inliers_size; ++index) {
+                    const estimation::correspondence_2d_2d<double>& pair = correspondences[fitted.essential_inliers[index]];
+                    inlier_after.push_back({ { pair.lhs[0], pair.lhs[1] } });
+                    inlier_before.push_back({ { pair.rhs[0], pair.rhs[1] } });
+                }
+                math::matrix<double, 3, 3> rotation;
+                math::matrix<double, 3, 1> translation;
+                std::vector<math::matrix<double, 3, 1>> triangulated(inlier_after.size());
+                size_t support = 0;
+                if (estimation::pose::essential<double>::recover(&fitted.essential.essential[0][0], inlier_after.data()->data(), inlier_before.data()->data(), inlier_after.size(), rotation.data(), translation.data(), triangulated.data()->data(), &support) && (support >= slam::turn_tracks_minimum)) {
+                    // Recovery gives the earlier camera from the current one.
+                    turn = math::transpose(rotation);
+                    return true;
+                }
+            }
+        }
+        const auto fit = [&before, &after](const std::vector<size_t>& indices, math::matrix<double, 3, 3>& fitted) {
+            double correlation[3][3] = {};
+            for (const size_t index : indices) {
+                for (size_t row = 0; row < 3; ++row) {
+                    for (size_t column = 0; column < 3; ++column) {
+                        correlation[row][column] += after[index][row] * before[index][column];
+                    }
+                }
+            }
+            double u[3][3];
+            double singular[3][3];
+            double vt[3][3];
+            if (!math::decompose_singular_value(&correlation[0][0], 3, 3, &u[0][0], &singular[0][0], &vt[0][0])) {
+                return false;
+            }
+            const math::matrix<double, 3, 3> left({ { u[0][0], u[0][1], u[0][2] }, { u[1][0], u[1][1], u[1][2] }, { u[2][0], u[2][1], u[2][2] } });
+            const math::matrix<double, 3, 3> right({ { vt[0][0], vt[0][1], vt[0][2] }, { vt[1][0], vt[1][1], vt[1][2] }, { vt[2][0], vt[2][1], vt[2][2] } });
+            const math::matrix<double, 3, 3> product = left * right;
+            const double determinant = (product[0][0] * ((product[1][1] * product[2][2]) - (product[1][2] * product[2][1]))) - (product[0][1] * ((product[1][0] * product[2][2]) - (product[1][2] * product[2][0]))) + (product[0][2] * ((product[1][0] * product[2][1]) - (product[1][1] * product[2][0])));
+            const double handedness = (determinant < 0.0) ? -1.0 : 1.0;
+            const math::matrix<double, 3, 3> flip({ { 1.0, 0.0, 0.0 }, { 0.0, 1.0, 0.0 }, { 0.0, 0.0, handedness } });
+            fitted = left * flip * right;
+            return true;
+        };
+        const double cosine_bound = math::cos(slam::turn_inlier_degrees * (3.14159265358979323846 / 180.0));
+        const auto agreeing = [&before, &after, cosine_bound](const math::matrix<double, 3, 3>& candidate) {
+            std::vector<size_t> inliers;
+            for (size_t index = 0; index < before.size(); ++index) {
+                const math::matrix<double, 3, 1> turned = candidate * before[index];
+                if (((turned[0] * after[index][0]) + (turned[1] * after[index][1]) + (turned[2] * after[index][2])) >= cosine_bound) {
+                    inliers.push_back(index);
+                }
+            }
+            return inliers;
+        };
+        // A fixed sequence of pairs keeps the estimate reproducible.
+        unsigned int state = 2463534242u ^ static_cast<unsigned int>(frame_current.id);
+        const auto next = [&state]() {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            return state;
+        };
+        std::vector<size_t> best;
+        for (int sample = 0; sample < slam::turn_samples; ++sample) {
+            const size_t first = static_cast<size_t>(next()) % before.size();
+            const size_t second = static_cast<size_t>(next()) % before.size();
+            math::matrix<double, 3, 3> candidate;
+            if ((first == second) || !fit({ first, second }, candidate)) {
+                continue;
+            }
+            std::vector<size_t> inliers = agreeing(candidate);
+            if (inliers.size() > best.size()) {
+                best = std::move(inliers);
+            }
+        }
+        if ((best.size() < slam::turn_tracks_minimum) || (2 * best.size() < before.size())) {
+            return false;
+        }
+        math::matrix<double, 3, 3> refined;
+        if (!fit(best, refined)) {
+            return false;
+        }
+        const std::vector<size_t> refined_inliers = agreeing(refined);
+        if ((refined_inliers.size() < slam::turn_tracks_minimum) || !fit(refined_inliers, turn)) {
+            return false;
+        }
+        return true;
+    }
+
+    // The camera's pose from the frame last posed by its landmarks, carried on by the turns of its tracks and the speed it had
+    // then, through the frames that nothing else poses. A submap started after tracking is lost begins there rather than at
+    // the frame last posed, which can be a whole fast turn behind.
+    bool reckoned_ = false;
+    int reckoned_frame_id_ = -1;
+    math::matrix<double, 3, 3> reckoned_rotation_ = math::matrix<double, 3, 3>::identity();
+    math::matrix<double, 3, 1> reckoned_centre_ = math::matrix<double, 3, 1>::zero();
+    math::matrix<double, 3, 1> reckoned_velocity_ = math::matrix<double, 3, 1>::zero();
+    int posed_frame_id_ = -1;
+    math::matrix<double, 3, 3> posed_rotation_ = math::matrix<double, 3, 3>::identity();
+    math::matrix<double, 3, 1> posed_centre_ = math::matrix<double, 3, 1>::zero();
+
+    // The frame was posed by its landmarks: reckoning starts again from it.
+    void reckon_from(const mapping::frame& frame_current) {
+        const math::matrix<double, 3, 1> centre = -(math::transpose(frame_current.rotation) * frame_current.translation);
+        if ((this->posed_frame_id_ >= 0) && (frame_current.id > this->posed_frame_id_) && ((frame_current.id - this->posed_frame_id_) <= slam::blind_frames_tolerated)) {
+            this->reckoned_velocity_ = (centre - this->posed_centre_) * (1.0 / static_cast<double>(frame_current.id - this->posed_frame_id_));
+        }
+        else {
+            this->reckoned_velocity_ = math::matrix<double, 3, 1>::zero();
+        }
+        this->posed_frame_id_ = frame_current.id;
+        this->posed_rotation_ = frame_current.rotation;
+        this->posed_centre_ = centre;
+        this->reckoned_ = true;
+        this->reckoned_frame_id_ = frame_current.id;
+        this->reckoned_rotation_ = frame_current.rotation;
+        this->reckoned_centre_ = centre;
+    }
+
+    // Carries the reckoned pose on to the frame by the turn of the tracks, true when the tracks gave the turn. The turn is
+    // taken from the frame posed last while enough tracks reach back to it, so that its errors do not add up frame by frame,
+    // and from the frame reckoned last after that.
+    bool reckon_turn(const mapping::frame& frame_current) {
+        if (!this->reckoned_ || (frame_current.id <= this->reckoned_frame_id_)) {
+            return false;
+        }
+        math::matrix<double, 3, 3> turn;
+        math::matrix<double, 3, 3> rotation;
+        if ((this->posed_frame_id_ >= 0) && (this->posed_frame_id_ < frame_current.id) && this->turn_from_tracks(frame_current, this->posed_frame_id_, turn)) {
+            rotation = turn * this->posed_rotation_;
+        }
+        else if (this->turn_from_tracks(frame_current, this->reckoned_frame_id_, turn)) {
+            rotation = turn * this->reckoned_rotation_;
+        }
+        else {
+            return false;
+        }
+        this->reckoned_centre_ = this->reckoned_centre_ + (this->reckoned_velocity_ * static_cast<double>(frame_current.id - this->reckoned_frame_id_));
+        this->reckoned_rotation_ = rotation;
+        this->reckoned_frame_id_ = frame_current.id;
+        return true;
+    }
+
+    // The frame was posed by the motion model alone: reckoning goes on from that pose.
+    void reckon_hold(const mapping::frame& frame_current) {
+        if (!this->reckoned_) {
+            return;
+        }
+        this->reckoned_frame_id_ = frame_current.id;
+        this->reckoned_rotation_ = frame_current.rotation;
+        this->reckoned_centre_ = -(math::transpose(frame_current.rotation) * frame_current.translation);
+    }
+
+    static constexpr int reckoned_frames_stale = 2;
+
     bool pose_from_tracks(mapping::frame& frame_current, size_t& correspondences) {
         std::vector<estimation::correspondence_2d_3d<double>> pnp_correspondencies;
         {
@@ -1126,7 +1329,12 @@ private:
     void begin_submap(mapping::frame& frame_current) {
         this->submap_speed_ = this->recent_keyframe_speed();
         const std::unordered_map<int, mapping::frame>::const_iterator last = this->reconstruction.frames.find(this->last_tracked_frame_id_);
-        if (last != this->reconstruction.frames.end()) {
+        if (this->reckoned_ && (frame_current.id >= this->reckoned_frame_id_) && ((frame_current.id - this->reckoned_frame_id_) <= slam::reckoned_frames_stale)) {
+            const math::matrix<double, 3, 1> centre = this->reckoned_centre_ + (this->reckoned_velocity_ * static_cast<double>(frame_current.id - this->reckoned_frame_id_));
+            frame_current.rotation = this->reckoned_rotation_;
+            frame_current.translation = -(this->reckoned_rotation_ * centre);
+        }
+        else if (last != this->reconstruction.frames.end()) {
             frame_current.rotation = last->second.rotation;
             frame_current.translation = last->second.translation;
         }
@@ -2486,10 +2694,12 @@ public:
             relocalised = !posed_from_tracks && this->relocalise(frame_current);
             if (!posed_from_tracks && !relocalised) {
                 if (this->reinitialising_) {
+                    this->reckon_turn(frame_current);
                     initialise = true;
                 }
                 else {
                     ++this->lost_frames_;
+                    this->reckon_turn(frame_current);
                     if ((this->lost_frames_ > slam::reinitialise_after_frames) && (this->active_point_tracks().size() >= slam::reinitialise_tracks_minimum)) {
                         this->begin_submap(frame_current);
                     }
@@ -2507,6 +2717,7 @@ public:
             }
             this->lost_frames_ = 0;
             core::logger::log(core::logger::level::note, "Tracking resumed at frame %d %s.", frame_current.id, posed_from_tracks ? "from its tracks" : "by relocalisation");
+            this->reckon_from(frame_current);
             this->state_ = tracking_state::tracking;
             this->blind_frames_ = 0;
             this->relocalisation_probation_ = slam::relocalisation_probation_frames;
@@ -2556,6 +2767,10 @@ public:
                 const mapping::frame& anchor_previous = this->reconstruction.frames.at(this->init_anchor_frame_id_);
                 frame_current.rotation = anchor_previous.rotation;
                 frame_current.translation = anchor_previous.translation;
+                if (this->reinitialising_ && this->reckoned_ && (this->reckoned_frame_id_ == frame_current.id)) {
+                    frame_current.rotation = this->reckoned_rotation_;
+                    frame_current.translation = -(this->reckoned_rotation_ * this->reckoned_centre_);
+                }
                 if (this->keyframe_ids_.count(this->init_anchor_frame_id_) == 0) {
                     this->reconstruction.frames.erase(this->init_anchor_frame_id_);
                 }
@@ -2670,6 +2885,7 @@ public:
 
             this->state_ = tracking_state::tracking;
             this->blind_frames_ = 0;
+            this->reckon_from(frame_current);
 
             this->keyframe_ids_.insert(this->init_anchor_frame_id_);
             this->keyframe_ids_.insert(frame_current.id);
@@ -2796,7 +3012,13 @@ public:
                     else if (this->recover_from_recent_keyframes(frame_current)) {
                         pnp_success = true;
                     }
+                    else if (this->reckon_turn(frame_current)) {
+                        frame_current.rotation = this->reckoned_rotation_;
+                        frame_current.translation = -(this->reckoned_rotation_ * this->reckoned_centre_);
+                        core::logger::log(core::logger::level::warn, "PnP FAILED (%zu correspondencies, %zu agree with the refined prior): turned as its tracks turn and moved at the speed before (frames %d and %d).", pnp_correspondencies_size, refined_inliers, previous_id, last_id);
+                    }
                     else {
+                        this->reckon_hold(frame_current);
                         core::logger::log(core::logger::level::warn, "PnP FAILED (%zu correspondencies, %zu agree with the refined prior): using constant-velocity predicted pose (from frames %d and %d).", pnp_correspondencies_size, refined_inliers, previous_id, last_id);
                     }
                 }
@@ -2817,6 +3039,7 @@ public:
             if (pnp_success) {
                 this->blind_frames_ = 0;
                 this->blind_frame_ids_.clear();
+                this->reckon_from(frame_current);
             }
             else {
                 if (this->blind_frame_ids_.empty()) {
