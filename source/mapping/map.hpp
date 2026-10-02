@@ -128,6 +128,7 @@ namespace mapping {
         constexpr static const size_t divergence_gross_fraction_denominator = 4;
         constexpr static const size_t divergence_minimum_observations = 50;
         constexpr static const size_t frame_divergence_minimum_observations = 20;
+        constexpr static const size_t divergence_frame_fraction_denominator = 4;
 
         std::vector<int> corrected_frame_ids;
 
@@ -1001,15 +1002,41 @@ namespace mapping {
                         after.first += !map::project_landmark(frame_it->second, landmark_it->second, reprojected) || ((reprojected - obs.point).get_length_squared() > map::gross_error_squared * sigma_squared);
                     }
                 }
+                std::vector<int> diverged_frame_ids;
+                size_t judged_frames = 0;
                 for (const auto& [frame_id, after] : gross_after_by_frame) {
                     const size_t inliers_before = inliers_before_by_frame[frame_id];
+                    judged_frames += (after.second >= map::frame_divergence_minimum_observations) ? 1 : 0;
                     if ((after.second >= map::frame_divergence_minimum_observations) && (inliers_before * 2 >= after.second) && (after.first * 2 > after.second)) {
-                        core::logger::log(core::logger::level::warn, "Frame %d diverged in the adjustment: %zu of %zu observations beyond %.0f px (%zu within the bound before); its pose before the solve is kept.", frame_id, after.first, after.second, math::sqrt(map::gross_error_squared), inliers_before);
-                        mapping::frame& restored = this->frames.at(frame_id);
-                        restored.rotation = frames_before.at(frame_id).rotation;
-                        restored.translation = frames_before.at(frame_id).translation;
-                        this->corrected_frame_ids.push_back(frame_id);
+                        diverged_frame_ids.push_back(frame_id);
                     }
+                }
+                // Keeping a frame's pose is right when the adjustment threw out that frame alone. When it threw out many, the
+                // landmarks moved with them, and restoring only the frames would leave the landmarks where no frame sees them for
+                // the cull to take; the whole adjustment is undone instead.
+                if ((judged_frames > 0) && (diverged_frame_ids.size() * map::divergence_frame_fraction_denominator > judged_frames)) {
+                    core::logger::log(core::logger::level::warn, "Adjustment diverged: %zu of %zu frames moved their observations beyond %.0f px; the state before it is kept.", diverged_frame_ids.size(), judged_frames, math::sqrt(map::gross_error_squared));
+                    for (const auto& [frame_id, pose] : frames_before) {
+                        mapping::frame& restored = this->frames.at(frame_id);
+                        restored.rotation = pose.rotation;
+                        restored.translation = pose.translation;
+                    }
+                    for (const auto& [landmark_id, landmark] : landmarks_before) {
+                        this->landmarks.at(landmark_id) = landmark;
+                    }
+                    for (const auto& [landmark_id, landmark] : lines_before) {
+                        this->line_landmarks.at(landmark_id) = landmark;
+                    }
+                    return;
+                }
+                std::sort(diverged_frame_ids.begin(), diverged_frame_ids.end());
+                for (const int frame_id : diverged_frame_ids) {
+                    const std::pair<size_t, size_t>& after = gross_after_by_frame.at(frame_id);
+                    core::logger::log(core::logger::level::warn, "Frame %d diverged in the adjustment: %zu of %zu observations beyond %.0f px (%zu within the bound before); its pose before the solve is kept.", frame_id, after.first, after.second, math::sqrt(map::gross_error_squared), inliers_before_by_frame[frame_id]);
+                    mapping::frame& restored = this->frames.at(frame_id);
+                    restored.rotation = frames_before.at(frame_id).rotation;
+                    restored.translation = frames_before.at(frame_id).translation;
+                    this->corrected_frame_ids.push_back(frame_id);
                 }
             }
             if (!fix_landmarks) {
