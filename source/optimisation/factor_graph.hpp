@@ -91,6 +91,12 @@ namespace optimisation {
 
     public:
         constexpr static const int maximum_landmark_dimensions = 6;
+        // A marginalised block seen along nearly one ray, a far point's depth, is close to singular, and the error of its inverse
+        // can make the reduced camera system indefinite. A step whose reduced system fails to factorise is solved again with each
+        // block's diagonal raised by this fraction of its largest, which bounds its condition.
+        constexpr static const double landmark_conditioning = 1.0e-6;
+        // And should that fail too, once more with this fraction before the step is refused.
+        constexpr static const double landmark_conditioning_strong = 1.0e-4;
 
     private:
         class landmark_diagonal final {
@@ -352,6 +358,7 @@ namespace optimisation {
         void make_hessian();
 
         bool solve_linear_system();
+        bool solve_linear_system_conditioned(const double conditioning, const bool report);
 
         void update_states();
 

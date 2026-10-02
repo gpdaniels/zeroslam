@@ -1610,22 +1610,32 @@ namespace optimisation {
     }
 
     bool factor_graph::solve_linear_system() {
+        // Only the last attempt reports its failure; the first is the plain system, so the dense and square root solvers
+        // agree wherever it factorises.
+        return this->solve_linear_system_conditioned(0.0, false) || this->solve_linear_system_conditioned(factor_graph::landmark_conditioning, false) || this->solve_linear_system_conditioned(factor_graph::landmark_conditioning_strong, true);
+    }
+
+    bool factor_graph::solve_linear_system_conditioned(const double conditioning, const bool report) {
         const size_t total_count = static_cast<size_t>(this->count_general_params + this->count_marginalised_params);
         const size_t landmark_count = this->h_ll.size();
         const double lambda = this->damping_lambda;
         core::thread_pool& pool = core::thread_pool::instance();
 
         // Invert each damped landmark block and form Y = W * H_ll^-1 and Y * b_ll for its couplings.
-        pool.parallel_for(landmark_count, factor_graph::landmark_grain, [this, lambda](const size_t landmark) {
+        pool.parallel_for(landmark_count, factor_graph::landmark_grain, [this, lambda, conditioning](const size_t landmark) {
             landmark_diagonal& diagonal = this->h_ll[landmark];
             const size_t dimensions = static_cast<size_t>(diagonal.dimensions);
             const size_t offset = static_cast<size_t>(diagonal.offset);
             double damped[maximum_landmark_dimensions][maximum_landmark_dimensions];
+            double largest = 0.0;
+            for (size_t i = 0; i < dimensions; ++i) {
+                largest = math::max(largest, diagonal.block[i][i]);
+            }
             for (size_t i = 0; i < dimensions; ++i) {
                 for (size_t j = 0; j < dimensions; ++j) {
                     damped[i][j] = diagonal.block[i][j];
                 }
-                damped[i][i] += lambda * this->damping_weight(diagonal.offset + static_cast<int>(i));
+                damped[i][i] += (lambda * this->damping_weight(diagonal.offset + static_cast<int>(i))) + (conditioning * largest);
             }
             this->landmark_failures[landmark] = factor_graph::invert_landmark_block(damped, diagonal.dimensions, diagonal.inverse) ? 0 : 1;
             if (this->landmark_failures[landmark] != 0) {
@@ -1643,7 +1653,9 @@ namespace optimisation {
         });
         for (size_t landmark = 0; landmark < landmark_count; ++landmark) {
             if (this->landmark_failures[landmark] != 0) {
-                core::logger::log(core::logger::level::warn, "Landmark block inversion failed!");
+                if (report) {
+                    core::logger::log(core::logger::level::warn, "Landmark block inversion failed!");
+                }
                 this->delta_x = math::matrix<double, 0, 0>::zero(total_count, 1);
                 return false;
             }
@@ -1714,7 +1726,9 @@ namespace optimisation {
         });
 
         if ((columns > 0) && (!this->reduced.factorise() || !this->reduced.solve(this->reduced_right_hand_side.data(), this->reduced_solution.data()))) {
-            core::logger::log(core::logger::level::warn, "Cholesky solver failed!");
+            if (report) {
+                core::logger::log(core::logger::level::warn, "Cholesky solver failed!");
+            }
             this->delta_x = math::matrix<double, 0, 0>::zero(total_count, 1);
             return false;
         }
