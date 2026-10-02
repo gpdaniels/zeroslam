@@ -37,8 +37,13 @@ namespace optimisation {
     // The blocks are eliminated in a minimum degree order, so the factor is stored by position in that order,
     // each column holding its diagonal block and then its nonzero blocks below the diagonal, all row major.
     class block_cholesky final {
+    public:
+        // The smallest fraction of its diagonal a pivot may keep after the elimination, below which the matrix is singular.
+        constexpr static const double pivot_fraction_minimum = 1.0e-13;
+
     private:
         std::vector<int> dimensions;
+        std::vector<double> original_diagonal;
         std::vector<size_t> original_offsets;
         std::vector<int> order;
         std::vector<int> positions;
@@ -78,8 +83,8 @@ namespace optimisation {
         double* get_values();
         const double* get_values() const;
 
-        // Factorises the lower triangle of the assembled blocks in place, failing on a pivot that is not significant
-        // against the largest diagonal entry.
+        // Factorises the lower triangle of the assembled blocks in place, failing on a pivot that keeps less than
+        // pivot_fraction_minimum of its row's diagonal entry.
         bool factorise();
 
         // Solves for a right hand side in the original block order, both vectors laid out block after block.

@@ -228,18 +228,16 @@ namespace optimisation {
     bool block_cholesky::factorise() {
         const size_t count = this->order.size();
         double* const data = this->values.data();
-        double scale = 0.0;
-        for (size_t position = 0; position < count; ++position) {
-            const size_t size = static_cast<size_t>(this->dimensions_at(static_cast<int>(position)));
-            const double* const diagonal = data + this->diagonal_offsets[position];
-            for (size_t i = 0; i < size; ++i) {
-                scale = math::max(scale, math::abs(diagonal[(i * size) + i]));
-            }
-        }
-        const double epsilon = scale * 1e-14;
         for (size_t position = 0; position < count; ++position) {
             const size_t size = static_cast<size_t>(this->dimensions_at(static_cast<int>(position)));
             double* const diagonal = data + this->diagonal_offsets[position];
+            // Each pivot is judged against its own row's diagonal before elimination, not against the largest diagonal of the
+            // system: the information of a bundle adjustment's parameters spans many orders of magnitude, and a weakly held
+            // but independent parameter would otherwise read as singular whenever the damping is small.
+            this->original_diagonal.resize(math::max(this->original_diagonal.size(), size));
+            for (size_t i = 0; i < size; ++i) {
+                this->original_diagonal[i] = diagonal[(i * size) + i];
+            }
             for (size_t entry = this->column_begin[position]; entry < this->column_begin[position + 1]; ++entry) {
                 this->scatter[static_cast<size_t>(this->entry_rows[entry])] = this->entry_offsets[entry];
             }
@@ -287,7 +285,7 @@ namespace optimisation {
                 for (size_t j = 0; j < i; ++j) {
                     value -= diagonal[(i * size) + j] * diagonal[(i * size) + j];
                 }
-                if (!(value > epsilon)) {
+                if (!(value > (this->original_diagonal[i] * block_cholesky::pivot_fraction_minimum))) {
                     return false;
                 }
                 diagonal[(i * size) + i] = math::sqrt(value);
@@ -314,20 +312,12 @@ namespace optimisation {
     bool block_cholesky::solve(const double* right_hand_side, double* solution) {
         const size_t count = this->order.size();
         const double* const data = this->values.data();
-        double scale = 0.0;
+        // The factorisation held every pivot to its row, so only a factor it did not complete is refused here.
         for (size_t position = 0; position < count; ++position) {
             const size_t size = static_cast<size_t>(this->dimensions_at(static_cast<int>(position)));
             const double* const diagonal = data + this->diagonal_offsets[position];
             for (size_t i = 0; i < size; ++i) {
-                scale = math::max(scale, math::abs(diagonal[(i * size) + i]));
-            }
-        }
-        const double epsilon = scale * 1e-7;
-        for (size_t position = 0; position < count; ++position) {
-            const size_t size = static_cast<size_t>(this->dimensions_at(static_cast<int>(position)));
-            const double* const diagonal = data + this->diagonal_offsets[position];
-            for (size_t i = 0; i < size; ++i) {
-                if (!(math::abs(diagonal[(i * size) + i]) > epsilon)) {
+                if (!(diagonal[(i * size) + i] > 0.0) || !math::isfinite(diagonal[(i * size) + i])) {
                     return false;
                 }
             }

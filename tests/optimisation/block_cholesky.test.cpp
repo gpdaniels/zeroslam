@@ -246,6 +246,40 @@ int main(int argc, char* argv[]) {
     }
 
     {
+        // A system whose blocks are held at very different strengths, as a bundle adjustment's are, factorises and solves to
+        // the precision of its scaled form: each pivot is judged against its own row, not against the largest diagonal entry,
+        // which here is 2^96 times the smallest. Scaling rows and columns by powers of two leaves every product exact, so the
+        // solution scaled back is as accurate as the well conditioned system's.
+        const block_problem base = make_problem(rng, { 3, 3, 3 }, { { 0, 1 }, { 1, 2 } });
+        block_problem scaled = base;
+        const double scales[3] = { 16777216.0, 1.0, 1.0 / 16777216.0 };
+        for (size_t row = 0; row < scaled.size; ++row) {
+            for (size_t column = 0; column < scaled.size; ++column) {
+                scaled.dense[(row * scaled.size) + column] *= scales[row / 3] * scales[column / 3];
+            }
+        }
+        std::vector<double> truth(scaled.size);
+        for (size_t i = 0; i < scaled.size; ++i) {
+            truth[i] = rng.get_random(-1.0, 1.0) / scales[i / 3];
+        }
+        std::vector<double> right_hand_side(scaled.size, 0.0);
+        for (size_t row = 0; row < scaled.size; ++row) {
+            for (size_t column = 0; column < scaled.size; ++column) {
+                right_hand_side[row] += scaled.dense[(row * scaled.size) + column] * truth[column];
+            }
+        }
+        optimisation::block_cholesky factor;
+        factor.analyse(scaled.dimensions, scaled.neighbours);
+        assemble(scaled, factor);
+        REQUIRE(factor.factorise());
+        std::vector<double> solution(scaled.size);
+        REQUIRE(factor.solve(right_hand_side.data(), solution.data()));
+        for (size_t i = 0; i < scaled.size; ++i) {
+            REQUIRE(std::abs((solution[i] - truth[i]) * scales[i / 3]) < 1.0e-9);
+        }
+    }
+
+    {
         // An empty system factorises and solves trivially.
         optimisation::block_cholesky factor;
         factor.analyse({}, {});
