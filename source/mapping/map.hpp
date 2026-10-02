@@ -122,6 +122,9 @@ namespace mapping {
         constexpr static const int repose_recent_frames = 90;
 
         constexpr static const double gross_error_squared = 25.0;
+        // A landmark without a depth can be far from its guess, so it is only gross when the guess lands beyond this many
+        // pixels (at the measurement's level) from where it was seen.
+        constexpr static const double gross_unbounded_pixels = 100.0;
         constexpr static const size_t divergence_gross_fraction_denominator = 4;
         constexpr static const size_t divergence_minimum_observations = 50;
         constexpr static const size_t frame_divergence_minimum_observations = 20;
@@ -566,6 +569,9 @@ namespace mapping {
             };
 
             std::vector<point_edge> point_edges;
+            // Without the landmarks free there is no first pass to drop gross observations, which pull a pose all the further
+            // for being gross (one projecting far outside the view has an enormous Jacobian), so they stay out from the start.
+            size_t gross_excluded = 0;
             for (const int landmark_id : active_landmarks_ordered) {
                 // Only add the landmark if it is in a frame. Initially assume it is not.
                 bool landmark_added = false;
@@ -576,6 +582,10 @@ namespace mapping {
                     if (camera_vertexes.count(frame_id) == 0)
                         continue;
                     if (camera_vertexes.at(frame_id)->is_fixed() && fix_landmarks) {
+                        continue;
+                    }
+                    if (fix_landmarks && !map::within_gross_bound(this->frames.at(frame_id), this->landmarks.at(landmark_id), obs.point, obs.measurement_octave)) {
+                        ++gross_excluded;
                         continue;
                     }
                     // Given that we're adding at least one edge, make sure the landmark has been added.
@@ -600,6 +610,10 @@ namespace mapping {
                     point_edges.push_back({ ba.add_edge(static_cast<optimisation::edge&&>(m)), landmark_id, frame_id });
                     ++non_fixed_edges;
                 }
+            }
+
+            if (gross_excluded > 0) {
+                core::logger::log(core::logger::level::info, "Pose adjustment: %zu observations beyond the gross bound left out.", gross_excluded);
             }
 
             int non_fixed_lines = 0;
@@ -1066,6 +1080,19 @@ namespace mapping {
 
         static bool project_landmark(const mapping::frame& frame, const mapping::point& landmark, math::matrix<double, 2, 1>& pixel) {
             return map::project_landmark(frame.camera, frame.rotation, frame.translation, landmark, pixel);
+        }
+
+        // Whether the frame's pose puts the landmark in front of it and within the gross bound of a position measured on the
+        // given pyramid level.
+        static bool within_gross_bound(const mapping::frame& frame, const mapping::point& landmark, const math::matrix<double, 2, 1>& pixel, const int measurement_octave) {
+            math::matrix<double, 2, 1> projected;
+            if (!map::project_landmark(frame, landmark, projected)) {
+                return false;
+            }
+            const double scale = static_cast<double>(1u << static_cast<unsigned int>(math::max(0, math::min(measurement_octave, 16))));
+            const double sigma = frame.measurement_sigma * scale;
+            const double bound_squared = (landmark.uncertainty == mapping::point::uncertainty_kind::unbounded) ? (map::gross_unbounded_pixels * map::gross_unbounded_pixels * scale * scale) : (map::gross_error_squared * sigma * sigma);
+            return (pixel - projected).get_length_squared() <= bound_squared;
         }
 
         size_t remove_outlier_observations(const std::unordered_set<int>& landmark_ids, const std::unordered_set<int>& frame_ids) {
