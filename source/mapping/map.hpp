@@ -1250,8 +1250,11 @@ namespace mapping {
             }
 
             size_t outliers_culled = 0;
+            // An inverse depth landmark is far when its inverse depth is small, which the adjustment handles as it does any
+            // other, rather than diverged: while the camera has hardly moved, as on the ground before a take off, the bound
+            // falls to the depth of the scene and would cull most of every keyframe's landmarks as they settle far away.
             for (std::unordered_map<int, mapping::point>::iterator it = this->landmarks.begin(); it != this->landmarks.end();) {
-                if (outlier_bound_valid && !it->second.at_infinity()) {
+                if (outlier_bound_valid && !it->second.at_infinity() && !it->second.inverse_depth) {
                     const double offset_x = it->second.location[0] - centroid_x;
                     const double offset_y = it->second.location[1] - centroid_y;
                     const double offset_z = it->second.location[2] - centroid_z;
