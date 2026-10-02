@@ -56,8 +56,9 @@ namespace {
     constexpr static const char* const association_names[3] = { "klt", "match", "both" };
     constexpr static const char* const detector_names[7] = { "fast", "mser", "harris", "klt", "forstner", "rohr", "kenney" };
     constexpr static const char* const detector_labels[7] = { "FAST", "MSER", "Harris", "KLT", "Forstner", "Rohr", "Kenney" };
-    constexpr static const char* const descriptor_names[3] = { "orb", "teblid", "bsift" };
-    constexpr static const char* const descriptor_labels[3] = { "ORB", "TEBLID", "BSIFT" };
+    constexpr static const int descriptor_count = 5;
+    constexpr static const char* const descriptor_names[descriptor_count] = { "orb", "teblid", "bsift", "teblid512", "bsift512" };
+    constexpr static const char* const descriptor_labels[descriptor_count] = { "ORB", "TEBLID", "BSIFT", "TEBLID-512", "BSIFT-512" };
 
     int index_of(const char* const* const names, const int count, const std::string& name) {
         for (int i = 0; i < count; ++i) {
@@ -66,6 +67,94 @@ namespace {
             }
         }
         return -1;
+    }
+
+    // The front end settings the controls offer.
+    struct front_end_settings {
+        int tracker = 0;
+        bool lines = false;
+        bool culling = true;
+        int association = 2;
+        int detector = 0;
+        int descriptor = 0;
+        bool wavelet = false;
+    };
+
+    // Takes one key=value setting, or returns false when it is not one the controls offer.
+    bool apply_setting(front_end_settings& settings, const std::string& setting) {
+        const std::size_t equals = setting.find('=');
+        if (equals == std::string::npos) {
+            return false;
+        }
+        const std::string key = setting.substr(0, equals);
+        const std::string value = setting.substr(equals + 1);
+        const auto on_off = [&value](bool& destination) {
+            if ((value != "on") && (value != "off")) {
+                return false;
+            }
+            destination = (value == "on");
+            return true;
+        };
+        if (key == "tracker") {
+            if ((value != "klt") && (value != "extrema")) {
+                return false;
+            }
+            settings.tracker = (value == "extrema") ? 1 : 0;
+            return true;
+        }
+        if (key == "lines") {
+            return on_off(settings.lines);
+        }
+        if (key == "culling") {
+            return on_off(settings.culling);
+        }
+        if (key == "association") {
+            const int found = index_of(&association_names[0], 3, value);
+            settings.association = (found >= 0) ? found : settings.association;
+            return found >= 0;
+        }
+        if (key == "detector") {
+            const int found = index_of(&detector_names[0], 7, value);
+            settings.detector = (found >= 0) ? found : settings.detector;
+            return found >= 0;
+        }
+        if (key == "descriptor") {
+            const int found = index_of(&descriptor_names[0], descriptor_count, value);
+            settings.descriptor = (found >= 0) ? found : settings.descriptor;
+            return found >= 0;
+        }
+        if (key == "flow") {
+            if ((value != "intensity") && (value != "wavelet")) {
+                return false;
+            }
+            settings.wavelet = (value == "wavelet");
+            return true;
+        }
+        return false;
+    }
+
+    // The settings a new system starts with, which are the ones the library is tuned for, so the controls start from them
+    // rather than from a copy that could fall out of date.
+    front_end_settings library_defaults() {
+        front_end_settings settings;
+        const zeroslam::system defaults;
+        int length = 0;
+        if ((defaults.get_configuration(nullptr, &length) != zeroslam_return_failure_insufficient_data_length) || (length <= 0)) {
+            return settings;
+        }
+        std::vector<char> text(static_cast<std::size_t>(length) + 1, '\0');
+        if (defaults.get_configuration(text.data(), &length) != zeroslam_return_success) {
+            return settings;
+        }
+        std::size_t start = 0;
+        const std::string configuration(text.data(), static_cast<std::size_t>(length));
+        while (start < configuration.size()) {
+            std::size_t end = configuration.find('\n', start);
+            end = (end == std::string::npos) ? configuration.size() : end;
+            static_cast<void>(apply_setting(settings, configuration.substr(start, end - start)));
+            start = end + 1;
+        }
+        return settings;
     }
 
     std::atomic<bool> shutdown_requested{ false };
@@ -86,7 +175,9 @@ namespace {
         std::printf("        --exit-after [n]       - Exit after n rendered frames.\n");
         std::printf("        --load-map [file]      - Display a saved map instead of running the slam system.\n");
         std::printf("        --save-map [file]      - Write the built map out when the run ends.\n");
-        std::printf("        --config [key=value]   - A front end setting to start with: tracker=klt|extrema, lines=on|off, culling=on|off, association=klt|match|both (default both), detector=fast|mser|harris|klt|forstner|rohr|kenney (default fast), descriptor=orb|teblid|bsift (default orb) or flow=intensity|wavelet (default intensity) (repeatable).\n");
+        const front_end_settings defaults = library_defaults();
+        std::printf("        --config [key=value]   - A front end setting to start with: tracker=klt|extrema, lines=on|off, culling=on|off, association=klt|match|both, detector=fast|mser|harris|klt|forstner|rohr|kenney, descriptor=orb|teblid|bsift|teblid512|bsift512 or flow=intensity|wavelet (repeatable).\n");
+        std::printf("                                 Unset ones start at the library's defaults: tracker=%s lines=%s culling=%s association=%s detector=%s descriptor=%s flow=%s.\n", (defaults.tracker == 1) ? "extrema" : "klt", defaults.lines ? "on" : "off", defaults.culling ? "on" : "off", association_names[defaults.association], detector_names[defaults.detector], descriptor_names[defaults.descriptor], defaults.wavelet ? "wavelet" : "intensity");
         std::printf("        --help                 - Show this message.\n");
     }
 
@@ -636,7 +727,7 @@ namespace {
                 return;
             }
             char text[256];
-            const int length = std::snprintf(&text[0], sizeof(text), "tracker=%s\nlines=%s\nculling=%s\nassociation=%s\ndetector=%s\ndescriptor=%s\nflow=%s\n", (tracker == 1) ? "extrema" : "klt", lines_on ? "on" : "off", culling_on ? "on" : "off", association_names[static_cast<std::size_t>(((association >= 0) && (association < 3)) ? association : 0)], detector_names[static_cast<std::size_t>(((detector >= 0) && (detector < 7)) ? detector : 0)], descriptor_names[static_cast<std::size_t>(((descriptor >= 0) && (descriptor < 3)) ? descriptor : 0)], wavelet ? "wavelet" : "intensity");
+            const int length = std::snprintf(&text[0], sizeof(text), "tracker=%s\nlines=%s\nculling=%s\nassociation=%s\ndetector=%s\ndescriptor=%s\nflow=%s\n", (tracker == 1) ? "extrema" : "klt", lines_on ? "on" : "off", culling_on ? "on" : "off", association_names[static_cast<std::size_t>(((association >= 0) && (association < 3)) ? association : 0)], detector_names[static_cast<std::size_t>(((detector >= 0) && (detector < 7)) ? detector : 0)], descriptor_names[static_cast<std::size_t>(((descriptor >= 0) && (descriptor < descriptor_count)) ? descriptor : 0)], wavelet ? "wavelet" : "intensity");
             if ((length > 0) && (this->system.set_configuration(&text[0], length) != zeroslam_return_success)) {
                 std::fprintf(stderr, "The library rejected the front end configuration.\n");
             }
@@ -1151,13 +1242,7 @@ int main(int argc, char* argv[]) {
     long long screenshot_after_frames = 30;
     long long exit_after_frames = -1;
     bool autoplay = false;
-    int initial_tracker = 0;
-    bool initial_lines = false;
-    bool initial_culling = true;
-    int initial_association = 2;
-    int initial_detector = 0;
-    int initial_descriptor = 0;
-    bool initial_wavelet = false;
+    front_end_settings initial = library_defaults();
     for (int i = 1; i < argc; ++i) {
         const auto take_string = [&](const char* const name, std::string& destination) -> bool {
             if (i + 1 >= argc) {
@@ -1207,47 +1292,8 @@ int main(int argc, char* argv[]) {
             if (!take_string("--config", setting)) {
                 return EXIT_FAILURE;
             }
-            if (setting == "tracker=klt") {
-                initial_tracker = 0;
-            }
-            else if (setting == "tracker=extrema") {
-                initial_tracker = 1;
-            }
-            else if (setting == "lines=on") {
-                initial_lines = true;
-            }
-            else if (setting == "lines=off") {
-                initial_lines = false;
-            }
-            else if (setting == "culling=on") {
-                initial_culling = true;
-            }
-            else if (setting == "culling=off") {
-                initial_culling = false;
-            }
-            else if (setting == "association=klt") {
-                initial_association = 0;
-            }
-            else if (setting == "association=match") {
-                initial_association = 1;
-            }
-            else if (setting == "association=both") {
-                initial_association = 2;
-            }
-            else if ((setting.rfind("detector=", 0) == 0) && (index_of(&detector_names[0], 7, setting.substr(9)) >= 0)) {
-                initial_detector = index_of(&detector_names[0], 7, setting.substr(9));
-            }
-            else if ((setting.rfind("descriptor=", 0) == 0) && (index_of(&descriptor_names[0], 3, setting.substr(11)) >= 0)) {
-                initial_descriptor = index_of(&descriptor_names[0], 3, setting.substr(11));
-            }
-            else if (setting == "flow=intensity") {
-                initial_wavelet = false;
-            }
-            else if (setting == "flow=wavelet") {
-                initial_wavelet = true;
-            }
-            else {
-                std::fprintf(stderr, "Unknown --config setting: %s (tracker=klt|extrema, lines=on|off, culling=on|off, association=klt|match|both, detector=fast|mser|harris|klt|forstner|rohr|kenney, descriptor=orb|teblid|bsift, flow=intensity|wavelet)\n", setting.c_str());
+            if (!apply_setting(initial, setting)) {
+                std::fprintf(stderr, "Unknown --config setting: %s (tracker=klt|extrema, lines=on|off, culling=on|off, association=klt|match|both, detector=fast|mser|harris|klt|forstner|rohr|kenney, descriptor=orb|teblid|bsift|teblid512|bsift512, flow=intensity|wavelet)\n", setting.c_str());
                 return EXIT_FAILURE;
             }
         }
@@ -1431,13 +1477,13 @@ int main(int argc, char* argv[]) {
         std::printf("Loaded map '%s': %zu poses, %zu landmarks, %zu lines, %zu edges.\n", load_map_path.c_str(), loaded_map.frames.size(), loaded_map.landmarks.size(), loaded_map.lines.size(), loaded_map.edges.size());
     }
 
-    feature_tracker = initial_tracker;
-    feature_lines = initial_lines;
-    feature_culling = initial_culling;
-    feature_association = initial_association;
-    feature_detector = initial_detector;
-    feature_descriptor = initial_descriptor;
-    feature_wavelet = initial_wavelet;
+    feature_tracker = initial.tracker;
+    feature_lines = initial.lines;
+    feature_culling = initial.culling;
+    feature_association = initial.association;
+    feature_detector = initial.detector;
+    feature_descriptor = initial.descriptor;
+    feature_wavelet = initial.wavelet;
     worker.tracker_choice.store(feature_tracker);
     worker.lines_enabled.store(feature_lines);
     worker.culling_enabled.store(feature_culling);
@@ -1901,7 +1947,9 @@ int main(int argc, char* argv[]) {
                     restart();
                 }
                 controls.label_dim("Descriptor:");
-                const int descriptor_pressed = controls.button_row(&descriptor_labels[0], 3, feature_descriptor, feature_tracker == 0);
+                const int descriptor_first = controls.button_row(&descriptor_labels[0], 3, (feature_descriptor < 3) ? feature_descriptor : -1, feature_tracker == 0);
+                const int descriptor_second = controls.button_row(&descriptor_labels[3], descriptor_count - 3, (feature_descriptor >= 3) ? (feature_descriptor - 3) : -1, feature_tracker == 0);
+                const int descriptor_pressed = (descriptor_first >= 0) ? descriptor_first : ((descriptor_second >= 0) ? (descriptor_second + 3) : -1);
                 if ((descriptor_pressed >= 0) && (descriptor_pressed != feature_descriptor)) {
                     feature_descriptor = descriptor_pressed;
                     worker.descriptor_choice.store(feature_descriptor);
