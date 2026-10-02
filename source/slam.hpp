@@ -46,6 +46,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "mapping/map.hpp"
 #include "mapping/point.hpp"
 #include "mapping/relative_graph.hpp"
+#include "mapping/voxel_map.hpp"
 #include "match/distance/hamming.hpp"
 #include "match/matcher/bruteforce.hpp"
 #include "match/matcher/epipolar.hpp"
@@ -75,6 +76,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -1726,8 +1728,14 @@ private:
             // the map by projection once relocalisation has placed a frame, the landmarks around the keyframe are matched
             // around the solved pose and refine it. They share the probation of the inliers.
             this->rebuild_local_map(keyframe_id);
+            // The voxel map holds the map component tracking was in, which relocalisation can leave for another: it is rebuilt
+            // around the recalled keyframe as the covisible landmarks are.
+            const std::unordered_map<int, mapping::frame>::const_iterator recalled = this->reconstruction.frames.find(keyframe_id);
+            if (recalled != this->reconstruction.frames.end()) {
+                this->rebuild_voxel_map(recalled->second);
+            }
             std::vector<int> local_links;
-            const size_t matched_around = this->track_local_map(frame_current, slam::local_map_recovery_radius, true, &local_links);
+            const size_t matched_around = this->track_local_map(frame_current, slam::local_map_recovery_radius, true, &local_links, true);
             if (on_probation && !local_links.empty()) {
                 const std::unordered_set<int> local_track_ids(local_links.begin(), local_links.end());
                 for (const feature::tracker::tracker::track* const t : this->active_point_tracks()) {
@@ -2146,6 +2154,155 @@ private:
     static constexpr double local_map_recovery_radius = 20.0;
     std::vector<int> local_landmark_ids_;
 
+    // The voxel map of the current map component's landmarks, rebuilt at the end of each keyframe (the only time landmarks
+    // are added, moved or removed), with voxels a fraction of the newest keyframe's median scene depth so they keep their
+    // size relative to the scene whatever the monocular scale. Rays are cast from a grid of pixels out to a multiple of that
+    // depth; landmarks further from the keyframe than that, or at infinity, are kept in a list every query returns.
+    mapping::voxel_map voxel_map_;
+    std::vector<int> voxel_far_ids_;
+    double voxel_max_distance_ = 0.0;
+    bool voxel_map_valid_ = false;
+    std::vector<math::matrix<double, 3, 1>> voxel_rays_;
+    double voxel_ray_parameters_[sensor::model::parameter_count] = {};
+    size_t voxel_ray_columns_ = 0;
+    size_t voxel_ray_rows_ = 0;
+    static constexpr double voxel_depth_fraction = 0.25;
+    static constexpr double voxel_range_depths = 8.0;
+    static constexpr int voxel_ray_spacing = 12;
+    // Stopping a ray at the first well-filled voxel (the paper's occlusion test) also stops the rays that graze a surface
+    // voxel in front of the surface: on V1_01 at 10 landmarks it cut the landmarks matched per frame from 13.5 to 7.7, below
+    // the covisible keyframes' 10.5, so the rays run to their range.
+    static constexpr size_t voxel_occluding_points = static_cast<size_t>(-1);
+    static constexpr size_t voxel_depth_minimum = 10;
+    static constexpr size_t local_map_fallback_tracks = 100;
+
+    // The active point tracks that own a landmark still in the map.
+    size_t landmark_track_count() {
+        size_t count = 0;
+        for (const feature::tracker::tracker::track* const t : this->active_point_tracks()) {
+            if ((t->landmark_id >= 0) && (this->reconstruction.landmarks.count(t->landmark_id) != 0)) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    void prepare_voxel_rays(const mapping::frame& frame) {
+        double parameters[sensor::model::parameter_count] = {};
+        frame.camera.get_parameters(&parameters[0], sensor::model::parameter_count);
+        const size_t columns = frame.image_pyramid[0].get_cols();
+        const size_t rows = frame.image_pyramid[0].get_rows();
+        bool same = !this->voxel_rays_.empty() && (columns == this->voxel_ray_columns_) && (rows == this->voxel_ray_rows_);
+        for (size_t i = 0; i < sensor::model::parameter_count; ++i) {
+            same = same && (parameters[i] == this->voxel_ray_parameters_[i]);
+        }
+        if (same) {
+            return;
+        }
+        this->voxel_rays_.clear();
+        for (size_t v = static_cast<size_t>(slam::voxel_ray_spacing / 2); v < rows; v += static_cast<size_t>(slam::voxel_ray_spacing)) {
+            for (size_t u = static_cast<size_t>(slam::voxel_ray_spacing / 2); u < columns; u += static_cast<size_t>(slam::voxel_ray_spacing)) {
+                const double pixel[2] = { static_cast<double>(core::to_pixel_centre(static_cast<float>(u))), static_cast<double>(core::to_pixel_centre(static_cast<float>(v))) };
+                double ray[3] = { 0.0, 0.0, 0.0 };
+                if (!frame.camera.unproject(&pixel[0], &ray[0]) || !(ray[2] > 0.0)) {
+                    continue;
+                }
+                const double length = math::sqrt((ray[0] * ray[0]) + (ray[1] * ray[1]) + (ray[2] * ray[2]));
+                this->voxel_rays_.push_back(math::matrix<double, 3, 1>({ ray[0] / length, ray[1] / length, ray[2] / length }));
+            }
+        }
+        for (size_t i = 0; i < sensor::model::parameter_count; ++i) {
+            this->voxel_ray_parameters_[i] = parameters[i];
+        }
+        this->voxel_ray_columns_ = columns;
+        this->voxel_ray_rows_ = rows;
+    }
+
+    // Rebuilds the voxel map from the landmarks of the keyframe's map component, its scale set by the depths of the landmarks
+    // the keyframe observes.
+    void rebuild_voxel_map(const mapping::frame& keyframe) {
+        const size_t component = this->map_component(keyframe.id);
+        std::vector<const std::pair<const int, mapping::point>*> members;
+        std::vector<double> depths;
+        for (const auto& [landmark_id, landmark_observations] : this->reconstruction.observations) {
+            if (landmark_observations.empty() || (this->map_component(landmark_observations.front().frame_id) != component)) {
+                continue;
+            }
+            const std::unordered_map<int, mapping::point>::const_iterator landmark_it = this->reconstruction.landmarks.find(landmark_id);
+            if (landmark_it == this->reconstruction.landmarks.end()) {
+                continue;
+            }
+            members.push_back(&*landmark_it);
+            if (landmark_it->second.at_infinity()) {
+                continue;
+            }
+            for (const mapping::map::observation& obs : landmark_observations) {
+                if (obs.frame_id != keyframe.id) {
+                    continue;
+                }
+                const double depth = ((keyframe.rotation * landmark_it->second.location) + keyframe.translation)[2];
+                if (depth > 0.0) {
+                    depths.push_back(depth);
+                }
+                break;
+            }
+        }
+        if (depths.size() < slam::voxel_depth_minimum) {
+            // Too few depths to set the scale: keep the voxel map as it is, positions and all, until the next keyframe.
+            return;
+        }
+        std::nth_element(depths.begin(), depths.begin() + static_cast<std::ptrdiff_t>(depths.size() / 2), depths.end());
+        const double median_depth = depths[depths.size() / 2];
+        this->voxel_map_.clear(slam::voxel_depth_fraction * median_depth);
+        this->voxel_max_distance_ = slam::voxel_range_depths * median_depth;
+        this->voxel_far_ids_.clear();
+        const math::matrix<double, 3, 1> centre = -(math::transpose(keyframe.rotation) * keyframe.translation);
+        for (const std::pair<const int, mapping::point>* const member : members) {
+            const mapping::point& landmark = member->second;
+            if (landmark.at_infinity() || ((landmark.location - centre).get_length_squared() > (this->voxel_max_distance_ * this->voxel_max_distance_)) || !this->voxel_map_.insert(member->first, landmark.location)) {
+                this->voxel_far_ids_.push_back(member->first);
+            }
+        }
+        std::sort(this->voxel_far_ids_.begin(), this->voxel_far_ids_.end());
+        this->voxel_map_valid_ = true;
+        core::logger::log(core::logger::level::info, "Voxel map (keyframe %d): %zu landmarks in %zu voxels of %.4f map units, %zu far, rays to %.4f.", keyframe.id, this->voxel_map_.point_count(), this->voxel_map_.voxel_count(), this->voxel_map_.voxel_size(), this->voxel_far_ids_.size(), this->voxel_max_distance_);
+    }
+
+    // The landmarks the frame's rays reach in the voxel map, and the far ones, sorted.
+    std::vector<int> voxel_candidates(const mapping::frame& frame) {
+        std::vector<int> ids;
+        if (!this->voxel_map_valid_) {
+            return ids;
+        }
+        this->prepare_voxel_rays(frame);
+        const math::matrix<double, 3, 3> camera_to_world = math::transpose(frame.rotation);
+        const math::matrix<double, 3, 1> centre = -(camera_to_world * frame.translation);
+        this->voxel_map_.cast(centre, camera_to_world, this->voxel_rays_.data(), this->voxel_rays_.size(), this->voxel_max_distance_, slam::voxel_occluding_points, ids);
+        ids.insert(ids.end(), this->voxel_far_ids_.begin(), this->voxel_far_ids_.end());
+        std::sort(ids.begin(), ids.end());
+        ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+        return ids;
+    }
+
+    // The candidate landmarks frame-to-map matching tries, as the local map setting asks.
+    std::vector<int> local_map_candidates(const mapping::frame& frame, const bool recovering) {
+        const mapping::frame::settings::local_map_kind kind = this->frontend.local_map;
+        if (kind == mapping::frame::settings::local_map_kind::covisible) {
+            return this->local_landmark_ids_;
+        }
+        const std::vector<int> voxels = this->voxel_candidates(frame);
+        if (kind == mapping::frame::settings::local_map_kind::voxels) {
+            return voxels;
+        }
+        if ((kind == mapping::frame::settings::local_map_kind::fallback) && !recovering) {
+            return this->local_landmark_ids_;
+        }
+        std::vector<int> merged;
+        merged.reserve(this->local_landmark_ids_.size() + voxels.size());
+        std::set_union(this->local_landmark_ids_.begin(), this->local_landmark_ids_.end(), voxels.begin(), voxels.end(), std::back_inserter(merged));
+        return merged;
+    }
+
     static constexpr size_t keyframe_cull_other_observers = 3;
     static constexpr double keyframe_cull_redundant_fraction = 0.9;
 
@@ -2402,8 +2559,9 @@ private:
         std::sort(this->local_line_ids_.begin(), this->local_line_ids_.end());
     }
 
-    size_t track_local_map(mapping::frame& frame_current, const double radius = slam::local_map_projection_radius, const bool refine_pose = true, std::vector<int>* const linked_tracks = nullptr) {
-        if (this->local_landmark_ids_.empty()) {
+    size_t track_local_map(mapping::frame& frame_current, const double radius = slam::local_map_projection_radius, const bool refine_pose = true, std::vector<int>* const linked_tracks = nullptr, const bool recovering = false) {
+        const std::vector<int> candidates = this->local_map_candidates(frame_current, recovering);
+        if (candidates.empty()) {
             return 0;
         }
         const std::vector<feature::tracker::tracker::track*> active = this->active_point_tracks();
@@ -2490,7 +2648,7 @@ private:
         size_t in_view = 0;
         size_t matched = 0;
         std::vector<std::pair<size_t, int>> spawns;
-        for (const int landmark_id : this->local_landmark_ids_) {
+        for (const int landmark_id : candidates) {
             const std::unordered_map<int, mapping::point>::iterator landmark_it = this->reconstruction.landmarks.find(landmark_id);
             if (landmark_it == this->reconstruction.landmarks.end()) {
                 continue;
@@ -3578,7 +3736,7 @@ public:
                         frame_current.translation
                     );
                     if (this->frontend.association != mapping::frame::settings::association_kind::klt) {
-                        const size_t recovered = this->track_local_map(frame_current, slam::local_map_recovery_radius, false);
+                        const size_t recovered = this->track_local_map(frame_current, slam::local_map_recovery_radius, false, nullptr, true);
                         size_t recovered_correspondences = 0;
                         if ((recovered > 0) && this->pose_from_tracks(frame_current, recovered_correspondences)) {
                             pnp_success = true;
@@ -3618,6 +3776,10 @@ public:
 
             if (pnp_success) {
                 this->track_local_map(frame_current);
+                // As a fallback the voxel map's landmarks are searched too when the covisible ones leave the frame weakly tracked.
+                if ((this->frontend.local_map == mapping::frame::settings::local_map_kind::fallback) && (this->landmark_track_count() < slam::local_map_fallback_tracks)) {
+                    this->track_local_map(frame_current, slam::local_map_projection_radius, true, nullptr, true);
+                }
                 if (this->frontend.lines && (this->track_local_lines(frame_current) > 0) && this->frontend.line_pose) {
                     size_t refined_inliers = 0;
                     static_cast<void>(this->refine_pose_from_prior(frame_current, refined_inliers));
@@ -3945,6 +4107,8 @@ public:
             }
             this->loop_closure_.add_keyframe(frame_current.id, pose, frame_current.camera, records.data(), records.size());
         }
+        // The voxel map is part of the map whichever local map the tracking draws on, and costs one insert per landmark.
+        this->rebuild_voxel_map(frame_current);
 
         size_t active_track_count = 0;
         size_t tracks_with_landmarks = 0;

@@ -105,6 +105,17 @@ namespace mapping {
             optimisation::factor_graph::strategy solver = optimisation::factor_graph::strategy::dense_schur;
             optimisation::factor_graph::precision solver_precision = optimisation::factor_graph::precision::double_precision;
             bool cull_keyframes = true;
+            // Where frame-to-map matching takes its candidate landmarks from: the keyframes covisible with the newest keyframe,
+            // the voxels of a voxel map the frame's rays reach (mapping::voxel_map), both, or the covisible keyframes with the
+            // voxels added when they leave the frame weakly tracked or its own tracks could not pose it (recovery and
+            // relocalisation).
+            enum class local_map_kind {
+                covisible,
+                voxels,
+                both,
+                fallback
+            };
+            local_map_kind local_map = local_map_kind::covisible;
             int global_adjustment_keyframes = 10;
             // How the map is adjusted as keyframes arrive: absolute, a window of world poses with periodic global adjustments
             // and a pose graph at each loop, or relative, an adaptive region of a graph of relative transforms (see

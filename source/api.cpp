@@ -119,6 +119,7 @@ namespace {
     constexpr static const char configuration_key_solver[] = "solver";
     constexpr static const char configuration_key_solver_precision[] = "solver_precision";
     constexpr static const char configuration_key_culling[] = "culling";
+    constexpr static const char configuration_key_local_map[] = "local_map";
     constexpr static const char configuration_key_global_adjustment[] = "global_adjustment";
     constexpr static const char configuration_key_adjustment[] = "adjustment";
     constexpr static const char configuration_key_depth[] = "depth";
@@ -179,6 +180,20 @@ namespace {
         return "orb";
     }
 
+    const char* local_map_name(const mapping::frame::settings& frontend) {
+        switch (frontend.local_map) {
+            case mapping::frame::settings::local_map_kind::covisible:
+                return "covisible";
+            case mapping::frame::settings::local_map_kind::voxels:
+                return "voxels";
+            case mapping::frame::settings::local_map_kind::both:
+                return "both";
+            case mapping::frame::settings::local_map_kind::fallback:
+                return "fallback";
+        }
+        return "covisible";
+    }
+
     int print_configuration(char* const buffer, const size_t capacity, const mapping::frame::settings& frontend) {
         char collisions[16];
         if (frontend.track_collision_distance > 0.0f) {
@@ -211,7 +226,7 @@ namespace {
         return std::snprintf(
             buffer,
             capacity,
-            "%s=%d\n%s=%s\n%s=%.9g\n%s=%s\n%s=%.9g\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n",
+            "%s=%d\n%s=%s\n%s=%.9g\n%s=%s\n%s=%.9g\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n",
             configuration_key_verbosity,
             core::logger::get_verbosity(),
             configuration_key_detector,
@@ -236,6 +251,8 @@ namespace {
             frontend.lines ? "on" : "off",
             configuration_key_culling,
             frontend.cull_keyframes ? "on" : "off",
+            configuration_key_local_map,
+            local_map_name(frontend),
             configuration_key_global_adjustment,
             &global_adjustment[0],
             configuration_key_adjustment,
@@ -513,6 +530,23 @@ namespace {
                 }
                 else if (token_equals(value, value_length, "on")) {
                     frontend.cull_keyframes = true;
+                }
+                else {
+                    return false;
+                }
+            }
+            else if (token_equals(line, key_length, configuration_key_local_map)) {
+                if (token_equals(value, value_length, "covisible")) {
+                    frontend.local_map = mapping::frame::settings::local_map_kind::covisible;
+                }
+                else if (token_equals(value, value_length, "voxels")) {
+                    frontend.local_map = mapping::frame::settings::local_map_kind::voxels;
+                }
+                else if (token_equals(value, value_length, "both")) {
+                    frontend.local_map = mapping::frame::settings::local_map_kind::both;
+                }
+                else if (token_equals(value, value_length, "fallback")) {
+                    frontend.local_map = mapping::frame::settings::local_map_kind::fallback;
                 }
                 else {
                     return false;

@@ -231,6 +231,19 @@ int main(int argc, char* argv[]) {
         REQUIRE(std::strstr(buffer.data(), "global_adjustment=off\n") != nullptr);
         REQUIRE(std::strstr(buffer.data(), "\nadjustment=absolute\n") != nullptr);
 
+        // Each local map source reads back, and an unknown one is rejected.
+        const char* const local_maps[4] = { "local_map=covisible\n", "local_map=voxels\n", "local_map=both\n", "local_map=fallback\n" };
+        for (int index = 0; index < 4; ++index) {
+            REQUIRE(zeroslam_set_configuration(system, local_maps[index], static_cast<int>(std::strlen(local_maps[index]))) == zeroslam_return_success);
+            REQUIRE(zeroslam_get_configuration(system, nullptr, &length) == zeroslam_return_failure_insufficient_data_length);
+            buffer.assign(static_cast<size_t>(length), '\0');
+            capacity = length;
+            REQUIRE(zeroslam_get_configuration(system, buffer.data(), &capacity) == zeroslam_return_success);
+            REQUIRE(std::strstr(buffer.data(), local_maps[index]) != nullptr);
+        }
+        const char* const bad_local_map = "local_map=octree\n";
+        REQUIRE(zeroslam_set_configuration(system, bad_local_map, static_cast<int>(std::strlen(bad_local_map))) == zeroslam_return_failure_invalid_configuration);
+
         const char* const collisions_off = "collisions=off\nanchor=off\nanchor_refresh=off\n";
         REQUIRE(zeroslam_set_configuration(system, collisions_off, static_cast<int>(std::strlen(collisions_off))) == zeroslam_return_success);
         length = 0;
