@@ -1093,7 +1093,7 @@ private:
             if ((records == nullptr) || (records_size < slam::relocalise_inliers_minimum)) {
                 continue;
             }
-            std::vector<feature::descriptor::binary<256>> record_descriptors(records_size);
+            std::vector<feature::descriptor::stored> record_descriptors(records_size);
             for (size_t i = 0; i < records_size; ++i) {
                 record_descriptors[i] = records[i].descriptor;
             }
@@ -1621,7 +1621,7 @@ private:
 
     static constexpr unsigned int reacquire_hamming_maximum = 50;
 
-    void add_landmark_descriptors(mapping::point& landmark, const mapping::frame& frame, const float x, const float y, const int octave, const feature::descriptor::binary<256>& track_descriptor) {
+    void add_landmark_descriptors(mapping::point& landmark, const mapping::frame& frame, const float x, const float y, const int octave, const feature::descriptor::stored& track_descriptor) {
         landmark.add_descriptor(&track_descriptor.data[0]);
         if (!this->frontend.affine || (this->frontend.descriptor != mapping::frame::settings::descriptor_kind::bsift) || (octave < 0) || (static_cast<size_t>(octave) >= frame.image_pyramid.size())) {
             return;
@@ -1648,7 +1648,8 @@ private:
                 feature::descriptor::sift::describe_float(data, columns, angle, &affine[0], vector);
                 feature::descriptor::binary<256> tilted;
                 feature::descriptor::sift::binarise(vector, tilted);
-                landmark.add_descriptor(&tilted.data[0]);
+                const feature::descriptor::stored tilted_stored = feature::descriptor::stored::widened(tilted);
+                landmark.add_descriptor(&tilted_stored.data[0]);
             }
         }
     }
@@ -1885,9 +1886,9 @@ private:
             unsigned int distance;
         };
 
-        const auto search = [&](const std::unordered_map<long long, std::vector<size_t>>& grid, const math::matrix<double, 2, 1>& projected, const std::vector<feature::descriptor::binary<256>>& queries, const int query_octave, const auto& position_x, const auto& position_y, const auto& octave_of, const auto& descriptor_of, const auto& skip, candidate& best, candidate& second) {
-            best = candidate{ static_cast<size_t>(-1), 256u };
-            second = candidate{ static_cast<size_t>(-1), 256u };
+        const auto search = [&](const std::unordered_map<long long, std::vector<size_t>>& grid, const math::matrix<double, 2, 1>& projected, const std::vector<feature::descriptor::stored>& queries, const int query_octave, const auto& position_x, const auto& position_y, const auto& octave_of, const auto& descriptor_of, const auto& skip, candidate& best, candidate& second) {
+            best = candidate{ static_cast<size_t>(-1), static_cast<unsigned int>(feature::descriptor::stored_bits) + 1u };
+            second = candidate{ static_cast<size_t>(-1), static_cast<unsigned int>(feature::descriptor::stored_bits) + 1u };
             for (int offset_y = -1; offset_y <= 1; ++offset_y) {
                 for (int offset_x = -1; offset_x <= 1; ++offset_x) {
                     const std::unordered_map<long long, std::vector<size_t>>::const_iterator cell_it = grid.find(cell_key(projected[0] + (static_cast<double>(offset_x) * radius), projected[1] + (static_cast<double>(offset_y) * radius)));
@@ -1907,8 +1908,8 @@ private:
                         if (((octave_offset < 0) ? -octave_offset : octave_offset) > slam::local_map_octave_window) {
                             continue;
                         }
-                        unsigned int distance = 256u;
-                        for (const feature::descriptor::binary<256>& query : queries) {
+                        unsigned int distance = static_cast<unsigned int>(feature::descriptor::stored_bits) + 1u;
+                        for (const feature::descriptor::stored& query : queries) {
                             distance = math::min(distance, match::distance::hamming::distance(query, descriptor_of(index)));
                         }
                         if (distance < best.distance) {
@@ -1950,14 +1951,14 @@ private:
                 continue;
             }
             ++in_view;
-            std::vector<feature::descriptor::binary<256>> landmark_descriptor(1);
-            for (size_t descriptor_byte = 0; descriptor_byte < 32; ++descriptor_byte) {
+            std::vector<feature::descriptor::stored> landmark_descriptor(1);
+            for (size_t descriptor_byte = 0; descriptor_byte < feature::descriptor::stored::size_bytes; ++descriptor_byte) {
                 landmark_descriptor[0].data[descriptor_byte] = landmark.descriptor[descriptor_byte];
             }
             if (this->frontend.affine) {
                 landmark_descriptor.resize(1 + landmark.descriptor_history.size());
                 for (size_t h = 0; h < landmark.descriptor_history.size(); ++h) {
-                    for (size_t descriptor_byte = 0; descriptor_byte < 32; ++descriptor_byte) {
+                    for (size_t descriptor_byte = 0; descriptor_byte < feature::descriptor::stored::size_bytes; ++descriptor_byte) {
                         landmark_descriptor[1 + h].data[descriptor_byte] = landmark.descriptor_history[h][descriptor_byte];
                     }
                 }
@@ -1979,7 +1980,7 @@ private:
                 [&](const size_t index) {
                     return active[index]->octave;
                 },
-                [&](const size_t index) -> const feature::descriptor::binary<256>& {
+                [&](const size_t index) -> const feature::descriptor::stored& {
                     return active[index]->descriptor;
                 },
                 [&](const size_t index) {
@@ -2014,7 +2015,7 @@ private:
                 [&](const size_t index) {
                     return frame_current.keypoints[index].octave;
                 },
-                [&](const size_t index) -> const feature::descriptor::binary<256>& {
+                [&](const size_t index) -> const feature::descriptor::stored& {
                     return frame_current.descriptors[index];
                 },
                 [&](const size_t index) {
@@ -2140,7 +2141,7 @@ private:
         };
 
         std::vector<feature::point> rhs_points;
-        std::vector<feature::descriptor::binary<256>> rhs_descriptors;
+        std::vector<feature::descriptor::stored> rhs_descriptors;
         std::vector<size_t> rhs_track_indices;
         for (size_t track_index = 0; track_index < active.size(); ++track_index) {
             const feature::tracker::tracker::track* const t = active[track_index];
@@ -2205,7 +2206,7 @@ private:
             const math::matrix<double, 3, 3> fundamental = intrinsics_inverse_transposed * (translation_skew * relative_rotation) * intrinsics_inverse;
 
             std::vector<feature::point> lhs_points;
-            std::vector<feature::descriptor::binary<256>> lhs_descriptors;
+            std::vector<feature::descriptor::stored> lhs_descriptors;
             std::vector<int> lhs_landmark_ids;
             std::vector<math::matrix<double, 3, 1>> lhs_rays;
             for (size_t group_index = group_begin; group_index < group_end; ++group_index) {
@@ -2234,8 +2235,8 @@ private:
                 }
                 lhs_rays.push_back(source_ray * (1.0 / source_ray[2]));
                 lhs_points.push_back(feature::point{ virtual_x, virtual_y, 0.0f, 0.0f, 0 });
-                feature::descriptor::binary<256> landmark_descriptor;
-                for (size_t descriptor_byte = 0; descriptor_byte < 32; ++descriptor_byte) {
+                feature::descriptor::stored landmark_descriptor;
+                for (size_t descriptor_byte = 0; descriptor_byte < feature::descriptor::stored::size_bytes; ++descriptor_byte) {
                     landmark_descriptor.data[descriptor_byte] = this->reconstruction.landmarks.at(orphan_id).descriptor[descriptor_byte];
                 }
                 lhs_descriptors.push_back(landmark_descriptor);
@@ -3314,7 +3315,7 @@ public:
                 }
                 mapping::loop_closure::record record;
                 record.landmark_id = t->landmark_id;
-                for (size_t descriptor_byte = 0; descriptor_byte < 32; ++descriptor_byte) {
+                for (size_t descriptor_byte = 0; descriptor_byte < feature::descriptor::stored::size_bytes; ++descriptor_byte) {
                     record.descriptor[descriptor_byte] = landmark_it->second.descriptor[descriptor_byte];
                 }
                 record.location = landmark_it->second.location;

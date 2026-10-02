@@ -37,7 +37,7 @@ namespace mapping {
         this->max_distance = distance_threshold;
     }
 
-    void place_recognition::add_keyframe(const int keyframe_id, const feature::descriptor::binary<256>* const descriptors, const size_t descriptors_size) {
+    void place_recognition::add_keyframe(const int keyframe_id, const feature::descriptor::stored* const descriptors, const size_t descriptors_size) {
         if (descriptors_size == 0) {
             return;
         }
@@ -64,7 +64,7 @@ namespace mapping {
     }
 
     std::vector<place_recognition::candidate> place_recognition::get_candidates(
-        const feature::descriptor::binary<256>* const query_descriptors,
+        const feature::descriptor::stored* const query_descriptors,
         const size_t query_descriptors_size,
         const int current_keyframe_id,
         const size_t max_candidates,

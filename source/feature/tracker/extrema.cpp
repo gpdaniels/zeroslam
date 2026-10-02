@@ -199,7 +199,7 @@ namespace feature::tracker {
         std::vector<unsigned char, core::arena_allocator<unsigned char>> small_smoothed(small_image.size());
         image::blur::gaussian_7x7(small_image.data(), small_width, small_height, small_width, small_smoothed.data());
         std::vector<feature::point> small_points;
-        std::vector<descriptor::binary<256>> small_descriptors;
+        std::vector<descriptor::stored> small_descriptors;
         {
             detector::curvature_extrema::options small_detection;
             small_detection.quantile = 0.5f;
@@ -223,7 +223,7 @@ namespace feature::tracker {
                 descriptor::binary<256> described;
                 descriptor::orb::describe(small_smoothed.data() + offset, small_width, angle, described);
                 small_points.push_back(point);
-                small_descriptors.push_back(described);
+                small_descriptors.push_back(descriptor::stored::widened(described));
             }
         }
 
@@ -454,7 +454,9 @@ namespace feature::tracker {
                 if (created.track.descriptor_valid) {
                     const size_t offset = static_cast<size_t>(found.cell_y) * static_cast<size_t>(width) + static_cast<size_t>(found.cell_x);
                     const float angle = feature::angle::orb::dominant_angle(image_level0.get_data() + offset, width);
-                    descriptor::orb::describe(blurred.data() + offset, width, angle, created.track.descriptor);
+                    descriptor::binary<256> described;
+                    descriptor::orb::describe(blurred.data() + offset, width, angle, described);
+                    created.track.descriptor = descriptor::stored::widened(described);
                 }
                 created.track.history.push_back(tracker::observation{ frame_id, created.track.x, created.track.y, 0 });
                 occupy(found.x, found.y);
@@ -464,7 +466,7 @@ namespace feature::tracker {
         }
 
         this->small_points_previous = static_cast<std::vector<feature::point>&&>(small_points);
-        this->small_descriptors_previous = static_cast<std::vector<descriptor::binary<256>>&&>(small_descriptors);
+        this->small_descriptors_previous = static_cast<std::vector<descriptor::stored>&&>(small_descriptors);
         this->flow_previous = flow_full;
         if (this->settings.climb_bidirectional) {
             this->kappa_previous = static_cast<std::vector<std::int64_t>&&>(kappa);

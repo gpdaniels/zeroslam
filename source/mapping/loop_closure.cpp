@@ -54,7 +54,7 @@ namespace mapping {
             return outcome;
         }
 
-        std::vector<feature::descriptor::binary<256>> query(keyframe_records_size);
+        std::vector<feature::descriptor::stored> query(keyframe_records_size);
         for (size_t i = 0; i < keyframe_records_size; ++i) {
             query[i] = keyframe_records[i].descriptor;
         }
@@ -133,7 +133,7 @@ namespace mapping {
         return outcome;
     }
 
-    bool loop_closure::verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::binary<256>>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const {
+    bool loop_closure::verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::stored>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const {
         const keyframe* const candidate_keyframe = &candidate;
         const std::vector<record>& candidate_records = candidate_keyframe->records;
 
@@ -163,7 +163,7 @@ namespace mapping {
         }
         const size_t shared_by_id = correspondences.size();
 
-        std::vector<feature::descriptor::binary<256>> recorded_descriptors(candidate_records.size());
+        std::vector<feature::descriptor::stored> recorded_descriptors(candidate_records.size());
         for (size_t i = 0; i < candidate_records.size(); ++i) {
             recorded_descriptors[i] = candidate_records[i].descriptor;
         }
@@ -268,7 +268,7 @@ namespace mapping {
             };
             const unsigned int guided_bound = static_cast<unsigned int>(loop_closure::guided_hamming_maximum * this->hamming_scale);
             const double radius_squared = loop_closure::guided_search_radius * loop_closure::guided_search_radius;
-            const auto nearest = [&](const feature::descriptor::binary<256>& descriptor, const record* const searched, const size_t searched_size, const std::vector<unsigned char>& claimed, const double (&predicted)[2]) -> size_t {
+            const auto nearest = [&](const feature::descriptor::stored& descriptor, const record* const searched, const size_t searched_size, const std::vector<unsigned char>& claimed, const double (&predicted)[2]) -> size_t {
                 size_t best = static_cast<size_t>(-1);
                 unsigned int best_distance = guided_bound;
                 for (size_t i = 0; i < searched_size; ++i) {
@@ -496,7 +496,7 @@ namespace mapping {
         if (keyframe_records_size == 0) {
             return;
         }
-        std::vector<feature::descriptor::binary<256>> descriptors(keyframe_records_size);
+        std::vector<feature::descriptor::stored> descriptors(keyframe_records_size);
         for (size_t i = 0; i < keyframe_records_size; ++i) {
             descriptors[i] = keyframe_records[i].descriptor;
         }
@@ -525,7 +525,7 @@ namespace mapping {
         return this->recognition.num_keyframes();
     }
 
-    std::vector<int> loop_closure::recall(const feature::descriptor::binary<256>* const descriptors, const size_t descriptors_size, const size_t max_recalled) const {
+    std::vector<int> loop_closure::recall(const feature::descriptor::stored* const descriptors, const size_t descriptors_size, const size_t max_recalled) const {
         std::vector<int> recalled;
         if (descriptors_size == 0) {
             return recalled;

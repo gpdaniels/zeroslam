@@ -47,7 +47,7 @@ namespace mapping {
         class record final {
         public:
             int landmark_id;
-            feature::descriptor::binary<256> descriptor;
+            feature::descriptor::stored descriptor;
             math::matrix<double, 3, 1> location;
             float pixel_x;
             float pixel_y;
@@ -106,7 +106,7 @@ namespace mapping {
 
         bool covisible_revisit_loop(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const int candidate_id, const keyframe& candidate, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<correspondence>& pairs, const std::vector<std::pair<size_t, size_t>>& pair_records, result& outcome) const;
 
-        bool verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::binary<256>>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const;
+        bool verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::stored>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const;
 
     public:
         loop_closure();
@@ -129,7 +129,7 @@ namespace mapping {
         // it, has to leave these to the appearance loops, whose similarity does not depend on the world frame.
         void set_covisible_revisits(const bool enabled);
 
-        std::vector<int> recall(const feature::descriptor::binary<256>* const descriptors, const size_t descriptors_size, const size_t max_recalled) const;
+        std::vector<int> recall(const feature::descriptor::stored* const descriptors, const size_t descriptors_size, const size_t max_recalled) const;
 
         const record* records_of(const int keyframe_id, size_t& records_size) const;
     };

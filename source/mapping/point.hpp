@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef ZEROSLAM_MAPPING_POINT_HPP
 #define ZEROSLAM_MAPPING_POINT_HPP
 
+#include "feature/descriptor/binary.hpp"
 #include "math/matrix.hpp"
 
 #if defined(_MSC_VER)
@@ -37,9 +38,9 @@ namespace mapping {
         int id;
         math::matrix<double, 3, 1> location;
         math::matrix<double, 3, 1> colour;
-        unsigned char descriptor[32] = {};
+        unsigned char descriptor[feature::descriptor::stored::size_bytes] = {};
         constexpr static const size_t descriptor_history_maximum = 24;
-        std::vector<std::array<unsigned char, 32>> descriptor_history;
+        std::vector<std::array<unsigned char, feature::descriptor::stored::size_bytes>> descriptor_history;
         std::vector<unsigned int> descriptor_distance_sums;
 
         bool inverse_depth = false;

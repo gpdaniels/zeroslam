@@ -77,7 +77,7 @@ namespace feature::tracker {
             int missed;
             int outliers;
             int outlier_frame_id;
-            descriptor::binary<256> descriptor;
+            descriptor::stored descriptor;
             bool descriptor_valid;
             std::vector<observation> history;
             std::unique_ptr<anchoring> anchored;
@@ -165,7 +165,7 @@ namespace feature::tracker {
 
         void discard_anchors();
 
-        void spawn_unclaimed(int frame_id, const std::vector<feature::point>& keypoints, const std::vector<descriptor::binary<256>>& descriptors, size_t detection_count, unsigned char* claimed);
+        void spawn_unclaimed(int frame_id, const std::vector<feature::point>& keypoints, const std::vector<descriptor::stored>& descriptors, size_t detection_count, unsigned char* claimed);
 
     public:
         tracker();
@@ -180,14 +180,14 @@ namespace feature::tracker {
             int frame_id,
             const image::pyramid& pyramid,
             const std::vector<feature::point>& keypoints,
-            const std::vector<descriptor::binary<256>>& descriptors
+            const std::vector<descriptor::stored>& descriptors
         );
 
         bool near_existing_track(float x, float y) const;
 
         void prune_collisions();
 
-        track& spawn(int frame_id, const feature::point& keypoint, const descriptor::binary<256>& descriptor);
+        track& spawn(int frame_id, const feature::point& keypoint, const descriptor::stored& descriptor);
 
         const std::vector<track>& tracks() const;
 

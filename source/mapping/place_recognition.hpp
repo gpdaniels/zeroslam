@@ -58,14 +58,14 @@ namespace mapping {
 
     public:
         void set_distance_threshold(const unsigned int distance_threshold);
-        void add_keyframe(const int keyframe_id, const feature::descriptor::binary<256>* const descriptors, const size_t descriptors_size);
+        void add_keyframe(const int keyframe_id, const feature::descriptor::stored* const descriptors, const size_t descriptors_size);
         void remove_keyframe(const int keyframe_id);
         void clear();
         size_t num_keyframes() const;
 
         // The keyframes most voted for by the query's descriptors, among those before before_keyframe_id when one is given.
         std::vector<candidate> get_candidates(
-            const feature::descriptor::binary<256>* const query_descriptors,
+            const feature::descriptor::stored* const query_descriptors,
             const size_t query_descriptors_size,
             const int current_keyframe_id,
             const size_t max_candidates,

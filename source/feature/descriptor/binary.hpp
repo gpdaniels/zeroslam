@@ -48,8 +48,23 @@ namespace feature::descriptor {
             ASSERT(index < (size_bytes), "Index out of bounds.");
             return this->data[index];
         }
+
+        // A copy of a narrower descriptor in the first bytes with the rest zero, so the Hamming distance between two copies equals the distance between the originals.
+        template <size_t narrow_bits>
+        static binary widened(const binary<narrow_bits>& narrow) {
+            static_assert(narrow_bits <= size_bits, "A descriptor only widens.");
+            binary wide;
+            for (size_t byte = 0; byte < size_bytes; ++byte) {
+                wide.data[byte] = (byte < binary<narrow_bits>::size_bytes) ? narrow.data[byte] : static_cast<unsigned char>(0);
+            }
+            return wide;
+        }
     };
 
+    // Every descriptor the pipeline stores, indexes and matches has this width. ORB, TEBLID-256 and bSIFT-256 fill the first
+    // 256 bits and leave the rest zero, which adds nothing to a Hamming distance between two of them.
+    constexpr static const size_t stored_bits = 512;
+    using stored = binary<stored_bits>;
 }
 
 #endif // ZEROSLAM_FEATURE_DESCRIPTOR_BINARY_HPP

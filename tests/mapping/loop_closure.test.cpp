@@ -54,6 +54,7 @@ static const sensor::model& test_camera() {
 static mapping::loop_closure::record random_record(core::random_pcg& random, const int landmark_id) {
     mapping::loop_closure::record record;
     record.landmark_id = landmark_id;
+    record.descriptor = feature::descriptor::stored{};
     for (size_t j = 0; j < 32; ++j) {
         record.descriptor[j] = static_cast<unsigned char>(random.get_random_raw() % 256);
     }
@@ -264,7 +265,7 @@ int main(int argc, char* argv[]) {
     REQUIRE(!closure.detect(42, identity, test_camera(), unconnected, nullptr, 0).found);
 
     {
-        std::vector<feature::descriptor::binary<256>> descriptors;
+        std::vector<feature::descriptor::stored> descriptors;
         for (const mapping::loop_closure::record& record : first) {
             descriptors.push_back(record.descriptor);
         }

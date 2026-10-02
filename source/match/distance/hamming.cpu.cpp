@@ -20,6 +20,9 @@ namespace match::distance {
     unsigned int distance_cpu(const unsigned char* __restrict const data_lhs, const unsigned char* __restrict const data_rhs);
     void distances_cpu(const feature::descriptor::binary<256>& query, const feature::descriptor::binary<256>* __restrict const descriptors, const size_t descriptors_size, unsigned int* __restrict const results);
     void distances_indexed_cpu(const feature::descriptor::binary<256>& query, const feature::descriptor::binary<256>* __restrict const descriptors, const size_t* __restrict const indices, const size_t indices_size, unsigned int* __restrict const results);
+    unsigned int distance_512_cpu(const unsigned char* __restrict const data_lhs, const unsigned char* __restrict const data_rhs);
+    void distances_512_cpu(const feature::descriptor::binary<512>& query, const feature::descriptor::binary<512>* __restrict const descriptors, const size_t descriptors_size, unsigned int* __restrict const results);
+    void distances_indexed_512_cpu(const feature::descriptor::binary<512>& query, const feature::descriptor::binary<512>* __restrict const descriptors, const size_t* __restrict const indices, const size_t indices_size, unsigned int* __restrict const results);
 
     namespace {
         unsigned int distance_64(const unsigned char* __restrict const data_lhs, const unsigned char* __restrict const data_rhs) {
@@ -55,6 +58,22 @@ namespace match::distance {
     void distances_indexed_cpu(const feature::descriptor::binary<256>& query, const feature::descriptor::binary<256>* __restrict const descriptors, const size_t* __restrict const indices, const size_t indices_size, unsigned int* __restrict const results) {
         for (size_t index = 0; index < indices_size; ++index) {
             results[index] = distance_cpu(query.data, descriptors[indices[index]].data);
+        }
+    }
+
+    unsigned int distance_512_cpu(const unsigned char* __restrict const data_lhs, const unsigned char* __restrict const data_rhs) {
+        return distance_cpu(&data_lhs[0], &data_rhs[0]) + distance_cpu(&data_lhs[32], &data_rhs[32]);
+    }
+
+    void distances_512_cpu(const feature::descriptor::binary<512>& query, const feature::descriptor::binary<512>* __restrict const descriptors, const size_t descriptors_size, unsigned int* __restrict const results) {
+        for (size_t index = 0; index < descriptors_size; ++index) {
+            results[index] = distance_512_cpu(query.data, descriptors[index].data);
+        }
+    }
+
+    void distances_indexed_512_cpu(const feature::descriptor::binary<512>& query, const feature::descriptor::binary<512>* __restrict const descriptors, const size_t* __restrict const indices, const size_t indices_size, unsigned int* __restrict const results) {
+        for (size_t index = 0; index < indices_size; ++index) {
+            results[index] = distance_512_cpu(query.data, descriptors[indices[index]].data);
         }
     }
 }

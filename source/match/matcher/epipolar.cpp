@@ -492,9 +492,9 @@ namespace match::matcher {
 
     size_t epipolar::find_matches(
         const feature::point* __restrict const lhs_points,
-        const feature::descriptor::binary<256>* __restrict const lhs_descriptors,
+        const feature::descriptor::stored* __restrict const lhs_descriptors,
         const size_t lhs_descriptors_size,
-        const feature::descriptor::binary<256>* __restrict const rhs_descriptors,
+        const feature::descriptor::stored* __restrict const rhs_descriptors,
         const size_t rhs_descriptors_size,
         const index& rhs_index,
         const float threshold,
@@ -540,10 +540,10 @@ namespace match::matcher {
 
     size_t epipolar::find_matches(
         const feature::point* __restrict const lhs_points,
-        const feature::descriptor::binary<256>* __restrict const lhs_descriptors,
+        const feature::descriptor::stored* __restrict const lhs_descriptors,
         const size_t lhs_descriptors_size,
         const feature::point* __restrict const rhs_points,
-        const feature::descriptor::binary<256>* __restrict const rhs_descriptors,
+        const feature::descriptor::stored* __restrict const rhs_descriptors,
         const size_t rhs_descriptors_size,
         const math::matrix<double, 3, 3>& fundamental,
         const float tolerance,

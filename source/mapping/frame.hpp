@@ -124,10 +124,10 @@ namespace mapping {
         sensor::model camera;
         image::pyramid image_pyramid;
         std::vector<std::vector<feature::point>> keypoint_pyramid;
-        std::vector<std::vector<feature::descriptor::binary<256>>> descriptor_pyramid;
+        std::vector<std::vector<feature::descriptor::stored>> descriptor_pyramid;
 
         std::vector<feature::point> keypoints;
-        std::vector<feature::descriptor::binary<256>> descriptors;
+        std::vector<feature::descriptor::stored> descriptors;
 
     public:
         float to_level0_x(const float level_x, const size_t level) const {

@@ -79,9 +79,10 @@ static inline bool angular_member(double centre, double half_width, double angle
     return false;
 }
 
-static inline void fill_descriptor(feature::descriptor::binary<256>& value, unsigned int key) {
+// The first 256 bits only, as an ORB descriptor fills them.
+static inline void fill_descriptor(feature::descriptor::stored& value, unsigned int key) {
     for (size_t i = 0; i < sizeof(value.data); ++i) {
-        value.data[i] = static_cast<unsigned char>(((key * 2654435761u) + (static_cast<unsigned int>(i) * 40503u) + (key >> 3u)) % 256u);
+        value.data[i] = (i < 32) ? static_cast<unsigned char>(((key * 2654435761u) + (static_cast<unsigned int>(i) * 40503u) + (key >> 3u)) % 256u) : static_cast<unsigned char>(0);
     }
 }
 
@@ -273,14 +274,14 @@ int main(int argc, char* argv[]) {
             const size_t matches_count = 2;
 
             std::vector<feature::point> lhs_points(lhs_size);
-            std::vector<feature::descriptor::binary<256>> lhs_descriptors(lhs_size);
+            std::vector<feature::descriptor::stored> lhs_descriptors(lhs_size);
             for (size_t i = 0; i < lhs_size; ++i) {
                 lhs_points[i].x = static_cast<float>(random.get_random(0.0, image_width));
                 lhs_points[i].y = static_cast<float>(random.get_random(0.0, image_height));
                 fill_descriptor(lhs_descriptors[i], static_cast<unsigned int>(i * 7u) + 1u);
             }
             std::vector<feature::point> rhs_points(rhs_size);
-            std::vector<feature::descriptor::binary<256>> rhs_descriptors(rhs_size);
+            std::vector<feature::descriptor::stored> rhs_descriptors(rhs_size);
             for (size_t i = 0; i < rhs_size; ++i) {
                 rhs_points[i].x = static_cast<float>(random.get_random(0.0, image_width));
                 rhs_points[i].y = static_cast<float>(random.get_random(0.0, image_height));
@@ -306,7 +307,7 @@ int main(int argc, char* argv[]) {
 
             std::vector<match::pair> expected;
             std::vector<size_t> candidates(rhs_size);
-            std::vector<feature::descriptor::binary<256>> compacted(rhs_size);
+            std::vector<feature::descriptor::stored> compacted(rhs_size);
             std::vector<match::pair> block(matches_count);
             size_t ties_seen = 0;
             for (size_t i = 0; i < lhs_size; ++i) {
@@ -372,14 +373,14 @@ int main(int argc, char* argv[]) {
         const size_t matches_count = 2;
 
         std::vector<feature::point> lhs_points(lhs_size);
-        std::vector<feature::descriptor::binary<256>> lhs_descriptors(lhs_size);
+        std::vector<feature::descriptor::stored> lhs_descriptors(lhs_size);
         for (size_t i = 0; i < lhs_size; ++i) {
             lhs_points[i].x = static_cast<float>(random.get_random(0.0, image_width));
             lhs_points[i].y = static_cast<float>(random.get_random(0.0, image_height));
             fill_descriptor(lhs_descriptors[i], static_cast<unsigned int>(i * 11u) + 3u);
         }
         std::vector<feature::point> rhs_points(rhs_size);
-        std::vector<feature::descriptor::binary<256>> rhs_descriptors(rhs_size);
+        std::vector<feature::descriptor::stored> rhs_descriptors(rhs_size);
         for (size_t i = 0; i < rhs_size; ++i) {
             rhs_points[i].x = static_cast<float>(random.get_random(0.0, image_width));
             rhs_points[i].y = static_cast<float>(random.get_random(0.0, image_height));
@@ -614,7 +615,7 @@ int main(int argc, char* argv[]) {
 
             match::pair matches[4];
             std::vector<feature::point> lhs_points(2);
-            std::vector<feature::descriptor::binary<256>> lhs_descriptors(2);
+            std::vector<feature::descriptor::stored> lhs_descriptors(2);
             REQUIRE(match::matcher::epipolar::find_matches(lhs_points.data(), lhs_descriptors.data(), 0, nullptr, 0, index, 100.0f, 2, &matches[0], 4) == 0);
             REQUIRE(match::matcher::epipolar::find_matches(lhs_points.data(), lhs_descriptors.data(), 2, nullptr, 0, index, 100.0f, 2, &matches[0], 4) == 0);
             REQUIRE(match::matcher::epipolar::find_matches(lhs_points.data(), lhs_descriptors.data(), 2, nullptr, 0, index, 100.0f, 0, &matches[0], 4) == 0);
@@ -700,7 +701,7 @@ int main(int argc, char* argv[]) {
             const size_t count = counts[index_of_count];
             core::random_pcg random(0x5eed0012ull + index_of_count);
             std::vector<feature::point> points(count);
-            std::vector<feature::descriptor::binary<256>> descriptors(count);
+            std::vector<feature::descriptor::stored> descriptors(count);
             for (size_t i = 0; i < count; ++i) {
                 points[i].x = static_cast<float>(random.get_random(0.0, image_width));
                 points[i].y = static_cast<float>(random.get_random(0.0, image_height));

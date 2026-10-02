@@ -89,13 +89,13 @@ static inline image::image make_frame(size_t dimension, int k, int shift_x, int 
     });
 }
 
-static inline feature::descriptor::binary<256> describe_at(const image::image& img, int x, int y) {
+static inline feature::descriptor::stored describe_at(const image::image& img, int x, int y) {
     const int stride = static_cast<int>(img.get_cols());
     const unsigned char* ptr = img.get_data() + static_cast<size_t>(y) * img.get_cols() + static_cast<size_t>(x);
     const float angle = feature::angle::orb::dominant_angle(ptr, stride);
     feature::descriptor::binary<256> descriptor;
     feature::descriptor::orb::describe(ptr, stride, angle, descriptor);
-    return descriptor;
+    return feature::descriptor::stored::widened(descriptor);
 }
 
 static inline void occlude(image::image& img, int cx, int cy, int radius) {
@@ -136,7 +136,7 @@ static void test_association(const feature::tracker::tracker::association_kind a
             occlude(image_k, base_x[occluded] + k * shift_x, base_y[occluded] + k * shift_y, 8);
         }
         std::vector<feature::point> keypoints;
-        std::vector<feature::descriptor::binary<256>> descriptors;
+        std::vector<feature::descriptor::stored> descriptors;
         for (size_t p = 0; p < point_count; ++p) {
             if (omit && (p == occluded)) {
                 continue;
@@ -195,7 +195,7 @@ int main(int argc, char* argv[]) {
         {
             const image::image image0 = make_frame(dimension, 0, shift_x, shift_y);
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             for (size_t p = 0; p < point_count; ++p) {
                 keypoints.push_back(feature::point{ static_cast<float>(base_x[p]), static_cast<float>(base_y[p]), 0.0f, 0.0f, 0 });
                 descriptors.push_back(describe_at(image0, base_x[p], base_y[p]));
@@ -212,7 +212,7 @@ int main(int argc, char* argv[]) {
         for (int k = 1; k < frame_count; ++k) {
             const image::image image_k = make_frame(dimension, k, shift_x, shift_y);
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             for (size_t p = 0; p < point_count; ++p) {
                 const int x = base_x[p] + k * shift_x;
                 const int y = base_y[p] + k * shift_y;
@@ -257,7 +257,7 @@ int main(int argc, char* argv[]) {
         {
             const image::image image0 = make_frame(dimension, 0, shift_x, shift_y);
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             keypoints.push_back(feature::point{ static_cast<float>(target_x), static_cast<float>(target_y), 0.0f, 0.0f, 0 });
             descriptors.push_back(describe_at(image0, target_x, target_y));
             for (size_t p = 0; p < other_count; ++p) {
@@ -276,7 +276,7 @@ int main(int argc, char* argv[]) {
                 occlude(image_k, target_x + k * shift_x, target_y + k * shift_y, 22);
             }
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             if (!omit_target) {
                 const int x = target_x + k * shift_x;
                 const int y = target_y + k * shift_y;
@@ -322,7 +322,7 @@ int main(int argc, char* argv[]) {
         {
             const image::image image0 = make_frame(dimension, 0, shift_x, shift_y);
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             keypoints.push_back(feature::point{ static_cast<float>(target_x), static_cast<float>(target_y), 0.0f, 0.0f, 0 });
             descriptors.push_back(describe_at(image0, target_x, target_y));
             for (size_t p = 0; p < other_count; ++p) {
@@ -337,7 +337,7 @@ int main(int argc, char* argv[]) {
             image::image image_k = make_frame(dimension, k, shift_x, shift_y);
             occlude(image_k, target_x + k * shift_x, target_y + k * shift_y, 22);
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             for (size_t p = 0; p < other_count; ++p) {
                 const int x = other_x[p] + k * shift_x;
                 const int y = other_y[p] + k * shift_y;
@@ -352,7 +352,7 @@ int main(int argc, char* argv[]) {
             const int k = 4;
             const image::image image_k = make_frame(dimension, k, shift_x, shift_y);
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             const int tx = target_x + k * shift_x;
             const int ty = target_y + k * shift_y;
             keypoints.push_back(feature::point{ static_cast<float>(tx), static_cast<float>(ty), 0.0f, 0.0f, 0 });
@@ -391,11 +391,11 @@ int main(int argc, char* argv[]) {
 
         feature::tracker::tracker manager;
 
-        feature::descriptor::binary<256> target_reference;
+        feature::descriptor::stored target_reference;
         {
             const image::image image0 = make_frame(dimension, 0, shift_x, shift_y);
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             target_reference = describe_at(image0, target_x, target_y);
             keypoints.push_back(feature::point{ static_cast<float>(target_x), static_cast<float>(target_y), 0.0f, 0.0f, 0 });
             descriptors.push_back(target_reference);
@@ -411,7 +411,7 @@ int main(int argc, char* argv[]) {
         for (int k = 1; k <= 2; ++k) {
             const image::image image_k = make_frame(dimension, k, shift_x, shift_y);
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             const int tx = target_x + k * shift_x;
             const int ty = target_y + k * shift_y;
             keypoints.push_back(feature::point{ static_cast<float>(tx), static_cast<float>(ty), 0.0f, 0.0f, 0 });
@@ -434,14 +434,14 @@ int main(int argc, char* argv[]) {
             const int ty = target_y + k * shift_y;
             occlude(image_k, tx, ty, 22);
 
-            feature::descriptor::binary<256> mismatched = target_reference;
+            feature::descriptor::stored mismatched = target_reference;
             for (size_t b = 0; b < 10; ++b) {
                 mismatched.data[b] = static_cast<unsigned char>(mismatched.data[b] ^ 0xFF);
             }
             REQUIRE(match::distance::hamming::distance(target_reference, mismatched) > 50u);
 
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             keypoints.push_back(feature::point{ static_cast<float>(tx), static_cast<float>(ty), 0.0f, 0.0f, 0 });
             descriptors.push_back(mismatched);
             for (size_t p = 0; p < other_count; ++p) {
@@ -475,7 +475,7 @@ int main(int argc, char* argv[]) {
         feature::tracker::tracker manager;
 
         std::vector<feature::point> keypoints;
-        std::vector<feature::descriptor::binary<256>> descriptors;
+        std::vector<feature::descriptor::stored> descriptors;
         keypoints.push_back(feature::point{ 60.0f, 60.0f, 0.0f, 0.0f, 0 });
         descriptors.push_back(describe_at(image0, 60, 60));
         keypoints.push_back(feature::point{ 63.0f, 60.0f, 0.0f, 0.0f, 0 });
@@ -514,7 +514,7 @@ int main(int argc, char* argv[]) {
         {
             const image::image image0 = make_frame(dimension, 0, shift_x, shift_y);
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             keypoints.push_back(feature::point{ static_cast<float>(px), static_cast<float>(py), 0.0f, 0.0f, 0 });
             descriptors.push_back(describe_at(image0, px, py));
             manager.update(0, image::pyramid(image0), keypoints, descriptors);
@@ -531,7 +531,7 @@ int main(int argc, char* argv[]) {
             const int k = 1;
             const image::image image_k = make_frame(dimension, k, shift_x, shift_y);
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             const int x = px + k * shift_x;
             const int y = py + k * shift_y;
             keypoints.push_back(feature::point{ static_cast<float>(x), static_cast<float>(y), 0.0f, 0.0f, 0 });
@@ -549,7 +549,7 @@ int main(int argc, char* argv[]) {
         const image::image image0 = make_frame(dimension, 0, shift_x, shift_y);
         feature::tracker::tracker manager;
         std::vector<feature::point> keypoints;
-        std::vector<feature::descriptor::binary<256>> descriptors;
+        std::vector<feature::descriptor::stored> descriptors;
         feature::point fine{ 60.0f, 60.0f, 0.0f, 0.0f, 0 };
         feature::point coarse{ 120.0f, 120.0f, 0.0f, 0.0f, 3 };
         keypoints.push_back(fine);
@@ -579,7 +579,7 @@ int main(int argc, char* argv[]) {
             for (int k = 0; k < 3; ++k) {
                 const image::image frame = make_frame(dimension, k, shift_x, shift_y);
                 std::vector<feature::point> keypoints;
-                std::vector<feature::descriptor::binary<256>> descriptors;
+                std::vector<feature::descriptor::stored> descriptors;
                 for (size_t p = 0; p < point_count; ++p) {
                     const int x = base_x[p] + k * shift_x;
                     const int y = base_y[p] + k * shift_y;
@@ -614,7 +614,7 @@ int main(int argc, char* argv[]) {
         const image::image image0 = make_frame(dimension, 0, shift_x, shift_y);
         {
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             keypoints.push_back(feature::point{ static_cast<float>(target_x), static_cast<float>(target_y), 0.0f, 0.0f, 0 });
             descriptors.push_back(describe_at(image0, target_x, target_y));
             manager.update(0, image::pyramid(image0), keypoints, descriptors);
@@ -627,7 +627,7 @@ int main(int argc, char* argv[]) {
             image::image image1 = make_frame(dimension, 1, shift_x, shift_y);
             occlude(image1, target_x, target_y, 20);
             const std::vector<feature::point> keypoints;
-            const std::vector<feature::descriptor::binary<256>> descriptors;
+            const std::vector<feature::descriptor::stored> descriptors;
             manager.update(1, image::pyramid(image1), keypoints, descriptors);
         }
         feature::tracker::tracker::track* const lost = manager.find(target_id);
@@ -639,7 +639,7 @@ int main(int argc, char* argv[]) {
             const int x = target_x + 2 * shift_x;
             const int y = target_y + 2 * shift_y;
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             feature::point detection{ static_cast<float>(x), static_cast<float>(y), 0.0f, 0.0f, 4 };
             keypoints.push_back(detection);
             descriptors.push_back(describe_at(image2, x, y));
@@ -653,7 +653,7 @@ int main(int argc, char* argv[]) {
 
     {
         const image::image image0 = make_frame(dimension, 0, shift_x, shift_y);
-        const feature::descriptor::binary<256> descriptor = describe_at(image0, 60, 60);
+        const feature::descriptor::stored descriptor = describe_at(image0, 60, 60);
 
         const auto seed = [&descriptor](feature::tracker::tracker& manager, const float x, const float y, const int length) {
             const feature::point detection{ x, y, 0.0f, 0.0f, 0 };
@@ -757,7 +757,7 @@ int main(int argc, char* argv[]) {
                     return texture(x - static_cast<double>(k * shift_x), y - static_cast<double>(k * shift_y)) + (2.0 * frame_noise(x, y, k));
                 });
                 std::vector<feature::point> keypoints;
-                std::vector<feature::descriptor::binary<256>> descriptors;
+                std::vector<feature::descriptor::stored> descriptors;
                 for (size_t p = 0; (k == 0) && (p < point_count); ++p) {
                     const int x = base_x[p] + k * shift_x;
                     const int y = base_y[p] + k * shift_y;
@@ -821,7 +821,7 @@ int main(int argc, char* argv[]) {
                     return broadband_texture(x - static_cast<double>(k * step_x), y - static_cast<double>(k * step_y)) + (noise * frame_noise(x, y, k));
                 });
                 std::vector<feature::point> keypoints;
-                std::vector<feature::descriptor::binary<256>> descriptors;
+                std::vector<feature::descriptor::stored> descriptors;
                 for (size_t p = 0; (k == 0) && (p < point_count); ++p) {
                     keypoints.push_back(feature::point{ static_cast<float>(base_x[p]), static_cast<float>(base_y[p]), 0.0f, 0.0f, 0 });
                     descriptors.push_back(describe_at(frame, base_x[p], base_y[p]));
@@ -882,7 +882,7 @@ int main(int argc, char* argv[]) {
                     return broadband_texture(x - static_cast<double>(2 * k), y - static_cast<double>(k));
                 });
                 std::vector<feature::point> keypoints;
-                std::vector<feature::descriptor::binary<256>> descriptors;
+                std::vector<feature::descriptor::stored> descriptors;
                 for (size_t p = 0; (k == 0) && (p < point_count); ++p) {
                     keypoints.push_back(feature::point{ static_cast<float>(base_x[p]), static_cast<float>(base_y[p]), 0.0f, 0.0f, 0 });
                     descriptors.push_back(describe_at(frame, base_x[p], base_y[p]));
@@ -911,7 +911,7 @@ int main(int argc, char* argv[]) {
             return static_cast<float>(state >> 8) / 16777216.0f;
         };
         const image::image image0 = make_frame(dimension, 0, shift_x, shift_y);
-        const feature::descriptor::binary<256> descriptor = describe_at(image0, 100, 100);
+        const feature::descriptor::stored descriptor = describe_at(image0, 100, 100);
         for (const float spacing : { 8.0f, 3.5f, 0.0f }) {
             feature::tracker::tracker::options opts;
             opts.min_spawn_distance = spacing;
@@ -925,7 +925,7 @@ int main(int argc, char* argv[]) {
                 kept_y.push_back(existing.y);
             }
             std::vector<feature::point> keypoints;
-            std::vector<feature::descriptor::binary<256>> descriptors;
+            std::vector<feature::descriptor::stored> descriptors;
             for (int d = 0; d < 3000; ++d) {
                 feature::point detection{ 640.0f * next_unit(), 480.0f * next_unit(), 0.0f, 0.0f, 0 };
                 if ((d > 0) && (next_unit() < 0.5f)) {
@@ -965,10 +965,10 @@ int main(int argc, char* argv[]) {
         constexpr static const int px = 100;
         constexpr static const int py = 100;
         const image::image image0 = make_frame(dimension, 0, shift_x, shift_y);
-        const feature::descriptor::binary<256> descriptor = describe_at(image0, px, py);
+        const feature::descriptor::stored descriptor = describe_at(image0, px, py);
         {
             const std::vector<feature::point> keypoints = { feature::point{ static_cast<float>(px), static_cast<float>(py), 0.0f, 0.0f, 0 } };
-            const std::vector<feature::descriptor::binary<256>> descriptors = { descriptor };
+            const std::vector<feature::descriptor::stored> descriptors = { descriptor };
             manager.update(0, image::pyramid(image0), keypoints, descriptors);
         }
         REQUIRE(manager.tracks().size() == 1);
@@ -979,7 +979,7 @@ int main(int argc, char* argv[]) {
         {
             const image::image image1 = make_frame(dimension, 1, shift_x, shift_y);
             const std::vector<feature::point> keypoints = { feature::point{ static_cast<float>(px + shift_x), static_cast<float>(py + shift_y), 0.0f, 0.0f, 0 } };
-            const std::vector<feature::descriptor::binary<256>> descriptors = { describe_at(image1, px + shift_x, py + shift_y) };
+            const std::vector<feature::descriptor::stored> descriptors = { describe_at(image1, px + shift_x, py + shift_y) };
             manager.update(1, image::pyramid(image1), keypoints, descriptors);
         }
         REQUIRE(manager.find(flowing_id) != nullptr);

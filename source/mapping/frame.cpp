@@ -175,7 +175,7 @@ namespace mapping {
                 feature::descriptor::teblid::integral(image_grey.get_data(), width, height, width, level_sums.data());
             }
 
-            std::vector<feature::descriptor::binary<256>> des;
+            std::vector<feature::descriptor::stored> des;
             des.resize(kps.size());
             core::thread_pool::instance().parallel_for(kps.size(), 32, [&](const size_t i) {
                 const size_t pixel_x = static_cast<size_t>(kps[i].x);
@@ -215,17 +215,23 @@ namespace mapping {
                     if (frontend.descriptor == settings::descriptor_kind::teblid) {
                         const float centre_x = describe_refined ? kps[i].x : static_cast<float>(pixel_x);
                         const float centre_y = describe_refined ? kps[i].y : static_cast<float>(pixel_y);
-                        feature::descriptor::teblid::describe_integral(level_sums.data(), width + 1, centre_x, centre_y, angle, des[i]);
+                        feature::descriptor::binary<256> narrow;
+                        feature::descriptor::teblid::describe_integral(level_sums.data(), width + 1, centre_x, centre_y, angle, narrow);
+                        des[i] = feature::descriptor::stored::widened(narrow);
                     }
                     else {
-                        feature::descriptor::sift::describe(feature, width, describe_refined ? offset_x : 0.0f, describe_refined ? offset_y : 0.0f, angle, des[i]);
+                        feature::descriptor::binary<256> narrow;
+                        feature::descriptor::sift::describe(feature, width, describe_refined ? offset_x : 0.0f, describe_refined ? offset_y : 0.0f, angle, narrow);
+                        des[i] = feature::descriptor::stored::widened(narrow);
                     }
                     return;
                 }
                 const unsigned char* const feature_smoothed = smoothed.get_data() + pixel_offset;
                 if (!refined) {
                     const float angle = feature::angle::orb::dominant_angle(feature, width);
-                    feature::descriptor::orb::describe(feature_smoothed, width, angle, des[i]);
+                    feature::descriptor::binary<256> narrow;
+                    feature::descriptor::orb::describe(feature_smoothed, width, angle, narrow);
+                    des[i] = feature::descriptor::stored::widened(narrow);
                     return;
                 }
 
@@ -233,7 +239,9 @@ namespace mapping {
                 feature::refiner::subpixel::patch_41x41_bilinear(feature, width, offset_x, offset_y, &patch[0][0]);
                 const float angle = feature::angle::orb::dominant_angle(&patch[20][20], 41);
                 feature::refiner::subpixel::patch_41x41_bilinear(feature_smoothed, width, offset_x, offset_y, &patch[0][0]);
-                feature::descriptor::orb::describe(&patch[20][20], 41, angle, des[i]);
+                feature::descriptor::binary<256> narrow;
+                feature::descriptor::orb::describe(&patch[20][20], 41, angle, narrow);
+                des[i] = feature::descriptor::stored::widened(narrow);
             });
             for (feature::point& kp : kps) {
                 kp.octave = static_cast<int>(o);
@@ -251,7 +259,7 @@ namespace mapping {
         this->descriptors.reserve(exported_count);
         for (size_t level = 0; level < exported_levels; ++level) {
             const std::vector<feature::point>& level_keypoints = this->keypoint_pyramid[level];
-            const std::vector<feature::descriptor::binary<256>>& level_descriptors = this->descriptor_pyramid[level];
+            const std::vector<feature::descriptor::stored>& level_descriptors = this->descriptor_pyramid[level];
             for (size_t i = 0; i < level_keypoints.size(); ++i) {
                 feature::point exported = level_keypoints[i];
                 exported.x = core::to_pixel_centre(this->to_level0_x(exported.x, level));

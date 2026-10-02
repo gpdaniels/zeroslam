@@ -45,6 +45,26 @@ namespace match::distance {
             const size_t indices_size,
             unsigned int* __restrict const results
         );
+
+        static unsigned int distance(
+            const feature::descriptor::binary<512>& lhs,
+            const feature::descriptor::binary<512>& rhs
+        );
+
+        static void distances(
+            const feature::descriptor::binary<512>& query,
+            const feature::descriptor::binary<512>* __restrict const descriptors,
+            const size_t descriptors_size,
+            unsigned int* __restrict const results
+        );
+
+        static void distances(
+            const feature::descriptor::binary<512>& query,
+            const feature::descriptor::binary<512>* __restrict const descriptors,
+            const size_t* __restrict const indices,
+            const size_t indices_size,
+            unsigned int* __restrict const results
+        );
     };
 }
 

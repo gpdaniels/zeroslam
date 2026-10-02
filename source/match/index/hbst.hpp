@@ -37,7 +37,7 @@ namespace {
 namespace match::index {
     class hbst final {
     public:
-        constexpr static const size_t descriptor_bits = 256;
+        constexpr static const size_t descriptor_bits = feature::descriptor::stored_bits;
         constexpr static const size_t leaf_capacity = 100;
 
         class entry final {

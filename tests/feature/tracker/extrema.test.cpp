@@ -168,13 +168,13 @@ int main(int argc, char* argv[]) {
                     const float angle = feature::angle::orb::dominant_angle(frame_data.data() + offset, frame_width);
                     feature::descriptor::binary<256> expected;
                     feature::descriptor::orb::describe(smoothed.data() + offset, frame_width, angle, expected);
-                    if (match::distance::hamming::distance(expected, track->descriptor) != 0u) {
+                    if (match::distance::hamming::distance(feature::descriptor::stored::widened(expected), track->descriptor) != 0u) {
                         continue;
                     }
                     found = true;
                     feature::descriptor::binary<256> raw;
                     feature::descriptor::orb::describe(frame_data.data() + offset, frame_width, angle, raw);
-                    differs += (match::distance::hamming::distance(raw, track->descriptor) != 0u) ? 1u : 0u;
+                    differs += (match::distance::hamming::distance(feature::descriptor::stored::widened(raw), track->descriptor) != 0u) ? 1u : 0u;
                 }
             }
             matched += found ? 1u : 0u;

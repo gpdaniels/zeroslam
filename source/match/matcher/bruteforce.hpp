@@ -29,9 +29,9 @@ namespace match::matcher {
         // when there are fewer right descriptors) whatever their scores, so a caller can ratio test the best against the second.
         // Each left descriptor needs matches_count free slots, matching stops at the first without room, and the count written is returned.
         static size_t find_matches(
-            const feature::descriptor::binary<256>* lhs_descriptors,
+            const feature::descriptor::stored* lhs_descriptors,
             const size_t lhs_descriptors_size,
-            const feature::descriptor::binary<256>* rhs_descriptors,
+            const feature::descriptor::stored* rhs_descriptors,
             const size_t rhs_descriptors_size,
             const float threshold,
             const size_t matches_count,

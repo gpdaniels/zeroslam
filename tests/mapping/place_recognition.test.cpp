@@ -36,16 +36,16 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 #define REQUIRE(ASSERTION) static_cast<void>((ASSERTION) || (std::fprintf(stderr, "ERROR[%d]: Requirement '%s' failed.\n", __LINE__, #ASSERTION), __builtin_trap(), 0))
 
-static feature::descriptor::binary<256> random_descriptor(core::random_pcg& random) {
-    feature::descriptor::binary<256> descriptor;
+static feature::descriptor::stored random_descriptor(core::random_pcg& random) {
+    feature::descriptor::stored descriptor = {};
     for (size_t j = 0; j < 32; ++j) {
         descriptor[j] = static_cast<unsigned char>(random.get_random_raw() % 256);
     }
     return descriptor;
 }
 
-static std::vector<feature::descriptor::binary<256>> random_descriptors(core::random_pcg& random, const size_t count) {
-    std::vector<feature::descriptor::binary<256>> descriptors;
+static std::vector<feature::descriptor::stored> random_descriptors(core::random_pcg& random, const size_t count) {
+    std::vector<feature::descriptor::stored> descriptors;
     for (size_t i = 0; i < count; ++i) {
         descriptors.push_back(random_descriptor(random));
     }
@@ -60,22 +60,22 @@ int main(int argc, char* argv[]) {
         mapping::place_recognition recognition;
         core::random_pcg random;
         for (int keyframe_id = 0; keyframe_id < 5; ++keyframe_id) {
-            const std::vector<feature::descriptor::binary<256>> descriptors = random_descriptors(random, 50);
+            const std::vector<feature::descriptor::stored> descriptors = random_descriptors(random, 50);
             recognition.add_keyframe(keyframe_id, descriptors.data(), descriptors.size());
         }
         REQUIRE(recognition.num_keyframes() == 5);
-        const std::vector<feature::descriptor::binary<256>> query = random_descriptors(random, 20);
+        const std::vector<feature::descriptor::stored> query = random_descriptors(random, 20);
         REQUIRE(recognition.get_candidates(query.data(), query.size(), 100, 5).empty());
     }
 
     {
         mapping::place_recognition recognition;
         core::random_pcg random;
-        const std::vector<feature::descriptor::binary<256>> base = random_descriptors(random, 50);
+        const std::vector<feature::descriptor::stored> base = random_descriptors(random, 50);
         recognition.add_keyframe(1, base.data(), base.size());
         for (int keyframe_id = 2; keyframe_id <= 5; ++keyframe_id) {
-            std::vector<feature::descriptor::binary<256>> noisy = base;
-            for (feature::descriptor::binary<256>& descriptor : noisy) {
+            std::vector<feature::descriptor::stored> noisy = base;
+            for (feature::descriptor::stored& descriptor : noisy) {
                 for (int flip = 0; flip < 3; ++flip) {
                     descriptor[random.get_random_raw() % 32] ^= static_cast<unsigned char>(1u << (random.get_random_raw() % 8));
                 }
@@ -112,9 +112,9 @@ int main(int argc, char* argv[]) {
     {
         mapping::place_recognition recognition;
         core::random_pcg random;
-        const std::vector<feature::descriptor::binary<256>> base = random_descriptors(random, 50);
+        const std::vector<feature::descriptor::stored> base = random_descriptors(random, 50);
         recognition.add_keyframe(10, base.data(), base.size());
-        std::vector<feature::descriptor::binary<256>> noisy = base;
+        std::vector<feature::descriptor::stored> noisy = base;
         noisy[0][0] ^= 0x01;
         recognition.add_keyframe(20, noisy.data(), noisy.size());
         REQUIRE(recognition.get_candidates(base.data(), base.size(), 100, 1)[0].keyframe_id == 10);
@@ -134,10 +134,10 @@ int main(int argc, char* argv[]) {
     {
         mapping::place_recognition recognition(1);
         core::random_pcg random;
-        const std::vector<feature::descriptor::binary<256>> base = random_descriptors(random, 50);
+        const std::vector<feature::descriptor::stored> base = random_descriptors(random, 50);
         recognition.add_keyframe(10, base.data(), base.size());
-        std::vector<feature::descriptor::binary<256>> noisy = base;
-        for (feature::descriptor::binary<256>& descriptor : noisy) {
+        std::vector<feature::descriptor::stored> noisy = base;
+        for (feature::descriptor::stored& descriptor : noisy) {
             descriptor[1] ^= 0x01;
         }
         recognition.add_keyframe(20, noisy.data(), noisy.size());

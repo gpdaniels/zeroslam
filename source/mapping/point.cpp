@@ -40,10 +40,11 @@ namespace mapping {
     }
 
     void point::add_descriptor(const unsigned char* const bytes) {
-        const auto hamming = [](const std::array<unsigned char, 32>& lhs, const std::array<unsigned char, 32>& rhs) {
-            feature::descriptor::binary<256> lhs_descriptor;
-            feature::descriptor::binary<256> rhs_descriptor;
-            for (size_t index = 0; index < 32; ++index) {
+        constexpr static const size_t size_bytes = feature::descriptor::stored::size_bytes;
+        const auto hamming = [](const std::array<unsigned char, size_bytes>& lhs, const std::array<unsigned char, size_bytes>& rhs) {
+            feature::descriptor::stored lhs_descriptor;
+            feature::descriptor::stored rhs_descriptor;
+            for (size_t index = 0; index < size_bytes; ++index) {
                 lhs_descriptor.data[index] = lhs[index];
                 rhs_descriptor.data[index] = rhs[index];
             }
@@ -67,8 +68,8 @@ namespace mapping {
             this->descriptor_history.erase(this->descriptor_history.begin());
             this->descriptor_distance_sums.erase(this->descriptor_distance_sums.begin());
         }
-        std::array<unsigned char, 32> added;
-        for (size_t index = 0; index < 32; ++index) {
+        std::array<unsigned char, size_bytes> added;
+        for (size_t index = 0; index < size_bytes; ++index) {
             added[index] = bytes[index];
         }
         unsigned int added_sum = 0;
@@ -87,7 +88,7 @@ namespace mapping {
                 medoid = i;
             }
         }
-        for (size_t index = 0; index < 32; ++index) {
+        for (size_t index = 0; index < size_bytes; ++index) {
             this->descriptor[index] = this->descriptor_history[medoid][index];
         }
     }

@@ -36,16 +36,16 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 #define REQUIRE(ASSERTION) static_cast<void>((ASSERTION) || (std::fprintf(stderr, "ERROR[%d]: Requirement '%s' failed.\n", __LINE__, #ASSERTION), __builtin_trap(), 0))
 
-static feature::descriptor::binary<256> random_descriptor(core::random_pcg& random) {
-    feature::descriptor::binary<256> descriptor;
+static feature::descriptor::stored random_descriptor(core::random_pcg& random) {
+    feature::descriptor::stored descriptor = {};
     for (size_t j = 0; j < 32; ++j) {
         descriptor[j] = static_cast<unsigned char>(random.get_random_raw() % 256);
     }
     return descriptor;
 }
 
-static std::vector<feature::descriptor::binary<256>> random_descriptors(core::random_pcg& random, const size_t count) {
-    std::vector<feature::descriptor::binary<256>> descriptors;
+static std::vector<feature::descriptor::stored> random_descriptors(core::random_pcg& random, const size_t count) {
+    std::vector<feature::descriptor::stored> descriptors;
     for (size_t i = 0; i < count; ++i) {
         descriptors.push_back(random_descriptor(random));
     }
@@ -57,7 +57,7 @@ int main(int argc, char* argv[]) {
     static_cast<void>(argv);
 
     {
-        feature::descriptor::binary<256> descriptor = {};
+        feature::descriptor::stored descriptor = {};
         descriptor[3] = 0x10;
         REQUIRE(match::index::hbst::get_bit(descriptor, 3 * 8 + 4));
         REQUIRE(!match::index::hbst::get_bit(descriptor, 3 * 8 + 3));
@@ -68,7 +68,7 @@ int main(int argc, char* argv[]) {
         match::index::hbst tree;
         REQUIRE(tree.empty());
         core::random_pcg random;
-        const std::vector<feature::descriptor::binary<256>> descriptors = random_descriptors(random, 100);
+        const std::vector<feature::descriptor::stored> descriptors = random_descriptors(random, 100);
         tree.insert(1, descriptors.data(), descriptors.size());
         REQUIRE(tree.size() == 100);
         for (size_t i = 0; i < descriptors.size(); ++i) {
@@ -87,7 +87,7 @@ int main(int argc, char* argv[]) {
     {
         match::index::hbst tree;
         core::random_pcg random;
-        std::vector<std::vector<feature::descriptor::binary<256>>> keyframes;
+        std::vector<std::vector<feature::descriptor::stored>> keyframes;
         for (int keyframe_id = 0; keyframe_id < 40; ++keyframe_id) {
             keyframes.push_back(random_descriptors(random, 100));
             tree.insert(keyframe_id, keyframes.back().data(), keyframes.back().size());
@@ -111,8 +111,8 @@ int main(int argc, char* argv[]) {
     {
         match::index::hbst tree;
         core::random_pcg random;
-        const feature::descriptor::binary<256> base = random_descriptor(random);
-        feature::descriptor::binary<256> neighbours[2] = { base, base };
+        const feature::descriptor::stored base = random_descriptor(random);
+        feature::descriptor::stored neighbours[2] = { base, base };
         neighbours[0][5] ^= 0x03;
         neighbours[1][9] ^= 0x01;
         tree.insert(30, &neighbours[0], 2);
@@ -131,14 +131,14 @@ int main(int argc, char* argv[]) {
         match::index::hbst tree_a;
         match::index::hbst tree_b;
         core::random_pcg random;
-        std::vector<feature::descriptor::binary<256>> all;
+        std::vector<feature::descriptor::stored> all;
         for (int keyframe_id = 0; keyframe_id < 10; ++keyframe_id) {
-            const std::vector<feature::descriptor::binary<256>> descriptors = random_descriptors(random, 100);
+            const std::vector<feature::descriptor::stored> descriptors = random_descriptors(random, 100);
             tree_a.insert(keyframe_id, descriptors.data(), descriptors.size());
             tree_b.insert(keyframe_id, descriptors.data(), descriptors.size());
             all.insert(all.end(), descriptors.begin(), descriptors.end());
         }
-        for (const feature::descriptor::binary<256>& query : all) {
+        for (const feature::descriptor::stored& query : all) {
             const std::vector<match::index::hbst::hit> hits_a = tree_a.search(query, 256);
             const std::vector<match::index::hbst::hit> hits_b = tree_b.search(query, 256);
             REQUIRE(hits_a.size() == hits_b.size());
@@ -154,8 +154,8 @@ int main(int argc, char* argv[]) {
         // A leaf of one repeated descriptor cannot split, it takes more copies without retrying, and splits once others arrive.
         match::index::hbst tree;
         core::random_pcg random;
-        const feature::descriptor::binary<256> blank = random_descriptor(random);
-        const std::vector<feature::descriptor::binary<256>> copies(5000, blank);
+        const feature::descriptor::stored blank = random_descriptor(random);
+        const std::vector<feature::descriptor::stored> copies(5000, blank);
         tree.insert(1, copies.data(), copies.size());
         tree.insert(3, copies.data(), copies.size());
         REQUIRE(tree.size() == 10000);
@@ -164,7 +164,7 @@ int main(int argc, char* argv[]) {
         REQUIRE(hits.size() == 2);
         REQUIRE((hits[0].keyframe_id == 1) && (hits[0].descriptor_index == 0) && (hits[0].distance == 0));
         REQUIRE((hits[1].keyframe_id == 3) && (hits[1].descriptor_index == 0) && (hits[1].distance == 0));
-        const std::vector<feature::descriptor::binary<256>> others = random_descriptors(random, 400);
+        const std::vector<feature::descriptor::stored> others = random_descriptors(random, 400);
         tree.insert(2, others.data(), others.size());
         REQUIRE(tree.size() == 10400);
         for (size_t i = 0; i < others.size(); ++i) {

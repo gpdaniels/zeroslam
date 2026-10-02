@@ -45,7 +45,7 @@ namespace feature::tracker {
         return false;
     }
 
-    void tracker::spawn_unclaimed(const int frame_id, const std::vector<feature::point>& keypoints, const std::vector<descriptor::binary<256>>& descriptors, const size_t detection_count, unsigned char* const claimed) {
+    void tracker::spawn_unclaimed(const int frame_id, const std::vector<feature::point>& keypoints, const std::vector<descriptor::stored>& descriptors, const size_t detection_count, unsigned char* const claimed) {
         // Spawns each unclaimed detection that no track (including one spawned just before it) is nearer than the
         // spawn distance to, checking only the tracks in neighbouring cells of a grid of spawn-distance cells.
         const float limit = this->settings.min_spawn_distance;
@@ -325,7 +325,7 @@ namespace feature::tracker {
         core::logger::log(core::logger::level::debug, "Tracker: %zu collided tracks dropped.", collisions);
     }
 
-    tracker::track& tracker::spawn(int frame_id, const feature::point& keypoint, const descriptor::binary<256>& descriptor) {
+    tracker::track& tracker::spawn(int frame_id, const feature::point& keypoint, const descriptor::stored& descriptor) {
         track created;
         created.id = this->next_id++;
         created.landmark_id = -1;
@@ -389,7 +389,7 @@ namespace feature::tracker {
         int frame_id,
         const image::pyramid& pyramid,
         const std::vector<feature::point>& keypoints,
-        const std::vector<descriptor::binary<256>>& descriptors
+        const std::vector<descriptor::stored>& descriptors
     ) {
         core::arena::scope scratch;
         const size_t detection_count = math::min(keypoints.size(), descriptors.size());
@@ -468,9 +468,9 @@ namespace feature::tracker {
             float distance_squared;
         };
 
-        const auto search = [&](const float x, const float y, const float radius, const int octave, const descriptor::binary<256>& query, const bool skip_claimed, candidate& best, candidate& second) {
-            best = candidate{ detection_count, 256u, 0.0f };
-            second = candidate{ detection_count, 256u, 0.0f };
+        const auto search = [&](const float x, const float y, const float radius, const int octave, const descriptor::stored& query, const bool skip_claimed, candidate& best, candidate& second) {
+            best = candidate{ detection_count, static_cast<unsigned int>(descriptor::stored_bits) + 1u, 0.0f };
+            second = candidate{ detection_count, static_cast<unsigned int>(descriptor::stored_bits) + 1u, 0.0f };
             const float radius_squared = radius * radius;
             const int cx0 = math::max(0, static_cast<int>((x - radius) / cell_size));
             const int cx1 = math::min(cell_columns - 1, static_cast<int>((x + radius) / cell_size));

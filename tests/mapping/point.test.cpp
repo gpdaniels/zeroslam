@@ -16,6 +16,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "mapping/point.hpp"
 
+#include "feature/descriptor/binary.hpp"
 #include "math/lie.hpp"
 
 #if defined(_MSC_VER)
@@ -112,13 +113,14 @@ int main(int argc, char* argv[]) {
 
     // The running medoid matches the medoid recomputed from the whole history, last index winning ties, through and past a full history.
     {
-        const auto brute_medoid = [](const std::vector<std::array<unsigned char, 32>>& history) {
+        constexpr static const size_t size_bytes = feature::descriptor::stored::size_bytes;
+        const auto brute_medoid = [](const std::vector<std::array<unsigned char, size_bytes>>& history) {
             size_t medoid = history.size() - 1;
             unsigned int medoid_sum = 0xFFFFFFFFu;
             for (size_t i = 0; i < history.size(); ++i) {
                 unsigned int sum = 0;
                 for (size_t j = 0; j < history.size(); ++j) {
-                    for (size_t index = 0; index < 32; ++index) {
+                    for (size_t index = 0; index < size_bytes; ++index) {
                         unsigned char difference = static_cast<unsigned char>(history[i][index] ^ history[j][index]);
                         while (difference != 0) {
                             sum += (difference & 1u);
@@ -139,13 +141,13 @@ int main(int argc, char* argv[]) {
             return static_cast<unsigned char>(state >> 16);
         };
         mapping::point p(9, { { 0.0, 0.0, 1.0 } }, { { 0.0, 0.0, 0.0 } });
-        unsigned char base[32] = {};
-        for (size_t index = 0; index < 32; ++index) {
+        unsigned char base[size_bytes] = {};
+        for (size_t index = 0; index < size_bytes; ++index) {
             base[index] = next();
         }
         for (size_t insert = 0; insert < 3 * mapping::point::descriptor_history_maximum; ++insert) {
-            unsigned char bytes[32] = {};
-            for (size_t index = 0; index < 32; ++index) {
+            unsigned char bytes[size_bytes] = {};
+            for (size_t index = 0; index < size_bytes; ++index) {
                 // Mostly the base descriptor with a few flipped bits, and every seventh a duplicate so ties occur.
                 bytes[index] = ((insert % 7) == 3) ? base[index] : static_cast<unsigned char>(base[index] ^ (next() & next() & next()));
             }
@@ -153,7 +155,7 @@ int main(int argc, char* argv[]) {
             REQUIRE(p.descriptor_history.size() == ((insert + 1 < mapping::point::descriptor_history_maximum) ? insert + 1 : mapping::point::descriptor_history_maximum));
             REQUIRE(p.descriptor_distance_sums.size() == p.descriptor_history.size());
             const size_t medoid = brute_medoid(p.descriptor_history);
-            for (size_t index = 0; index < 32; ++index) {
+            for (size_t index = 0; index < size_bytes; ++index) {
                 REQUIRE(p.descriptor[index] == p.descriptor_history[medoid][index]);
             }
         }
@@ -163,7 +165,7 @@ int main(int argc, char* argv[]) {
         copied.add_descriptor(&base[0]);
         REQUIRE(copied.descriptor_distance_sums.size() == copied.descriptor_history.size());
         const size_t copied_medoid = brute_medoid(copied.descriptor_history);
-        for (size_t index = 0; index < 32; ++index) {
+        for (size_t index = 0; index < size_bytes; ++index) {
             REQUIRE(copied.descriptor[index] == copied.descriptor_history[copied_medoid][index]);
         }
     }

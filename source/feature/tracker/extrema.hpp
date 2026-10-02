@@ -82,7 +82,7 @@ namespace feature::tracker {
         int next_id;
         bool has_previous;
         std::vector<feature::point> small_points_previous;
-        std::vector<descriptor::binary<256>> small_descriptors_previous;
+        std::vector<descriptor::stored> small_descriptors_previous;
         dominant_flow::affine flow_previous;
         std::vector<std::int64_t> kappa_previous;
         std::int64_t response_scale_previous;
