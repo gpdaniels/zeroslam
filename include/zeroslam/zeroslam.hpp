@@ -111,6 +111,10 @@ namespace zeroslam {
         zeroslam_return_enum get_map_keyframes(zeroslam_map_keyframes_struct* keyframes) const {
             return zeroslam_get_map_keyframes(this->handle, keyframes);
         }
+
+        zeroslam_return_enum get_map_voxels(zeroslam_map_voxels_struct* voxels) const {
+            return zeroslam_get_map_voxels(this->handle, voxels);
+        }
     };
 }
 

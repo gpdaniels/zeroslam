@@ -194,6 +194,18 @@ int main(int argc, char* argv[]) {
             const zeroslam_edge_struct& edge = edge_buffer[static_cast<size_t>(index)];
             std::printf("  edge %d: %lld - %lld type %d weight %d\n", index, edge.timestamp_a, edge.timestamp_b, edge.type, edge.weight);
         }
+        zeroslam_map_voxels_struct voxels{};
+        result = system.get_map_voxels(&voxels);
+        std::printf("get_map_voxels: %s (%d voxels)\n", zeroslam_return_enum_to_string(result), voxels.voxels_length);
+        REQUIRE(result == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(voxels.voxels_length > 0);
+        std::vector<zeroslam_voxel_struct> voxel_buffer(static_cast<size_t>(voxels.voxels_length));
+        voxels.voxels = voxel_buffer.data();
+        REQUIRE(system.get_map_voxels(&voxels) == zeroslam_return_success);
+        for (int index = 0; (index < voxels.voxels_length) && (index < 5); ++index) {
+            const zeroslam_voxel_struct& voxel = voxel_buffer[static_cast<size_t>(index)];
+            std::printf("  voxel %d: corner (%.3f, %.3f, %.3f) size %.3f, %d points\n", index, static_cast<double>(voxel.x), static_cast<double>(voxel.y), static_cast<double>(voxel.z), static_cast<double>(voxels.voxel_size), voxel.points);
+        }
     }
 
     zeroslam::system moved(static_cast<zeroslam::system&&>(system));

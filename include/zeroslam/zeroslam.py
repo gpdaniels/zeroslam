@@ -160,6 +160,24 @@ class zeroslam_map_keyframes_struct(_ctypes.Structure):
         ("keyframes", _ctypes.POINTER(_ctypes.c_int64))
     ]
 
+class zeroslam_voxel_struct(_ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("x", _ctypes.c_float),
+        ("y", _ctypes.c_float),
+        ("z", _ctypes.c_float),
+        ("points", _ctypes.c_int)
+    ]
+
+class zeroslam_map_voxels_struct(_ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("timestamp", _ctypes.c_int64),
+        ("voxel_size", _ctypes.c_float),
+        ("voxels_length", _ctypes.c_int),
+        ("voxels", _ctypes.POINTER(zeroslam_voxel_struct))
+    ]
+
 class zeroslam_map_edges_struct(_ctypes.Structure):
     _pack_ = 1
     _fields_ = [
@@ -180,6 +198,8 @@ assert _ctypes.sizeof(zeroslam_map_lines_struct) == 16 + _ctypes.sizeof(_ctypes.
 assert _ctypes.sizeof(zeroslam_edge_struct) == 24
 assert _ctypes.sizeof(zeroslam_map_edges_struct) == 16 + _ctypes.sizeof(_ctypes.c_void_p)
 assert _ctypes.sizeof(zeroslam_map_keyframes_struct) == 16 + _ctypes.sizeof(_ctypes.c_void_p)
+assert _ctypes.sizeof(zeroslam_voxel_struct) == 16
+assert _ctypes.sizeof(zeroslam_map_voxels_struct) == 16 + _ctypes.sizeof(_ctypes.c_void_p)
 
 ################################################################################
 
@@ -292,6 +312,11 @@ zeroslam_get_map_keyframes = _wrap("zeroslam_get_map_keyframes", [
     _ctypes.POINTER(zeroslam_map_keyframes_struct)
 ])
 
+zeroslam_get_map_voxels = _wrap("zeroslam_get_map_voxels", [
+    _ctypes.POINTER(zeroslam_system),
+    _ctypes.POINTER(zeroslam_map_voxels_struct)
+])
+
 ################################################################################
 
 class system:
@@ -354,6 +379,9 @@ class system:
     def get_map_keyframes(self, keyframes):
         return zeroslam_return_enum(zeroslam_get_map_keyframes(self._handle, _ctypes.byref(keyframes)))
 
+    def get_map_voxels(self, voxels):
+        return zeroslam_return_enum(zeroslam_get_map_voxels(self._handle, _ctypes.byref(voxels)))
+
 __all__ = [
     "zeroslam_system",
     "zeroslam_return_enum",
@@ -369,6 +397,8 @@ __all__ = [
     "zeroslam_edge_struct",
     "zeroslam_map_edges_struct",
     "zeroslam_map_keyframes_struct",
+    "zeroslam_voxel_struct",
+    "zeroslam_map_voxels_struct",
     "zeroslam_map_chunk_struct",
     "zeroslam_create",
     "zeroslam_destroy",
@@ -384,5 +414,6 @@ __all__ = [
     "zeroslam_get_map_lines",
     "zeroslam_get_map_edges",
     "zeroslam_get_map_keyframes",
+    "zeroslam_get_map_voxels",
     "system"
 ]

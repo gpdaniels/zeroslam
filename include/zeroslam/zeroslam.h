@@ -223,6 +223,20 @@ typedef struct zeroslam_map_edges_struct {
 } zeroslam_map_edges_struct;
 ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_map_edges_struct) == 16 + sizeof(void*), "For ABI compatibility the sizeof(zeroslam_map_edges_struct) must be 16+sizeof(void*) bytes.")
 
+typedef struct zeroslam_voxel_struct {
+    float x, y, z;
+    int points;
+} zeroslam_voxel_struct;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_voxel_struct) == 16, "For ABI compatibility the sizeof(zeroslam_voxel_struct) must be 16 bytes.")
+
+typedef struct zeroslam_map_voxels_struct {
+    long long int timestamp;
+    float voxel_size;
+    int voxels_length;
+    zeroslam_voxel_struct* voxels;
+} zeroslam_map_voxels_struct;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_map_voxels_struct) == 16 + sizeof(void*), "For ABI compatibility the sizeof(zeroslam_map_voxels_struct) must be 16+sizeof(void*) bytes.")
+
 #pragma pack(pop)
 
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_create(zeroslam_system** system);
@@ -251,6 +265,10 @@ ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_map_
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_map_edges(zeroslam_system* system, zeroslam_map_edges_struct* edges);
 
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_map_keyframes(zeroslam_system* system, zeroslam_map_keyframes_struct* keyframes);
+
+// The occupied voxels of the voxel map the system keeps of its landmarks, each by its minimum corner in map coordinates (a
+// cube of voxel_size) and the landmarks in it, sorted by corner.
+ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_map_voxels(zeroslam_system* system, zeroslam_map_voxels_struct* voxels);
 
 #undef ZEROSLAM_API_STATIC_ASSERT
 

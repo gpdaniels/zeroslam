@@ -1143,4 +1143,46 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_map_keyframes(zeroslam_syste
     keyframes->keyframes_length = required;
     return zeroslam_return_success;
 }
+
+zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_map_voxels(zeroslam_system* system, zeroslam_map_voxels_struct* voxels) {
+    if (system == nullptr) {
+        return zeroslam_return_failure_invalid_system;
+    }
+    if (voxels == nullptr) {
+        return zeroslam_return_failure_invalid_argument;
+    }
+    const mapping::voxel_map& grid = system->slam_instance.voxels();
+    const int required = static_cast<int>(grid.voxel_count());
+    if ((required > 0) && ((voxels->voxels == nullptr) || (voxels->voxels_length < required))) {
+        voxels->voxels_length = required;
+        return zeroslam_return_failure_insufficient_data_length;
+    }
+    std::vector<const mapping::voxel_map::voxel*> ordered;
+    ordered.reserve(grid.voxel_count());
+    for (const auto& [key, cell] : grid.occupied()) {
+        static_cast<void>(key);
+        ordered.push_back(&cell);
+    }
+    std::sort(ordered.begin(), ordered.end(), [](const mapping::voxel_map::voxel* const lhs, const mapping::voxel_map::voxel* const rhs) {
+        if (lhs->x != rhs->x) {
+            return lhs->x < rhs->x;
+        }
+        if (lhs->y != rhs->y) {
+            return lhs->y < rhs->y;
+        }
+        return lhs->z < rhs->z;
+    });
+    const double size = grid.voxel_size();
+    voxels->timestamp = system->latest_timestamp;
+    voxels->voxel_size = static_cast<float>(size);
+    for (int i = 0; i < required; ++i) {
+        const mapping::voxel_map::voxel& cell = *ordered[static_cast<size_t>(i)];
+        voxels->voxels[i].x = static_cast<float>(static_cast<double>(cell.x) * size);
+        voxels->voxels[i].y = static_cast<float>(static_cast<double>(cell.y) * size);
+        voxels->voxels[i].z = static_cast<float>(static_cast<double>(cell.z) * size);
+        voxels->voxels[i].points = static_cast<int>(cell.ids.size());
+    }
+    voxels->voxels_length = required;
+    return zeroslam_return_success;
+}
 }

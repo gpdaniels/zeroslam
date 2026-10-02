@@ -443,6 +443,51 @@ int main(int argc, char* argv[]) {
         REQUIRE(zeroslam_get_map_lines(nullptr, &lines) == zeroslam_return_failure_invalid_system);
         REQUIRE(zeroslam_get_map_edges(system, nullptr) == zeroslam_return_failure_invalid_argument);
 
+        // The voxel map holds the map's finite landmarks near the newest keyframe in sorted, distinct, occupied voxels, each
+        // holding the landmarks inside its cube.
+        zeroslam_map_voxels_struct voxels{};
+        REQUIRE(zeroslam_get_map_voxels(system, &voxels) == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(voxels.voxels_length > 0);
+        std::vector<zeroslam_voxel_struct> voxel_buffer(static_cast<size_t>(voxels.voxels_length));
+        voxels.voxels = voxel_buffer.data();
+        REQUIRE(zeroslam_get_map_voxels(system, &voxels) == zeroslam_return_success);
+        REQUIRE(voxels.voxels_length == static_cast<int>(voxel_buffer.size()));
+        REQUIRE(voxels.voxel_size > 0.0f);
+        int voxel_points = 0;
+        for (size_t i = 0; i < voxel_buffer.size(); ++i) {
+            REQUIRE(voxel_buffer[i].points > 0);
+            voxel_points += voxel_buffer[i].points;
+            if (i > 0) {
+                const zeroslam_voxel_struct& previous = voxel_buffer[i - 1];
+                const zeroslam_voxel_struct& current = voxel_buffer[i];
+                REQUIRE((previous.x < current.x) || ((previous.x == current.x) && ((previous.y < current.y) || ((previous.y == current.y) && (previous.z < current.z)))));
+            }
+        }
+        zeroslam_map_chunk_struct landmark_count{};
+        REQUIRE(zeroslam_get_map_chunk(system, 0.0f, 0.0f, 0.0f, &landmark_count) == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE((voxel_points > 0) && (voxel_points <= landmark_count.points_length));
+        std::vector<zeroslam_point_struct> landmark_buffer(static_cast<size_t>(landmark_count.points_length));
+        landmark_count.points = landmark_buffer.data();
+        REQUIRE(zeroslam_get_map_chunk(system, 0.0f, 0.0f, 0.0f, &landmark_count) == zeroslam_return_success);
+        int inside = 0;
+        for (const zeroslam_point_struct& point : landmark_buffer) {
+            for (const zeroslam_voxel_struct& voxel : voxel_buffer) {
+                // Note: The api's corners and points are floats, so allow a hair at each face.
+                const float slack = 1.0e-4f * voxels.voxel_size;
+                if ((point.x >= voxel.x - slack) && (point.x < voxel.x + voxels.voxel_size + slack) && (point.y >= voxel.y - slack) && (point.y < voxel.y + voxels.voxel_size + slack) && (point.z >= voxel.z - slack) && (point.z < voxel.z + voxels.voxel_size + slack)) {
+                    ++inside;
+                    break;
+                }
+            }
+        }
+        REQUIRE(inside >= voxel_points);
+        zeroslam_map_voxels_struct short_voxels{};
+        short_voxels.voxels = voxel_buffer.data();
+        short_voxels.voxels_length = voxels.voxels_length - 1;
+        REQUIRE((voxels.voxels_length < 2) || (zeroslam_get_map_voxels(system, &short_voxels) == zeroslam_return_failure_insufficient_data_length));
+        REQUIRE(zeroslam_get_map_voxels(nullptr, &voxels) == zeroslam_return_failure_invalid_system);
+        REQUIRE(zeroslam_get_map_voxels(system, nullptr) == zeroslam_return_failure_invalid_argument);
+
         REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
     }
 

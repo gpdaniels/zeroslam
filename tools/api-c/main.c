@@ -202,6 +202,19 @@ int main(int argc, char* argv[]) {
             printf("  edge %d: %lld - %lld type %d weight %d\n", index, edges.edges[index].timestamp_a, edges.edges[index].timestamp_b, edges.edges[index].type, edges.edges[index].weight);
         }
         free(edges.edges);
+        zeroslam_map_voxels_struct voxels;
+        memset(&voxels, 0, sizeof(voxels));
+        result = zeroslam_get_map_voxels(system, &voxels);
+        printf("get_map_voxels: %s (%d voxels)\n", zeroslam_return_enum_to_string(result), voxels.voxels_length);
+        REQUIRE(result == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(voxels.voxels_length > 0);
+        voxels.voxels = (zeroslam_voxel_struct*)malloc(sizeof(zeroslam_voxel_struct) * (size_t)voxels.voxels_length);
+        REQUIRE(voxels.voxels != NULL);
+        REQUIRE(zeroslam_get_map_voxels(system, &voxels) == zeroslam_return_success);
+        for (int index = 0; (index < voxels.voxels_length) && (index < 5); ++index) {
+            printf("  voxel %d: corner (%.3f, %.3f, %.3f) size %.3f, %d points\n", index, (double)voxels.voxels[index].x, (double)voxels.voxels[index].y, (double)voxels.voxels[index].z, (double)voxels.voxel_size, voxels.voxels[index].points);
+        }
+        free(voxels.voxels);
     }
 
     REQUIRE(zeroslam_get_timestamp(NULL, &timestamp) == zeroslam_return_failure_invalid_system);

@@ -166,6 +166,17 @@ def main():
         for index in range(min(edges.edges_length, 5)):
             edge = edge_buffer[index]
             print("  edge {}: {} - {} type {} weight {}".format(index, edge.timestamp_a, edge.timestamp_b, edge.type, edge.weight))
+        voxels = zeroslam.zeroslam_map_voxels_struct()
+        result = system.get_map_voxels(voxels)
+        print("get_map_voxels: {} ({} voxels)".format(result.name, voxels.voxels_length))
+        require(result == zeroslam.zeroslam_return_enum.zeroslam_return_failure_insufficient_data_length, "get_map_voxels reports the length")
+        require(voxels.voxels_length > 0, "voxels_length > 0")
+        voxel_buffer = (zeroslam.zeroslam_voxel_struct * voxels.voxels_length)()
+        voxels.voxels = ctypes.cast(voxel_buffer, ctypes.POINTER(zeroslam.zeroslam_voxel_struct))
+        require(system.get_map_voxels(voxels) == success, "get_map_voxels (sized)")
+        for index in range(min(voxels.voxels_length, 5)):
+            voxel = voxel_buffer[index]
+            print("  voxel {}: corner ({:.3f}, {:.3f}, {:.3f}) size {:.3f}, {} points".format(index, voxel.x, voxel.y, voxel.z, voxels.voxel_size, voxel.points))
 
     require(not system.is_valid(), "closed system is invalid")
     require(system.get_timestamp(timestamp) == zeroslam.zeroslam_return_enum.zeroslam_return_failure_invalid_system, "closed system rejects calls")

@@ -136,6 +136,11 @@ public:
         return this->submaps_;
     }
 
+    // The voxel map of the current map component's landmarks, as of the newest keyframe.
+    const mapping::voxel_map& voxels() const {
+        return this->voxel_map_;
+    }
+
 private:
     tracking_state state_ = tracking_state::initialising;
     int blind_frames_ = 0;
@@ -4107,7 +4112,8 @@ public:
             }
             this->loop_closure_.add_keyframe(frame_current.id, pose, frame_current.camera, records.data(), records.size());
         }
-        // The voxel map is part of the map whichever local map the tracking draws on, and costs one insert per landmark.
+        // The voxel map is part of the map whichever local map the tracking draws on (the api exports it), and costs one
+        // insert per landmark.
         this->rebuild_voxel_map(frame_current);
 
         size_t active_track_count = 0;
