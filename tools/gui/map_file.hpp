@@ -39,7 +39,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 namespace map_file {
 
     constexpr static const char magic[8] = { 'Z', 'S', 'L', 'A', 'M', 'M', 'A', 'P' };
-    constexpr static const unsigned int current_version = 4;
+    constexpr static const unsigned int current_version = 5;
+    // Version 4 files hold everything but the voxels.
+    constexpr static const unsigned int oldest_version = 4;
 
     namespace detail {
         template <typename type>
@@ -79,6 +81,7 @@ namespace map_file {
         detail::write_value<unsigned long long>(out, snapshot.lines.size());
         detail::write_value<unsigned long long>(out, snapshot.edges.size());
         detail::write_value<unsigned long long>(out, snapshot.keyframes.size());
+        detail::write_value<unsigned long long>(out, snapshot.voxels.size());
         detail::write_value<int>(out, snapshot.processed_frame_count);
 
         for (const int id : detail::sorted_ids(snapshot.frames)) {
@@ -132,6 +135,13 @@ namespace map_file {
                 detail::write_value<int>(out, id);
             }
         }
+        detail::write_value<double>(out, snapshot.voxel_size);
+        for (const gui::render_snapshot::voxel& voxel : snapshot.voxels) {
+            for (int i = 0; i < 3; ++i) {
+                detail::write_value<double>(out, voxel.corner[i]);
+            }
+            detail::write_value<int>(out, voxel.points);
+        }
         gtl::file handle(path.c_str(), gtl::file::access_type::write_only, gtl::file::creation_type::create_or_open, gtl::file::cursor_type::start_of_truncated);
         if (!handle.is_open()) {
             error = "the map file could not be opened for writing";
@@ -162,8 +172,8 @@ namespace map_file {
             error = "the map file is truncated";
             return false;
         }
-        if (version != current_version) {
-            error = "the map file is version " + std::to_string(version) + ", this build reads version " + std::to_string(current_version);
+        if ((version < oldest_version) || (version > current_version)) {
+            error = "the map file is version " + std::to_string(version) + ", this build reads versions " + std::to_string(oldest_version) + " to " + std::to_string(current_version);
             return false;
         }
 
@@ -172,8 +182,9 @@ namespace map_file {
         unsigned long long line_count = 0;
         unsigned long long edge_count = 0;
         unsigned long long keyframe_count = 0;
+        unsigned long long voxel_count = 0;
         int processed = 0;
-        if (!detail::read_value(in, cursor, frame_count) || !detail::read_value(in, cursor, landmark_count) || !detail::read_value(in, cursor, line_count) || !detail::read_value(in, cursor, edge_count) || !detail::read_value(in, cursor, keyframe_count) || !detail::read_value(in, cursor, processed)) {
+        if (!detail::read_value(in, cursor, frame_count) || !detail::read_value(in, cursor, landmark_count) || !detail::read_value(in, cursor, line_count) || !detail::read_value(in, cursor, edge_count) || !detail::read_value(in, cursor, keyframe_count) || ((version >= 5) && !detail::read_value(in, cursor, voxel_count)) || !detail::read_value(in, cursor, processed)) {
             error = "the map file header is truncated";
             return false;
         }
@@ -261,6 +272,21 @@ namespace map_file {
                 return fail();
             }
             loaded.keyframes.insert(id);
+        }
+        if ((version >= 5) && !detail::read_value(in, cursor, loaded.voxel_size)) {
+            return fail();
+        }
+        for (unsigned long long i = 0; i < voxel_count; ++i) {
+            gui::render_snapshot::voxel voxel = {};
+            for (int index = 0; index < 3; ++index) {
+                if (!detail::read_value(in, cursor, voxel.corner[index])) {
+                    return fail();
+                }
+            }
+            if (!detail::read_value(in, cursor, voxel.points)) {
+                return fail();
+            }
+            loaded.voxels.push_back(voxel);
         }
         snapshot = std::move(loaded);
         return true;

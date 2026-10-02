@@ -73,11 +73,18 @@ namespace gui {
             int weight;
         };
 
+        struct voxel {
+            double corner[3];
+            int points;
+        };
+
         std::unordered_map<int, frame> frames;
         std::unordered_map<int, landmark> landmarks;
         std::unordered_map<int, line> lines;
         std::vector<edge> edges;
         std::unordered_set<int> keyframes;
+        std::vector<voxel> voxels;
+        double voxel_size = 0.0;
 
         int processed_frame_count = 0;
         double last_process_seconds = 0.0;

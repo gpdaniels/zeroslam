@@ -60,6 +60,8 @@ namespace {
     constexpr static const int descriptor_count = 5;
     constexpr static const char* const descriptor_names[descriptor_count] = { "orb", "teblid", "bsift", "teblid512", "bsift512" };
     constexpr static const char* const descriptor_labels[descriptor_count] = { "ORB", "TEBLID", "BSIFT", "TEBLID-512", "BSIFT-512" };
+    constexpr static const char* const local_map_names[4] = { "covisible", "voxels", "both", "fallback" };
+    constexpr static const char* const local_map_labels[4] = { "Covisible", "Voxels", "Both", "Fallback" };
 
     int index_of(const char* const* const names, const int count, const std::string& name) {
         for (int i = 0; i < count; ++i) {
@@ -79,6 +81,7 @@ namespace {
         int detector = 0;
         int descriptor = 0;
         bool wavelet = false;
+        int local_map = 0;
     };
 
     // Takes one key=value setting, or returns false when it is not one the controls offer.
@@ -131,6 +134,11 @@ namespace {
             settings.wavelet = (value == "wavelet");
             return true;
         }
+        if (key == "local_map") {
+            const int found = index_of(&local_map_names[0], 4, value);
+            settings.local_map = (found >= 0) ? found : settings.local_map;
+            return found >= 0;
+        }
         return false;
     }
 
@@ -177,8 +185,8 @@ namespace {
         std::printf("        --load-map [file]      - Display a saved map instead of running the slam system.\n");
         std::printf("        --save-map [file]      - Write the built map out when the run ends.\n");
         const front_end_settings defaults = library_defaults();
-        std::printf("        --config [key=value]   - A front end setting to start with: tracker=klt|extrema, lines=on|off, culling=on|off, association=klt|match|both, detector=fast|mser|harris|klt|forstner|rohr|kenney, descriptor=orb|teblid|bsift|teblid512|bsift512 or flow=intensity|wavelet (repeatable).\n");
-        std::printf("                                 Unset ones start at the library's defaults: tracker=%s lines=%s culling=%s association=%s detector=%s descriptor=%s flow=%s.\n", (defaults.tracker == 1) ? "extrema" : "klt", defaults.lines ? "on" : "off", defaults.culling ? "on" : "off", association_names[defaults.association], detector_names[defaults.detector], descriptor_names[defaults.descriptor], defaults.wavelet ? "wavelet" : "intensity");
+        std::printf("        --config [key=value]   - A front end setting to start with: tracker=klt|extrema, lines=on|off, culling=on|off, association=klt|match|both, detector=fast|mser|harris|klt|forstner|rohr|kenney, descriptor=orb|teblid|bsift|teblid512|bsift512, flow=intensity|wavelet or local_map=covisible|voxels|both|fallback (repeatable).\n");
+        std::printf("                                 Unset ones start at the library's defaults: tracker=%s lines=%s culling=%s association=%s detector=%s descriptor=%s flow=%s local_map=%s.\n", (defaults.tracker == 1) ? "extrema" : "klt", defaults.lines ? "on" : "off", defaults.culling ? "on" : "off", association_names[defaults.association], detector_names[defaults.detector], descriptor_names[defaults.descriptor], defaults.wavelet ? "wavelet" : "intensity", local_map_names[defaults.local_map]);
         std::printf("        --help                 - Show this message.\n");
     }
 
@@ -692,6 +700,7 @@ namespace {
         std::atomic<int> detector_choice{ 0 };
         std::atomic<int> descriptor_choice{ 0 };
         std::atomic<bool> wavelet_flow{ false };
+        std::atomic<int> local_map_choice{ 0 };
 
     private:
         std::thread thread;
@@ -703,6 +712,7 @@ namespace {
         std::vector<zeroslam_line_struct> lines;
         std::vector<zeroslam_edge_struct> edges;
         std::vector<long long> keyframes;
+        std::vector<zeroslam_voxel_struct> voxels;
         int applied_tracker = -1;
         bool applied_lines = false;
         bool applied_culling = true;
@@ -710,6 +720,7 @@ namespace {
         int applied_detector = -1;
         int applied_descriptor = -1;
         bool applied_wavelet = false;
+        int applied_local_map = -1;
         gtl::triple_buffer<gui::render_snapshot> snapshots;
 
         void publish() {
@@ -724,11 +735,12 @@ namespace {
             const int detector = this->detector_choice.load();
             const int descriptor = this->descriptor_choice.load();
             const bool wavelet = this->wavelet_flow.load();
-            if ((tracker == this->applied_tracker) && (lines_on == this->applied_lines) && (culling_on == this->applied_culling) && (association == this->applied_association) && (detector == this->applied_detector) && (descriptor == this->applied_descriptor) && (wavelet == this->applied_wavelet)) {
+            const int local_map = this->local_map_choice.load();
+            if ((tracker == this->applied_tracker) && (lines_on == this->applied_lines) && (culling_on == this->applied_culling) && (association == this->applied_association) && (detector == this->applied_detector) && (descriptor == this->applied_descriptor) && (wavelet == this->applied_wavelet) && (local_map == this->applied_local_map)) {
                 return;
             }
             char text[256];
-            const int length = std::snprintf(&text[0], sizeof(text), "tracker=%s\nlines=%s\nculling=%s\nassociation=%s\ndetector=%s\ndescriptor=%s\nflow=%s\n", (tracker == 1) ? "extrema" : "klt", lines_on ? "on" : "off", culling_on ? "on" : "off", association_names[static_cast<std::size_t>(((association >= 0) && (association < 3)) ? association : 0)], detector_names[static_cast<std::size_t>(((detector >= 0) && (detector < 7)) ? detector : 0)], descriptor_names[static_cast<std::size_t>(((descriptor >= 0) && (descriptor < descriptor_count)) ? descriptor : 0)], wavelet ? "wavelet" : "intensity");
+            const int length = std::snprintf(&text[0], sizeof(text), "tracker=%s\nlines=%s\nculling=%s\nassociation=%s\ndetector=%s\ndescriptor=%s\nflow=%s\nlocal_map=%s\n", (tracker == 1) ? "extrema" : "klt", lines_on ? "on" : "off", culling_on ? "on" : "off", association_names[static_cast<std::size_t>(((association >= 0) && (association < 3)) ? association : 0)], detector_names[static_cast<std::size_t>(((detector >= 0) && (detector < 7)) ? detector : 0)], descriptor_names[static_cast<std::size_t>(((descriptor >= 0) && (descriptor < descriptor_count)) ? descriptor : 0)], wavelet ? "wavelet" : "intensity", local_map_names[static_cast<std::size_t>(((local_map >= 0) && (local_map < 4)) ? local_map : 0)]);
             if ((length > 0) && (this->system.set_configuration(&text[0], length) != zeroslam_return_success)) {
                 std::fprintf(stderr, "The library rejected the front end configuration.\n");
             }
@@ -739,6 +751,7 @@ namespace {
             this->applied_detector = detector;
             this->applied_descriptor = descriptor;
             this->applied_wavelet = wavelet;
+            this->applied_local_map = local_map;
         }
 
         bool describe_rig(const scene::image_channel& channel_fed) {
@@ -767,6 +780,8 @@ namespace {
             snapshot.lines.clear();
             snapshot.edges.clear();
             snapshot.keyframes.clear();
+            snapshot.voxels.clear();
+            snapshot.voxel_size = 0.0;
             snapshot.processed_frame_count = static_cast<int>(this->fed_frames.size());
             snapshot.last_process_seconds = process_seconds;
             snapshot.last_frame_timestamp_nanoseconds = frame_timestamp_nanoseconds;
@@ -824,6 +839,21 @@ namespace {
                     line.b[0] = static_cast<double>(segment.x2);
                     line.b[1] = static_cast<double>(segment.y2);
                     line.b[2] = static_cast<double>(segment.z2);
+                }
+            }
+            zeroslam_map_voxels_struct voxel_chunk{};
+            result = this->system.get_map_voxels(&voxel_chunk);
+            if (result == zeroslam_return_failure_insufficient_data_length) {
+                this->voxels.resize(static_cast<std::size_t>(voxel_chunk.voxels_length));
+                voxel_chunk.voxels = this->voxels.data();
+                result = this->system.get_map_voxels(&voxel_chunk);
+            }
+            if (result == zeroslam_return_success) {
+                snapshot.voxel_size = static_cast<double>(voxel_chunk.voxel_size);
+                snapshot.voxels.reserve(static_cast<std::size_t>(voxel_chunk.voxels_length));
+                for (int i = 0; i < voxel_chunk.voxels_length; ++i) {
+                    const zeroslam_voxel_struct& reported = this->voxels[static_cast<std::size_t>(i)];
+                    snapshot.voxels.push_back(gui::render_snapshot::voxel{ { static_cast<double>(reported.x), static_cast<double>(reported.y), static_cast<double>(reported.z) }, reported.points });
                 }
             }
             zeroslam_map_edges_struct edge_chunk{};
@@ -985,6 +1015,8 @@ namespace {
         std::vector<float> covisibility_colours;
         std::vector<float> loop_vertices;
         std::vector<float> loop_colours;
+        std::vector<float> voxel_vertices;
+        std::vector<float> voxel_colours;
         const gui::render_snapshot* built_from = nullptr;
         int built_count = -1;
         int built_covisibility_minimum = -1;
@@ -1048,6 +1080,33 @@ namespace {
                         colours.push_back(1.0f);
                         colours.push_back(0.5f);
                         colours.push_back(0.0f);
+                    }
+                }
+            }
+            // Each voxel is drawn as the twelve edges of its cube, brighter the more landmarks it holds against the fullest.
+            this->voxel_vertices.clear();
+            this->voxel_colours.clear();
+            const float voxel_size = static_cast<float>(snapshot.voxel_size);
+            int fullest = 1;
+            for (const gui::render_snapshot::voxel& voxel : snapshot.voxels) {
+                fullest = std::max(fullest, voxel.points);
+            }
+            for (const gui::render_snapshot::voxel& voxel : snapshot.voxels) {
+                const float strength = std::log(static_cast<float>(1 + std::max(0, voxel.points))) / std::log(static_cast<float>(1 + fullest));
+                for (int axis = 0; axis < 3; ++axis) {
+                    for (int corner = 0; corner < 8; ++corner) {
+                        if ((corner & (1 << axis)) != 0) {
+                            continue;
+                        }
+                        const int ends[2] = { corner, corner | (1 << axis) };
+                        for (const int end : ends) {
+                            for (int component = 0; component < 3; ++component) {
+                                this->voxel_vertices.push_back(static_cast<float>(voxel.corner[component]) + ((((end >> component) & 1) != 0) ? voxel_size : 0.0f));
+                            }
+                            this->voxel_colours.push_back(0.15f + (0.6f * strength));
+                            this->voxel_colours.push_back(0.4f + (0.6f * strength));
+                            this->voxel_colours.push_back(0.2f + (0.1f * strength));
+                        }
                     }
                 }
             }
@@ -1380,10 +1439,12 @@ int main(int argc, char* argv[]) {
     int feature_detector = 0;
     int feature_descriptor = 0;
     bool feature_wavelet = false;
+    int feature_local_map = 0;
 
     bool show_image_strip = true;
     bool show_landmarks = true;
     bool show_lines = true;
+    bool show_voxels = false;
     bool show_covisibility = false;
     bool show_loops = true;
     float covisibility_minimum = 15.0f;
@@ -1485,6 +1546,7 @@ int main(int argc, char* argv[]) {
     feature_detector = initial.detector;
     feature_descriptor = initial.descriptor;
     feature_wavelet = initial.wavelet;
+    feature_local_map = initial.local_map;
     worker.tracker_choice.store(feature_tracker);
     worker.lines_enabled.store(feature_lines);
     worker.culling_enabled.store(feature_culling);
@@ -1492,6 +1554,7 @@ int main(int argc, char* argv[]) {
     worker.detector_choice.store(feature_detector);
     worker.descriptor_choice.store(feature_descriptor);
     worker.wavelet_flow.store(feature_wavelet);
+    worker.local_map_choice.store(feature_local_map);
     if (scene_path.empty()) {
         worker.start(loaded_scene);
     }
@@ -1719,6 +1782,9 @@ int main(int argc, char* argv[]) {
                 glLineWidth(line_size * 1.5f);
                 gl_draw_arrays(GL_LINES, geometry.line_vertices, geometry.line_colours);
                 glLineWidth(line_size);
+            }
+            if (show_voxels) {
+                gl_draw_arrays(GL_LINES, geometry.voxel_vertices, geometry.voxel_colours);
             }
             if (show_covisibility) {
                 gl_draw_arrays(GL_LINES, geometry.covisibility_vertices, geometry.covisibility_colours);
@@ -1962,6 +2028,12 @@ int main(int argc, char* argv[]) {
                     worker.descriptor_choice.store(feature_descriptor);
                     restart();
                 }
+                controls.label_dim("Local Map:");
+                const int local_map_pressed = controls.button_row(&local_map_labels[0], 4, feature_local_map);
+                if ((local_map_pressed >= 0) && (local_map_pressed != feature_local_map)) {
+                    feature_local_map = local_map_pressed;
+                    worker.local_map_choice.store(feature_local_map);
+                }
             }
             controls.text_input(editor, "map:", &map_path_text[0], static_cast<int>(sizeof(map_path_text)));
             {
@@ -2068,6 +2140,7 @@ int main(int argc, char* argv[]) {
             controls.checkbox("Image Panel", &show_image_strip);
             controls.checkbox("Landmarks", &show_landmarks);
             controls.checkbox("Line Landmarks", &show_lines);
+            controls.checkbox("Voxels", &show_voxels);
             controls.checkbox("Covisibility", &show_covisibility);
             controls.checkbox("Loop Edges", &show_loops);
             if (show_covisibility) {

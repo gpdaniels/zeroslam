@@ -326,9 +326,9 @@ cmake --build . --parallel 4
 
 ## Viewing a scene ##
 
-The `gui` tool plays a scene through the SLAM system live, drawing the image with its features, the landmarks, lines, keyframes, covisibility and loop edges, and the trajectory against the scene's ground truth with live metrics (see "Coordinate conventions" for the `Scale To Truth` and `Align To Truth` controls).
+The `gui` tool plays a scene through the SLAM system live, drawing the image with its features, the landmarks, lines, voxels, keyframes, covisibility and loop edges, and the trajectory against the scene's ground truth with live metrics (see "Coordinate conventions" for the `Scale To Truth` and `Align To Truth` controls).
 It also saves a finished map (`--save-map`) and displays a saved map instead of running the system (`--load-map`), and `--play`, `--screenshot [file]`, `--screenshot-after [frames]` and `--exit-after [frames]` script it.
-`--config key=value` starts it with a front end setting it offers in its controls: `tracker`, `lines`, `culling`, `association`, `detector`, `descriptor` and `flow`; the controls otherwise start at the library's defaults (`--help` lists them).
+`--config key=value` starts it with a front end setting it offers in its controls: `tracker`, `lines`, `culling`, `association`, `detector`, `descriptor`, `flow` and `local_map`; the controls otherwise start at the library's defaults (`--help` lists them).
 It needs OpenGL, with X11 on linux, Cocoa on macOS and Win32 on windows.
 ```
 cd build
