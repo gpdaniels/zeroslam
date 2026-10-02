@@ -171,5 +171,70 @@ int main(int argc, char* argv[]) {
         REQUIRE(tracks[1].id == 3);
     }
 
+    {
+        // Polarity: a step from dark (left of x = 40) to bright, read along a downward segment on the step, sees the bright
+        // side on its left; the reversed segment sees it on its right, and a flat image has none.
+        constexpr static const int width = 80;
+        constexpr static const int height = 60;
+        std::vector<unsigned char> step(static_cast<size_t>(width * height));
+        std::vector<unsigned char> flat(static_cast<size_t>(width * height), static_cast<unsigned char>(90));
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                step[static_cast<size_t>((y * width) + x)] = static_cast<unsigned char>((x < 40) ? 40 : 200);
+            }
+        }
+        const int down = feature::tracker::line::polarity(step.data(), width, height, width, 40.0f, 10.0f, 40.0f, 50.0f);
+        const int up = feature::tracker::line::polarity(step.data(), width, height, width, 40.0f, 50.0f, 40.0f, 10.0f);
+        REQUIRE((down != 0) && (up == -down));
+        REQUIRE(feature::tracker::line::polarity(flat.data(), width, height, width, 40.0f, 10.0f, 40.0f, 50.0f) == 0);
+        REQUIRE(feature::tracker::line::aligned_polarity(40.0f, 10.0f, 40.0f, 50.0f, 40.0f, 50.0f, 40.0f, 10.0f, up) == down);
+        REQUIRE(feature::tracker::line::aligned_polarity(40.0f, 10.0f, 40.0f, 50.0f, 41.0f, 12.0f, 41.0f, 48.0f, down) == down);
+        REQUIRE(is_value_approx(feature::tracker::line::line_distance(0.0f, 0.0f, 100.0f, 0.0f, 10.0f, 3.0f, 60.0f, -5.0f), 4.0f));
+        REQUIRE(is_value_approx(feature::tracker::line::overlap(0.0f, 0.0f, 100.0f, 0.0f, 50.0f, 1.0f, 150.0f, 1.0f), 0.5f));
+    }
+
+    {
+        // Two parallel lines 12 px apart move 25 px across them: proximity alone takes the nearer, wrong one, while the
+        // prediction keeps each track on its own line, and a prediction coasts a track that finds nothing.
+        feature::tracker::line::options parallel_options;
+        parallel_options.min_length = 10.0f;
+        feature::tracker::line by_proximity(parallel_options);
+        feature::tracker::line by_prediction(parallel_options);
+        std::vector<feature::detector::elsed::segment> first;
+        first.push_back(make_segment(100.0f, 50.0f, 100.0f, 150.0f));
+        by_proximity.update(0, first);
+        by_prediction.update(0, first, std::vector<feature::tracker::line::prediction>(), std::vector<int>(1, 1));
+        REQUIRE(by_prediction.tracks().size() == 1);
+        REQUIRE(by_prediction.tracks()[0].polarity == 1);
+        std::vector<feature::detector::elsed::segment> second;
+        second.push_back(make_segment(113.0f, 50.0f, 113.0f, 150.0f));
+        second.push_back(make_segment(125.0f, 50.0f, 125.0f, 150.0f));
+        by_proximity.update(1, second);
+        REQUIRE(by_proximity.tracks()[0].active);
+        REQUIRE(is_value_approx(by_proximity.tracks()[0].x1, 113.0f));
+        const std::vector<feature::tracker::line::prediction> shifted(1, feature::tracker::line::prediction{ true, 125.0f, 52.0f, 125.0f, 148.0f });
+        const std::vector<int> both_bright(2, 1);
+        by_prediction.update(1, second, shifted, both_bright);
+        REQUIRE(by_prediction.tracks()[0].active);
+        REQUIRE(by_prediction.tracks()[0].length == 2);
+        REQUIRE(is_value_approx(by_prediction.tracks()[0].x1, 125.0f));
+
+        // The predicted line, but of the opposite polarity: the track does not take it and coasts to its prediction.
+        std::vector<feature::detector::elsed::segment> third;
+        third.push_back(make_segment(150.0f, 50.0f, 150.0f, 150.0f));
+        const std::vector<feature::tracker::line::prediction> moved(by_prediction.tracks().size(), feature::tracker::line::prediction{ true, 150.0f, 50.0f, 150.0f, 150.0f });
+        by_prediction.update(2, third, moved, std::vector<int>(1, -1));
+        const feature::tracker::line::track& coasted = by_prediction.tracks()[0];
+        REQUIRE(!coasted.active);
+        REQUIRE(coasted.missed == 1);
+        REQUIRE(coasted.length == 2);
+        REQUIRE(is_value_approx(coasted.x1, 150.0f) && is_value_approx(coasted.y2, 150.0f));
+        // The line at 113 px spawned a track in the frame before; the detection both refused spawns a track of its own.
+        REQUIRE(by_prediction.tracks().size() == 3);
+        REQUIRE(!by_prediction.tracks()[1].active);
+        REQUIRE(by_prediction.tracks()[2].active);
+        REQUIRE(by_prediction.tracks()[2].polarity == -1);
+    }
+
     return EXIT_SUCCESS;
 }

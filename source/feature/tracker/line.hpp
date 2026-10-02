@@ -45,6 +45,8 @@ namespace feature::tracker {
             float y2;
         };
 
+        // The polarity is the sign of the intensity step across the segment, left side (looking from the first endpoint to
+        // the second) minus right side, or 0 when the step is too weak to tell.
         struct track final {
             int id;
             int landmark_id;
@@ -53,6 +55,7 @@ namespace feature::tracker {
             float y1;
             float x2;
             float y2;
+            int polarity;
             int start_frame_id;
             int last_frame_id;
             int length;
@@ -60,13 +63,29 @@ namespace feature::tracker {
             std::vector<observation> history;
         };
 
+        // Where a track's segment is expected in the frame being matched, as the motion of the points around it predicts.
+        struct prediction final {
+            bool valid;
+            float x1;
+            float y1;
+            float x2;
+            float y2;
+        };
+
         struct options final {
             float min_length = 20.0f;
             float match_angle_tolerance = 10.0f;
             float match_midpoint_distance = 30.0f;
             float match_overlap = 0.3f;
+            // With a prediction, a detection must lie along it: within this angle and this mean distance of its endpoints
+            // from the predicted line.
+            float predicted_angle_tolerance = 5.0f;
+            float predicted_distance = 5.0f;
             int max_missed = 5;
         };
+
+        constexpr static const float polarity_offset = 2.0f;
+        constexpr static const float polarity_step_minimum = 4.0f;
 
     private:
         options settings;
@@ -77,8 +96,8 @@ namespace feature::tracker {
         static float midpoint_distance_squared(float ax1, float ay1, float ax2, float ay2, float bx1, float by1, float bx2, float by2);
         static float angle_degrees(float ax1, float ay1, float ax2, float ay2, float bx1, float by1, float bx2, float by2);
         static float overlap_fraction(float ax1, float ay1, float ax2, float ay2, float bx1, float by1, float bx2, float by2);
-        void spawn(int frame_id, const detector::elsed::segment& segment);
-        void observe(track& existing, int frame_id, const detector::elsed::segment& segment);
+        void spawn(int frame_id, const detector::elsed::segment& segment, int polarity);
+        void observe(track& existing, int frame_id, const detector::elsed::segment& segment, int polarity);
 
     public:
         line();
@@ -88,6 +107,25 @@ namespace feature::tracker {
         const options& get_options() const;
 
         void update(int frame_id, const std::vector<detector::elsed::segment>& segments);
+
+        // Matches each track with a valid prediction (predictions[i] for tracks()[i]) along it and the rest by proximity,
+        // and moves a predicted track that matches nothing to its prediction; polarities[d] is detection d's polarity, and a
+        // detection of the opposite polarity to a track never continues it.
+        void update(int frame_id, const std::vector<detector::elsed::segment>& segments, const std::vector<prediction>& predictions, const std::vector<int>& polarities);
+
+        // The polarity of a segment in an image (see track), from the intensity step polarity_offset pixels either side of it.
+        static int polarity(const unsigned char* __restrict const data, const int width, const int height, const int stride, const float x1, const float y1, const float x2, const float y2);
+
+        // Whether the second segment, of the given polarity, continues the first: the polarity read along the first one's direction.
+        static int aligned_polarity(float ax1, float ay1, float ax2, float ay2, float bx1, float by1, float bx2, float by2, int polarity);
+
+        static float angle_between(float ax1, float ay1, float ax2, float ay2, float bx1, float by1, float bx2, float by2);
+
+        // The mean distance of the second segment's endpoints from the first one's line.
+        static float line_distance(float ax1, float ay1, float ax2, float ay2, float bx1, float by1, float bx2, float by2);
+
+        // The share of the second segment that projects onto the first.
+        static float overlap(float ax1, float ay1, float ax2, float ay2, float bx1, float by1, float bx2, float by2);
 
         const std::vector<track>& tracks() const;
         std::vector<track*> active_tracks();
