@@ -1407,6 +1407,10 @@ int main(int argc, char* argv[]) {
     gtl::imgui editor;
     editor.set_renderer(&panels.renderer);
     const int control_panel_width = 300;
+    // The control panel scrolls under the mouse wheel when it is taller than the window.
+    const int control_scroll_step = 40;
+    int control_scroll = 0;
+    int control_content_height = 0;
     const int graph_panel_width = 320;
     const int image_strip_height = 260;
 
@@ -1630,6 +1634,9 @@ int main(int argc, char* argv[]) {
                 case gtl::window::event_type::input_type::mouse_scroll:
                     if (map_viewport.contains(mouse_x, mouse_y)) {
                         camera.zoom(event.data.scroll);
+                    }
+                    else if (mouse_x < control_panel_width) {
+                        control_scroll -= event.data.scroll * control_scroll_step;
                     }
                     break;
                 case gtl::window::event_type::input_type::close:
@@ -1960,8 +1967,9 @@ int main(int argc, char* argv[]) {
 
         panels.begin(window_width, window_height);
         {
-            ui::panel controls(&panels.renderer, pointer, 0, 0, control_panel_width);
-            controls.fill(window_height);
+            control_scroll = std::max(0, std::min(control_scroll, control_content_height - window_height));
+            ui::panel controls(&panels.renderer, pointer, 0, -control_scroll, control_panel_width);
+            controls.fill(window_height + control_scroll);
             controls.space(8);
             controls.label("ZEROSLAM VIEWER");
 
@@ -2201,6 +2209,8 @@ int main(int argc, char* argv[]) {
             controls.checkbox("Metrics", &show_metrics);
             controls.space(4);
             controls.label_dim("L/R drag: rotate/pan, scroll: zoom");
+            controls.space(8);
+            control_content_height = controls.cursor() + control_scroll;
         }
 
         if (show_graph_panel) {
