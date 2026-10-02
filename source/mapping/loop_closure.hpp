@@ -87,6 +87,8 @@ namespace mapping {
         constexpr static const double reprojection_inlier_bound_squared = 9.210;
         constexpr static const size_t min_inliers = 15;
         constexpr static const double min_inlier_fraction = 0.5;
+        constexpr static const size_t foreign_min_inliers = 25;
+        constexpr static const double foreign_min_inlier_fraction = 0.3;
         constexpr static const double max_scale_ratio = 2.0;
 
     private:

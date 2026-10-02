@@ -391,7 +391,11 @@ namespace mapping {
             paired_inliers += (i < paired) ? 1 : 0;
         }
         outcome.inliers = outcome.matches.size();
-        if ((outcome.inliers < loop_closure::min_inliers) || (static_cast<double>(paired_inliers) < loop_closure::min_inlier_fraction * static_cast<double>(paired))) {
+        // Between submaps every pair is a descriptor match across a loss, which keeps fewer of them, while a submap left apart
+        // costs the map its consistency until it joins; such a join may keep a smaller share of its pairs if it keeps more.
+        const size_t inliers_required = foreign_submap ? loop_closure::foreign_min_inliers : loop_closure::min_inliers;
+        const double fraction_required = foreign_submap ? loop_closure::foreign_min_inlier_fraction : loop_closure::min_inlier_fraction;
+        if ((outcome.inliers < inliers_required) || (static_cast<double>(paired_inliers) < fraction_required * static_cast<double>(paired))) {
             core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d rejected, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity (%zu fitted it in 3D).", keyframe_id, candidate_id, outcome.inliers, correspondences.size(), shared_by_id, guided, inliers_size);
             outcome.matches.clear();
             return false;
