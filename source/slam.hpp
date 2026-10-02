@@ -985,6 +985,7 @@ private:
                 }
             }
             size_t relinked = 0;
+            std::vector<std::pair<size_t, int>> spawns;
             const std::vector<feature::tracker::tracker::track*> active = this->active_point_tracks();
             for (size_t i = 0; i < inliers_size; ++i) {
                 const feature::point& keypoint = frame_current.keypoints[keypoint_of_correspondence[inliers[i]]];
@@ -1003,9 +1004,38 @@ private:
                         break;
                     }
                 }
+                // Most inliers are detections no track sits on, which would leave their landmarks to the next frame's
+                // search; a track starts there instead, as the local map's matching starts one (after the loop, since
+                // starting a track can move the others).
+                if ((linked.count(landmark_id) == 0) && (this->frontend.tracker == mapping::frame::settings::tracker_kind::klt)) {
+                    spawns.push_back({ keypoint_of_correspondence[inliers[i]], landmark_id });
+                    linked.insert(landmark_id);
+                }
             }
-            const math::matrix<double, 3, 1> relocalised_centre = -(math::transpose(rotation) * translation);
-            core::logger::log(core::logger::level::note, "%s frame %d against keyframe %d: %zu inliers of %zu pairs, %zu tracks relinked, centre (%.3f, %.3f, %.3f).", on_probation ? "Relocalised" : "Recovered", frame_current.id, keyframe_id, inliers_size, correspondences.size(), relinked, relocalised_centre[0], relocalised_centre[1], relocalised_centre[2]);
+            for (const std::pair<size_t, int>& spawn : spawns) {
+                feature::tracker::tracker::track& created = this->tracker_.spawn(frame_current.id, frame_current.keypoints[spawn.first], frame_current.descriptors[spawn.first]);
+                created.landmark_id = spawn.second;
+                if (on_probation) {
+                    this->probation_track_links_.push_back({ created.id, spawn.second });
+                }
+                ++relinked;
+            }
+            // The inliers alone leave the next frame barely enough tracks with a landmark to pose it, so, as ORB-SLAM searches
+            // the map by projection once relocalisation has placed a frame, the landmarks around the keyframe are matched
+            // around the solved pose and refine it. They share the probation of the inliers.
+            this->rebuild_local_map(keyframe_id);
+            std::vector<int> local_links;
+            const size_t matched_around = this->track_local_map(frame_current, slam::local_map_recovery_radius, true, &local_links);
+            if (on_probation && !local_links.empty()) {
+                const std::unordered_set<int> local_track_ids(local_links.begin(), local_links.end());
+                for (const feature::tracker::tracker::track* const t : this->active_point_tracks()) {
+                    if ((t->landmark_id >= 0) && (local_track_ids.count(t->id) != 0)) {
+                        this->probation_track_links_.push_back({ t->id, t->landmark_id });
+                    }
+                }
+            }
+            const math::matrix<double, 3, 1> relocalised_centre = -(math::transpose(frame_current.rotation) * frame_current.translation);
+            core::logger::log(core::logger::level::note, "%s frame %d against keyframe %d: %zu inliers of %zu pairs, %zu tracks relinked, %zu landmarks around it matched, centre (%.3f, %.3f, %.3f).", on_probation ? "Relocalised" : "Recovered", frame_current.id, keyframe_id, inliers_size, correspondences.size(), relinked, matched_around, relocalised_centre[0], relocalised_centre[1], relocalised_centre[2]);
             return true;
         }
         return false;
@@ -1574,7 +1604,7 @@ private:
         std::sort(this->local_landmark_ids_.begin(), this->local_landmark_ids_.end());
     }
 
-    size_t track_local_map(mapping::frame& frame_current, const double radius = slam::local_map_projection_radius, const bool refine_pose = true) {
+    size_t track_local_map(mapping::frame& frame_current, const double radius = slam::local_map_projection_radius, const bool refine_pose = true, std::vector<int>* const linked_tracks = nullptr) {
         if (this->local_landmark_ids_.empty()) {
             return 0;
         }
@@ -1720,6 +1750,9 @@ private:
             if (accepted(best, second)) {
                 claimed[best.index] = static_cast<unsigned char>(1);
                 active[best.index]->landmark_id = landmark_id;
+                if (linked_tracks != nullptr) {
+                    linked_tracks->push_back(active[best.index]->id);
+                }
                 ++matched;
                 continue;
             }
@@ -1773,6 +1806,9 @@ private:
             if (nearest_track != active.size()) {
                 claimed[nearest_track] = static_cast<unsigned char>(1);
                 active[nearest_track]->landmark_id = landmark_id;
+                if (linked_tracks != nullptr) {
+                    linked_tracks->push_back(active[nearest_track]->id);
+                }
             }
             else {
                 spawns.push_back({ best.index, landmark_id });
@@ -1782,6 +1818,9 @@ private:
         for (const std::pair<size_t, int>& spawn : spawns) {
             feature::tracker::tracker::track& created = this->tracker_.spawn(frame_current.id, frame_current.keypoints[spawn.first], frame_current.descriptors[spawn.first]);
             created.landmark_id = spawn.second;
+            if (linked_tracks != nullptr) {
+                linked_tracks->push_back(created.id);
+            }
         }
         this->matched_by_projection += matched;
         if ((matched > 0) && refine_pose) {
