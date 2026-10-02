@@ -138,6 +138,10 @@ namespace mapping {
         constexpr static const double line_minimum_ray_angle_degrees = 10.0;
         constexpr static const double line_minimum_camera_distance = 1.0e-2;
         constexpr static const int line_minimum_observations = 3;
+        // A line observation weighs a tenth of a point's in an adjustment (AirSLAM's 0.1 for established lines): its two
+        // residuals measure an extent along the line the detector does not repeat, and a wrong line costs the map more
+        // than a missing one.
+        constexpr static const double line_information = 0.1;
 
         double line_ray_angle_degrees = map::line_minimum_ray_angle_degrees;
 
@@ -670,6 +674,7 @@ namespace mapping {
                     optimisation::edge m{ factor };
                     m.add_vertex(camera_vertexes[obs.frame_id]);
                     m.add_vertex(line_vertexes[landmark_id]);
+                    m.set_information(math::matrix<double, 0, 0>::identity(2, 2) * map::line_information);
                     m.set_loss(lossfunction);
                     ba.add_edge(static_cast<optimisation::edge&&>(m));
                     ++non_fixed_edges;

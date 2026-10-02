@@ -116,8 +116,8 @@ The `process` and `regression` tools pass any setting through with `--config key
 | `descriptor` | `orb` | `orb`, `teblid`, `bsift` (binarised sift), or their 512-bit forms `teblid512` (TEBLID's own 512 tests) and `bsift512` (a four level thermometer code of the sift vector). |
 | `affine` | `off` | Match landmarks against their whole descriptor history, and with `descriptor=bsift` add affine (tilted) views of each descriptor. |
 | `blur` | `on` | Weight measurements by the frame's blur against the recent frames. |
-| `lines` | `off` | Detect, track and map line segments too. |
-| `line_pose` | `off` | Use the line landmarks in pose estimation (with `lines=on`). |
+| `lines` | `off` | Detect, track and map line segments too: detected on the frame resampled to its pinhole camera, carried from frame to frame along the motion of the points around them, and matched to the map's lines by projection, both with the edge's polarity. |
+| `line_pose` | `off` | Use the line landmarks in pose estimation (with `lines=on`), weighted less the more points hold the pose. |
 | `line_angle` | `off` | Drop a line observation seen within this many degrees of end on (below `89`), or `off`. |
 | `culling` | `on` | Cull redundant keyframes. |
 | `global_adjustment` | `10` | Run a global adjustment every this many inserted keyframes (with `adjustment=absolute`), or `off`. |

@@ -38,6 +38,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "feature/tracker/tracker.hpp"
 #include "geometry/triangulation/linear_least_squares.hpp"
 #include "image/image.hpp"
+#include "image/remap.hpp"
 #include "mapping/covisibility.hpp"
 #include "mapping/frame.hpp"
 #include "mapping/line.hpp"
@@ -96,6 +97,7 @@ public:
     size_t admitted_at_infinity = 0;
     size_t admitted_unbounded = 0;
     size_t matched_by_projection = 0;
+    size_t lines_matched_by_projection = 0;
     size_t culled_keyframes = 0;
 
     struct verified_loop final {
@@ -158,6 +160,485 @@ private:
     feature::tracker::extrema extrema_tracker_;
 
     feature::tracker::line line_tracker_;
+
+    // Lines are detected on the frame resampled to the pinhole camera with its focal lengths and principal point, where a
+    // straight edge stays straight. Line tracks hold those rectified pixels, which convert to the frame's own pixels
+    // wherever a line is measured through the camera model (the map's line observations and the pose's line edges).
+    image::remap line_rectification_;
+    double line_rectification_parameters_[sensor::model::parameter_count] = {};
+    size_t line_rectification_columns_ = 0;
+    size_t line_rectification_rows_ = 0;
+    int line_previous_frame_id_ = -1;
+    std::vector<int> local_line_ids_;
+
+    // The focal lengths and principal point; the model only hands its parameters out all at once.
+    static void pinhole_intrinsics(const mapping::frame& frame, double (&intrinsics)[4]) {
+        double parameters[sensor::model::parameter_count] = { 1.0, 1.0, 0.0, 0.0 };
+        if (!frame.camera.get_parameters(&parameters[0], sensor::model::parameter_count)) {
+            parameters[0] = 1.0;
+            parameters[1] = 1.0;
+            parameters[2] = 0.0;
+            parameters[3] = 0.0;
+        }
+        for (size_t i = 0; i < 4; ++i) {
+            intrinsics[i] = parameters[i];
+        }
+    }
+
+    static math::matrix<double, 3, 1> rectified_ray(const mapping::frame& frame, const double x, const double y) {
+        double intrinsics[4];
+        slam::pinhole_intrinsics(frame, intrinsics);
+        return math::matrix<double, 3, 1>({ (x - intrinsics[2]) / intrinsics[0], (y - intrinsics[3]) / intrinsics[1], 1.0 });
+    }
+
+    static bool rectified_to_pixel(const mapping::frame& frame, const double x, const double y, double (&pixel)[2]) {
+        const math::matrix<double, 3, 1> ray = slam::rectified_ray(frame, x, y);
+        return frame.camera.project(ray.data(), &pixel[0]);
+    }
+
+    static bool pixel_to_rectified(const mapping::frame& frame, const double x, const double y, double (&rectified)[2]) {
+        const double pixel[2] = { x, y };
+        double ray[3] = { 0.0, 0.0, 0.0 };
+        if (!frame.camera.unproject(&pixel[0], &ray[0]) || !(ray[2] > 1.0e-12)) {
+            return false;
+        }
+        double intrinsics[4];
+        slam::pinhole_intrinsics(frame, intrinsics);
+        rectified[0] = (intrinsics[0] * ray[0] / ray[2]) + intrinsics[2];
+        rectified[1] = (intrinsics[1] * ray[1] / ray[2]) + intrinsics[3];
+        return true;
+    }
+
+    // A rectified segment in the frame's own pixels.
+    static bool line_pixels(const mapping::frame& frame, const float x1, const float y1, const float x2, const float y2, double (&pixels)[2][2]) {
+        return slam::rectified_to_pixel(frame, static_cast<double>(x1), static_cast<double>(y1), pixels[0]) && slam::rectified_to_pixel(frame, static_cast<double>(x2), static_cast<double>(y2), pixels[1]);
+    }
+
+    // A camera-frame point in rectified pixels.
+    static void rectified_projection(const mapping::frame& frame, const math::matrix<double, 3, 1>& point, double (&pixel)[2]) {
+        double intrinsics[4];
+        slam::pinhole_intrinsics(frame, intrinsics);
+        pixel[0] = (intrinsics[0] * point[0] / point[2]) + intrinsics[2];
+        pixel[1] = (intrinsics[1] * point[1] / point[2]) + intrinsics[3];
+    }
+
+    void prepare_line_rectification(const mapping::frame& frame) {
+        double parameters[sensor::model::parameter_count] = {};
+        frame.camera.get_parameters(&parameters[0], sensor::model::parameter_count);
+        const size_t columns = frame.image_pyramid[0].get_cols();
+        const size_t rows = frame.image_pyramid[0].get_rows();
+        bool same = !this->line_rectification_.empty() && (columns == this->line_rectification_columns_) && (rows == this->line_rectification_rows_);
+        for (size_t i = 0; i < sensor::model::parameter_count; ++i) {
+            same = same && (parameters[i] == this->line_rectification_parameters_[i]);
+        }
+        if (same) {
+            return;
+        }
+        std::vector<float> source_x(columns * rows, -1.0f);
+        std::vector<float> source_y(columns * rows, -1.0f);
+        for (size_t v = 0; v < rows; ++v) {
+            for (size_t u = 0; u < columns; ++u) {
+                double pixel[2] = { 0.0, 0.0 };
+                if (slam::rectified_to_pixel(
+                        frame,
+                        static_cast<double>(core::to_pixel_centre(static_cast<float>(u))),
+                        static_cast<double>(core::to_pixel_centre(static_cast<float>(v))),
+                        pixel
+                    )) {
+                    source_x[(v * columns) + u] = core::to_pixel_index_position(static_cast<float>(pixel[0]));
+                    source_y[(v * columns) + u] = core::to_pixel_index_position(static_cast<float>(pixel[1]));
+                }
+            }
+        }
+        this->line_rectification_ = image::remap(columns, rows, source_x.data(), source_y.data(), columns, rows);
+        for (size_t i = 0; i < sensor::model::parameter_count; ++i) {
+            this->line_rectification_parameters_[i] = parameters[i];
+        }
+        this->line_rectification_columns_ = columns;
+        this->line_rectification_rows_ = rows;
+    }
+
+    // Whether a rectified segment lies on pixels that came from inside the frame, a few pixels either side of it included,
+    // so no edge of the resampling's clamped border is taken for a line.
+    bool line_inside_rectification(const feature::detector::elsed::segment& segment) const {
+        constexpr static const float side_offset = 3.0f;
+        const float dx = segment.x2 - segment.x1;
+        const float dy = segment.y2 - segment.y1;
+        const float length = math::sqrt((dx * dx) + (dy * dy));
+        if (length < 1.0e-3f) {
+            return false;
+        }
+        const float normal_x = -dy / length;
+        const float normal_y = dx / length;
+        for (int along = 0; along <= 4; ++along) {
+            const float fraction = static_cast<float>(along) / 4.0f;
+            for (int side = -1; side <= 1; ++side) {
+                const float x = segment.x1 + (fraction * dx) + (static_cast<float>(side) * side_offset * normal_x);
+                const float y = segment.y1 + (fraction * dy) + (static_cast<float>(side) * side_offset * normal_y);
+                if (!(x >= 0.0f) || !(y >= 0.0f) || !this->line_rectification_.valid(static_cast<size_t>(core::to_pixel_index(x)), static_cast<size_t>(core::to_pixel_index(y)))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // How far, in rectified pixels, a frame's pose puts a line landmark from a line track: the mean distance of the track's
+    // endpoints from the landmark's image line, or a negative value when the camera does not see both its endpoints.
+    static double line_track_distance(const mapping::frame& frame, const feature::tracker::line::track& t, const mapping::line& landmark) {
+        const math::matrix<double, 3, 1> ends[2] = { (frame.rotation * landmark.locations[0]) + frame.translation, (frame.rotation * landmark.locations[1]) + frame.translation };
+        if (!(ends[0][2] > 1.0e-9) || !(ends[1][2] > 1.0e-9)) {
+            return -1.0;
+        }
+        double projected[2][2];
+        slam::rectified_projection(frame, ends[0], projected[0]);
+        slam::rectified_projection(frame, ends[1], projected[1]);
+        return static_cast<double>(feature::tracker::line::line_distance(static_cast<float>(projected[0][0]), static_cast<float>(projected[0][1]), static_cast<float>(projected[1][0]), static_cast<float>(projected[1][1]), t.x1, t.y1, t.x2, t.y2));
+    }
+
+    // Grows a line landmark's endpoints to take in an observation reaching past them along the line, by at most the
+    // landmark's length at each end, from rays crossing the line at more than line_extension_ray_degrees.
+    static constexpr double line_extension_ray_degrees = 10.0;
+
+    static void extend_line_endpoints(const mapping::frame& frame, const feature::tracker::line::track& observed, mapping::line& landmark) {
+        const math::matrix<double, 3, 1> along = landmark.locations[1] - landmark.locations[0];
+        const double length = math::sqrt(along.get_length_squared());
+        if (!(length > 1.0e-12)) {
+            return;
+        }
+        const math::matrix<double, 3, 1> direction = along * (1.0 / length);
+        const math::matrix<double, 3, 1> centre = -(math::transpose(frame.rotation) * frame.translation);
+        const double crossing_limit = math::cos(slam::line_extension_ray_degrees * 3.14159265358979323846 / 180.0);
+        const double ends[2][2] = { { static_cast<double>(observed.x1), static_cast<double>(observed.y1) }, { static_cast<double>(observed.x2), static_cast<double>(observed.y2) } };
+        double lowest = 0.0;
+        double highest = length;
+        for (int end = 0; end < 2; ++end) {
+            math::matrix<double, 3, 1> ray = math::transpose(frame.rotation) * slam::rectified_ray(frame, ends[end][0], ends[end][1]);
+            ray = ray * (1.0 / math::sqrt(ray.get_length_squared()));
+            if (math::abs(geometry::plucker::dot(ray, direction)) > crossing_limit) {
+                continue;
+            }
+            math::matrix<double, 3, 1> point;
+            if (!landmark.plucker_line.closest_point_to_ray(centre, ray, point) || !(geometry::plucker::dot(point - centre, ray) > 0.0)) {
+                continue;
+            }
+            const double parameter = geometry::plucker::dot(point - landmark.locations[0], direction);
+            lowest = math::min(lowest, math::max(parameter, -length));
+            highest = math::max(highest, math::min(parameter, 2.0 * length));
+        }
+        const math::matrix<double, 3, 1> origin = landmark.locations[0];
+        landmark.locations[0] = origin + (direction * lowest);
+        landmark.locations[1] = origin + (direction * highest);
+    }
+
+    // Map lines matched to the line tracks without a landmark, by projection through the frame's pose: within these of the
+    // track's line, a share of either on the other, the same polarity, and clearly better than the next best track.
+    static constexpr float local_line_angle_degrees = 5.0f;
+    static constexpr float local_line_distance = 6.0f;
+    static constexpr float local_line_overlap = 0.3f;
+    static constexpr float local_line_ambiguity = 0.8f;
+    static constexpr double local_line_border = 8.0;
+    // A line track the pose puts further than this from its landmark, at a keyframe, no longer follows it.
+    static constexpr double line_stray_pixels = 10.0;
+
+    size_t track_local_lines(const mapping::frame& frame_current) {
+        if (this->local_line_ids_.empty()) {
+            return 0;
+        }
+        std::unordered_set<int> linked;
+        for (const feature::tracker::line::track* const t : this->line_tracker_.all_tracks()) {
+            if (t->landmark_id >= 0) {
+                linked.insert(t->landmark_id);
+            }
+        }
+        std::vector<feature::tracker::line::track*> free_tracks;
+        for (feature::tracker::line::track* const t : this->line_tracker_.active_tracks()) {
+            if ((t->landmark_id < 0) && (t->last_frame_id == frame_current.id)) {
+                free_tracks.push_back(t);
+            }
+        }
+        if (free_tracks.empty()) {
+            return 0;
+        }
+        const double columns = static_cast<double>(frame_current.image_pyramid[0].get_cols());
+        const double rows = static_cast<double>(frame_current.image_pyramid[0].get_rows());
+        std::vector<unsigned char> claimed(free_tracks.size(), static_cast<unsigned char>(0));
+        size_t in_view = 0;
+        size_t matched = 0;
+        for (const int line_id : this->local_line_ids_) {
+            if (linked.count(line_id) != 0) {
+                continue;
+            }
+            const std::unordered_map<int, mapping::line>::const_iterator landmark_it = this->reconstruction.line_landmarks.find(line_id);
+            if (landmark_it == this->reconstruction.line_landmarks.end()) {
+                continue;
+            }
+            const mapping::line& landmark = landmark_it->second;
+            const math::matrix<double, 3, 1> ends[2] = { (frame_current.rotation * landmark.locations[0]) + frame_current.translation, (frame_current.rotation * landmark.locations[1]) + frame_current.translation };
+            if (!(ends[0][2] > 1.0e-9) || !(ends[1][2] > 1.0e-9)) {
+                continue;
+            }
+            double projected[2][2];
+            slam::rectified_projection(frame_current, ends[0], projected[0]);
+            slam::rectified_projection(frame_current, ends[1], projected[1]);
+            const double middle_x = 0.5 * (projected[0][0] + projected[1][0]);
+            const double middle_y = 0.5 * (projected[0][1] + projected[1][1]);
+            if ((middle_x < slam::local_line_border) || (middle_y < slam::local_line_border) || (middle_x >= columns - slam::local_line_border) || (middle_y >= rows - slam::local_line_border)) {
+                continue;
+            }
+            const float px1 = static_cast<float>(projected[0][0]);
+            const float py1 = static_cast<float>(projected[0][1]);
+            const float px2 = static_cast<float>(projected[1][0]);
+            const float py2 = static_cast<float>(projected[1][1]);
+            if ((((px2 - px1) * (px2 - px1)) + ((py2 - py1) * (py2 - py1))) < 100.0f) {
+                continue;
+            }
+            ++in_view;
+            size_t best = free_tracks.size();
+            float best_cost = 0.0f;
+            float second_cost = -1.0f;
+            for (size_t k = 0; k < free_tracks.size(); ++k) {
+                if (claimed[k] != 0) {
+                    continue;
+                }
+                const feature::tracker::line::track& t = *free_tracks[k];
+                const float angle = feature::tracker::line::angle_between(px1, py1, px2, py2, t.x1, t.y1, t.x2, t.y2);
+                if (angle > slam::local_line_angle_degrees) {
+                    continue;
+                }
+                const float distance = feature::tracker::line::line_distance(px1, py1, px2, py2, t.x1, t.y1, t.x2, t.y2);
+                if (distance > slam::local_line_distance) {
+                    continue;
+                }
+                if ((feature::tracker::line::overlap(px1, py1, px2, py2, t.x1, t.y1, t.x2, t.y2) < slam::local_line_overlap) && (feature::tracker::line::overlap(t.x1, t.y1, t.x2, t.y2, px1, py1, px2, py2) < slam::local_line_overlap)) {
+                    continue;
+                }
+                if ((landmark.polarity != 0) && (t.polarity != 0) && (feature::tracker::line::aligned_polarity(px1, py1, px2, py2, t.x1, t.y1, t.x2, t.y2, t.polarity) != landmark.polarity)) {
+                    continue;
+                }
+                const float cost = distance + (0.5f * angle);
+                if ((best == free_tracks.size()) || (cost < best_cost)) {
+                    second_cost = (best == free_tracks.size()) ? second_cost : best_cost;
+                    best = k;
+                    best_cost = cost;
+                }
+                else if ((second_cost < 0.0f) || (cost < second_cost)) {
+                    second_cost = cost;
+                }
+            }
+            if ((best == free_tracks.size()) || ((second_cost >= 0.0f) && !(best_cost < slam::local_line_ambiguity * second_cost))) {
+                continue;
+            }
+            claimed[best] = static_cast<unsigned char>(1);
+            free_tracks[best]->landmark_id = line_id;
+            ++matched;
+        }
+        if (matched > 0) {
+            core::logger::log(core::logger::level::info, "Local map (frame %d): %zu of %zu map lines in view without a track matched by projection.", frame_current.id, matched, in_view);
+        }
+        this->lines_matched_by_projection += matched;
+        return matched;
+    }
+
+    // Where each line track should be in this frame, from the motion since the previous frame of the point tracks within
+    // line_prediction_band pixels of it: a similarity fitted to them (one trimming pass), their median motion when fewer than
+    // three are near, or the median motion of every point track when none are.
+    static constexpr float line_prediction_band = 30.0f;
+    static constexpr size_t line_prediction_similarity_minimum = 3;
+
+    std::vector<feature::tracker::line::prediction> predict_lines(const mapping::frame& frame_current) {
+        const std::vector<feature::tracker::line::track>& line_tracks = this->line_tracker_.tracks();
+        std::vector<feature::tracker::line::prediction> predictions(line_tracks.size(), feature::tracker::line::prediction{ false, 0.0f, 0.0f, 0.0f, 0.0f });
+        if ((this->line_previous_frame_id_ < 0) || line_tracks.empty()) {
+            return predictions;
+        }
+
+        struct motion final {
+            float x0;
+            float y0;
+            float x1;
+            float y1;
+        };
+
+        std::vector<motion> motions;
+        for (const feature::tracker::tracker::track* const t : this->active_point_tracks()) {
+            if (t->history.size() < 2) {
+                continue;
+            }
+            const feature::tracker::tracker::observation& now = t->history.back();
+            const feature::tracker::tracker::observation& before = t->history[t->history.size() - 2];
+            if ((now.frame_id != frame_current.id) || (before.frame_id != this->line_previous_frame_id_)) {
+                continue;
+            }
+            double from[2] = { 0.0, 0.0 };
+            double to[2] = { 0.0, 0.0 };
+            if (!slam::pixel_to_rectified(frame_current, static_cast<double>(before.x), static_cast<double>(before.y), from) || !slam::pixel_to_rectified(frame_current, static_cast<double>(now.x), static_cast<double>(now.y), to)) {
+                continue;
+            }
+            motions.push_back(motion{ static_cast<float>(from[0]), static_cast<float>(from[1]), static_cast<float>(to[0]), static_cast<float>(to[1]) });
+        }
+        if (motions.empty()) {
+            return predictions;
+        }
+        const auto median = [](std::vector<float>& values) {
+            std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2), values.end());
+            return values[values.size() / 2];
+        };
+        bool global_valid = false;
+        float global_x = 0.0f;
+        float global_y = 0.0f;
+        if (motions.size() >= 5) {
+            std::vector<float> shifts_x;
+            std::vector<float> shifts_y;
+            for (const motion& m : motions) {
+                shifts_x.push_back(m.x1 - m.x0);
+                shifts_y.push_back(m.y1 - m.y0);
+            }
+            global_x = median(shifts_x);
+            global_y = median(shifts_y);
+            global_valid = true;
+        }
+        constexpr static const float cell = 32.0f;
+        std::unordered_map<long long, std::vector<size_t>> grid;
+        const auto key = [](const long long cx, const long long cy) {
+            return (cx * 1000003LL) + cy;
+        };
+        for (size_t m = 0; m < motions.size(); ++m) {
+            grid[key(static_cast<long long>(math::floor(motions[m].x0 / cell)), static_cast<long long>(math::floor(motions[m].y0 / cell)))].push_back(m);
+        }
+        std::vector<size_t> nearby;
+        for (size_t i = 0; i < line_tracks.size(); ++i) {
+            const feature::tracker::line::track& line_track = line_tracks[i];
+            const float dx = line_track.x2 - line_track.x1;
+            const float dy = line_track.y2 - line_track.y1;
+            const float length_squared = (dx * dx) + (dy * dy);
+            if (length_squared < 1.0f) {
+                continue;
+            }
+            nearby.clear();
+            const long long cx0 = static_cast<long long>(math::floor((math::min(line_track.x1, line_track.x2) - slam::line_prediction_band) / cell));
+            const long long cx1 = static_cast<long long>(math::floor((math::max(line_track.x1, line_track.x2) + slam::line_prediction_band) / cell));
+            const long long cy0 = static_cast<long long>(math::floor((math::min(line_track.y1, line_track.y2) - slam::line_prediction_band) / cell));
+            const long long cy1 = static_cast<long long>(math::floor((math::max(line_track.y1, line_track.y2) + slam::line_prediction_band) / cell));
+            for (long long cy = cy0; cy <= cy1; ++cy) {
+                for (long long cx = cx0; cx <= cx1; ++cx) {
+                    const std::unordered_map<long long, std::vector<size_t>>::const_iterator found = grid.find(key(cx, cy));
+                    if (found == grid.end()) {
+                        continue;
+                    }
+                    for (const size_t m : found->second) {
+                        const float along = math::max(0.0f, math::min(1.0f, (((motions[m].x0 - line_track.x1) * dx) + ((motions[m].y0 - line_track.y1) * dy)) / length_squared));
+                        const float offset_x = motions[m].x0 - (line_track.x1 + (along * dx));
+                        const float offset_y = motions[m].y0 - (line_track.y1 + (along * dy));
+                        if (((offset_x * offset_x) + (offset_y * offset_y)) <= (slam::line_prediction_band * slam::line_prediction_band)) {
+                            nearby.push_back(m);
+                        }
+                    }
+                }
+            }
+            std::sort(nearby.begin(), nearby.end());
+            // The similarity x' = c x - s y + tx, y' = s x + c y + ty, fitted in closed form about the centroids.
+            const auto fit = [&motions](const std::vector<size_t>& used, float& c, float& s, float& tx, float& ty) {
+                double mean_x0 = 0.0;
+                double mean_y0 = 0.0;
+                double mean_x1 = 0.0;
+                double mean_y1 = 0.0;
+                for (const size_t m : used) {
+                    mean_x0 += static_cast<double>(motions[m].x0);
+                    mean_y0 += static_cast<double>(motions[m].y0);
+                    mean_x1 += static_cast<double>(motions[m].x1);
+                    mean_y1 += static_cast<double>(motions[m].y1);
+                }
+                const double count = static_cast<double>(used.size());
+                mean_x0 /= count;
+                mean_y0 /= count;
+                mean_x1 /= count;
+                mean_y1 /= count;
+                double spread = 0.0;
+                double dot = 0.0;
+                double cross = 0.0;
+                for (const size_t m : used) {
+                    const double px = static_cast<double>(motions[m].x0) - mean_x0;
+                    const double py = static_cast<double>(motions[m].y0) - mean_y0;
+                    const double qx = static_cast<double>(motions[m].x1) - mean_x1;
+                    const double qy = static_cast<double>(motions[m].y1) - mean_y1;
+                    spread += (px * px) + (py * py);
+                    dot += (px * qx) + (py * qy);
+                    cross += (px * qy) - (py * qx);
+                }
+                if (spread < 25.0 * count) {
+                    return false;
+                }
+                c = static_cast<float>(dot / spread);
+                s = static_cast<float>(cross / spread);
+                tx = static_cast<float>(mean_x1 - ((static_cast<double>(c) * mean_x0) - (static_cast<double>(s) * mean_y0)));
+                ty = static_cast<float>(mean_y1 - ((static_cast<double>(s) * mean_x0) + (static_cast<double>(c) * mean_y0)));
+                const float scale = math::sqrt((c * c) + (s * s));
+                return (scale > 0.8f) && (scale < 1.25f) && (math::abs(math::atan2(s, c)) < 0.35f);
+            };
+            float c = 1.0f;
+            float s = 0.0f;
+            float tx = 0.0f;
+            float ty = 0.0f;
+            bool predicted = false;
+            if (nearby.size() >= slam::line_prediction_similarity_minimum) {
+                predicted = fit(nearby, c, s, tx, ty);
+                if (predicted) {
+                    std::vector<float> residuals;
+                    for (const size_t m : nearby) {
+                        const float ex = ((c * motions[m].x0) - (s * motions[m].y0) + tx) - motions[m].x1;
+                        const float ey = ((s * motions[m].x0) + (c * motions[m].y0) + ty) - motions[m].y1;
+                        residuals.push_back(math::sqrt((ex * ex) + (ey * ey)));
+                    }
+                    std::vector<float> sorted_residuals(residuals);
+                    const float bound = math::max(2.0f, 3.0f * median(sorted_residuals));
+                    std::vector<size_t> kept;
+                    for (size_t k = 0; k < nearby.size(); ++k) {
+                        if (residuals[k] <= bound) {
+                            kept.push_back(nearby[k]);
+                        }
+                    }
+                    if ((kept.size() >= slam::line_prediction_similarity_minimum) && (kept.size() < nearby.size())) {
+                        float refit_c = c;
+                        float refit_s = s;
+                        float refit_tx = tx;
+                        float refit_ty = ty;
+                        if (fit(kept, refit_c, refit_s, refit_tx, refit_ty)) {
+                            c = refit_c;
+                            s = refit_s;
+                            tx = refit_tx;
+                            ty = refit_ty;
+                        }
+                    }
+                }
+            }
+            if (!predicted && !nearby.empty()) {
+                std::vector<float> shifts_x;
+                std::vector<float> shifts_y;
+                for (const size_t m : nearby) {
+                    shifts_x.push_back(motions[m].x1 - motions[m].x0);
+                    shifts_y.push_back(motions[m].y1 - motions[m].y0);
+                }
+                c = 1.0f;
+                s = 0.0f;
+                tx = median(shifts_x);
+                ty = median(shifts_y);
+                predicted = true;
+            }
+            if (!predicted && global_valid) {
+                c = 1.0f;
+                s = 0.0f;
+                tx = global_x;
+                ty = global_y;
+                predicted = true;
+            }
+            if (!predicted) {
+                continue;
+            }
+            predictions[i] = feature::tracker::line::prediction{ true, (c * line_track.x1) - (s * line_track.y1) + tx, (s * line_track.x1) + (c * line_track.y1) + ty, (c * line_track.x2) - (s * line_track.y2) + tx, (s * line_track.x2) + (c * line_track.y2) + ty };
+        }
+        return predictions;
+    }
 
     mapping::loop_closure loop_closure_;
     mapping::covisibility covisibility_;
@@ -369,9 +850,11 @@ private:
             if ((t->landmark_id != -1) || (t->length < 2)) {
                 continue;
             }
+            // The reference keyframe must belong to the current submap, whose poses share its frame and scale.
+            const int submap_start = this->submap_start_of(frame_current.id);
             const feature::tracker::line::observation* ref_obs = nullptr;
             for (const feature::tracker::line::observation& obs : t->history) {
-                if ((obs.frame_id != frame_current.id) && (this->keyframe_ids_.count(obs.frame_id) != 0) && (this->reconstruction.frames.count(obs.frame_id) != 0)) {
+                if ((obs.frame_id != frame_current.id) && (obs.frame_id >= submap_start) && (this->keyframe_ids_.count(obs.frame_id) != 0) && (this->reconstruction.frames.count(obs.frame_id) != 0)) {
                     ref_obs = &obs;
                     break;
                 }
@@ -382,15 +865,12 @@ private:
             const mapping::frame& frame_ref = this->reconstruction.frames.at(ref_obs->frame_id);
             const double cur_pixels[2][2] = { { static_cast<double>(t->x1), static_cast<double>(t->y1) }, { static_cast<double>(t->x2), static_cast<double>(t->y2) } };
             const double ref_pixels[2][2] = { { static_cast<double>(ref_obs->x1), static_cast<double>(ref_obs->y1) }, { static_cast<double>(ref_obs->x2), static_cast<double>(ref_obs->y2) } };
+            // Line tracks hold rectified pixels, whose rays are the pinhole's.
             math::matrix<double, 3, 1> ray_cur[2];
             math::matrix<double, 3, 1> ray_ref[2];
-            bool unprojected = true;
             for (int i = 0; i < 2; ++i) {
-                unprojected = unprojected && frame_current.camera.unproject(&cur_pixels[i][0], ray_cur[i].data());
-                unprojected = unprojected && frame_ref.camera.unproject(&ref_pixels[i][0], ray_ref[i].data());
-            }
-            if (!unprojected) {
-                continue;
+                ray_cur[i] = slam::rectified_ray(frame_current, cur_pixels[i][0], cur_pixels[i][1]);
+                ray_ref[i] = slam::rectified_ray(frame_ref, ref_pixels[i][0], ref_pixels[i][1]);
             }
             const math::matrix<double, 3, 1> normal_camera_cur = geometry::plucker::cross(ray_cur[0], ray_cur[1]);
             const math::matrix<double, 3, 1> normal_camera_ref = geometry::plucker::cross(ray_ref[0], ray_ref[1]);
@@ -439,18 +919,26 @@ private:
                 double reprojected_cur[2];
                 double reprojected_ref[2];
                 consistent = (mapped_cur[2] > 0.0) && (mapped_ref[2] > 0.0);
-                consistent = consistent && frame_current.camera.project(mapped_cur.data(), &reprojected_cur[0]) && frame_ref.camera.project(mapped_ref.data(), &reprojected_ref[0]);
-                consistent = consistent && (perpendicular(&reprojected_cur[0], cur_pixels) <= reprojection_maximum) && (perpendicular(&reprojected_ref[0], ref_pixels) <= reprojection_maximum);
+                if (!consistent) {
+                    break;
+                }
+                slam::rectified_projection(frame_current, mapped_cur, reprojected_cur);
+                slam::rectified_projection(frame_ref, mapped_ref, reprojected_ref);
+                consistent = (perpendicular(&reprojected_cur[0], cur_pixels) <= reprojection_maximum) && (perpendicular(&reprojected_ref[0], ref_pixels) <= reprojection_maximum);
             }
             if (!consistent) {
                 continue;
             }
-            const mapping::line landmark(this->reconstruction.allocate_line_landmark_id(), line_world, endpoints[0], endpoints[1]);
+            mapping::line landmark(this->reconstruction.allocate_line_landmark_id(), line_world, endpoints[0], endpoints[1]);
+            landmark.polarity = t->polarity;
             this->reconstruction.add_line_landmark(landmark);
             t->landmark_id = landmark.id;
             for (const feature::tracker::line::observation& obs : t->history) {
-                if (this->keyframe_ids_.count(obs.frame_id) != 0) {
-                    this->reconstruction.add_line_observation(obs.frame_id, landmark, static_cast<double>(obs.x1), static_cast<double>(obs.y1), static_cast<double>(obs.x2), static_cast<double>(obs.y2));
+                if ((obs.frame_id >= submap_start) && (this->keyframe_ids_.count(obs.frame_id) != 0) && (this->reconstruction.frames.count(obs.frame_id) != 0)) {
+                    double pixels[2][2];
+                    if (slam::line_pixels(this->reconstruction.frames.at(obs.frame_id), obs.x1, obs.y1, obs.x2, obs.y2, pixels)) {
+                        this->reconstruction.add_line_observation(obs.frame_id, landmark, pixels[0][0], pixels[0][1], pixels[1][0], pixels[1][1]);
+                    }
                 }
             }
             ++created;
@@ -510,7 +998,11 @@ private:
                 if (!mapping::map::line_observation_usable(world_line.transformed(frame_current.rotation, frame_current.translation), (frame_current.rotation * line_record.locations[0]) + frame_current.translation, (frame_current.rotation * line_record.locations[1]) + frame_current.translation, this->frontend.line_angle)) {
                     continue;
                 }
-                line_correspondences.push_back({ { { static_cast<double>(t->x1), static_cast<double>(t->y1) }, { static_cast<double>(t->x2), static_cast<double>(t->y2) } }, world_line });
+                double pixels[2][2];
+                if (!slam::line_pixels(frame_current, t->x1, t->y1, t->x2, t->y2, pixels)) {
+                    continue;
+                }
+                line_correspondences.push_back({ { { pixels[0][0], pixels[0][1] }, { pixels[1][0], pixels[1][1] } }, world_line });
             }
         }
         std::vector<unsigned char> agreed;
@@ -558,8 +1050,6 @@ private:
         if (correspondences.size() + line_correspondences.size() < slam::pose_inliers_minimum) {
             return false;
         }
-        double intrinsics[4] = { 1.0, 1.0, 0.0, 0.0 };
-        frame_current.camera.get_parameters(&intrinsics[0], 4);
         const math::se3<double> prior(frame_current.rotation, frame_current.translation);
         const optimisation::loss lossfunction(optimisation::losses::huber(math::sqrt(5.991)));
         optimisation::factor_graph ba;
@@ -603,6 +1093,9 @@ private:
             factor.set_loss(lossfunction);
             ba.add_edge(static_cast<optimisation::edge&&>(factor));
         }
+        // Lines weigh less the more points hold the pose (ORB-LINE-SLAM's 2^-(points / 50)), so they carry a frame the points
+        // cannot hold without pulling on one they hold well.
+        const double line_weight = 1.0 / static_cast<double>(1u << static_cast<unsigned int>(math::min<size_t>(correspondences.size() / slam::line_weight_points, 16)));
         for (const line_correspondence& match : line_correspondences) {
             optimisation::edges::line_reprojection line_factor{ camera_model };
             if (!line_factor.set_measured_segment(match.pixel[0][0], match.pixel[0][1], match.pixel[1][0], match.pixel[1][1])) {
@@ -617,6 +1110,9 @@ private:
             optimisation::edge factor{ line_factor };
             factor.add_vertex(pose_node);
             factor.add_vertex(line_node);
+            if (line_weight != 1.0) {
+                factor.set_information(math::matrix<double, 0, 0>::identity(2, 2) * line_weight);
+            }
             factor.set_loss(lossfunction);
             ba.add_edge(static_cast<optimisation::edge&&>(factor));
         }
@@ -666,11 +1162,13 @@ private:
         }
         size_t line_inliers = 0;
         if (!line_correspondences.empty()) {
+            double line_focal[4];
+            slam::pinhole_intrinsics(frame_current, line_focal);
             for (const line_correspondence& match : line_correspondences) {
                 const geometry::plucker line_camera = match.line.transformed(rotation, translation);
                 const math::matrix<double, 3, 1>& image_line = line_camera.moment;
                 // The distance in pixels from the normalised line, which is only a multiple of the normalised distance when fx equals fy.
-                const double norm = math::sqrt(((image_line[0] / intrinsics[0]) * (image_line[0] / intrinsics[0])) + ((image_line[1] / intrinsics[1]) * (image_line[1] / intrinsics[1])));
+                const double norm = math::sqrt(((image_line[0] / line_focal[0]) * (image_line[0] / line_focal[0])) + ((image_line[1] / line_focal[1]) * (image_line[1] / line_focal[1])));
                 if (norm < 1.0e-12) {
                     continue;
                 }
@@ -703,6 +1201,7 @@ private:
     }
 
     static constexpr size_t pose_bounded_minimum = 20;
+    static constexpr size_t line_weight_points = 50;
 
     // A track the solved pose puts further than this many measurement sigmas (squared) from its landmark, or whose landmark it
     // puts behind the camera, no longer follows that landmark: a wrong association by projection, or a track that slid onto
@@ -1363,6 +1862,14 @@ private:
         }
         for (feature::tracker::line::track* const t : this->line_tracker_.all_tracks()) {
             t->landmark_id = -1;
+            size_t keep = 0;
+            for (size_t h = 0; h < t->history.size(); ++h) {
+                if (t->history[h].frame_id >= this->init_anchor_frame_id_) {
+                    t->history[keep] = t->history[h];
+                    ++keep;
+                }
+            }
+            t->history.resize(keep);
         }
         this->scale_sentinel_depths_.clear();
         this->reinitialising_ = false;
@@ -1851,6 +2358,19 @@ private:
             }
         }
         std::sort(this->local_landmark_ids_.begin(), this->local_landmark_ids_.end());
+        this->local_line_ids_.clear();
+        for (const auto& [line_id, line_observations] : this->reconstruction.line_observations) {
+            if (this->reconstruction.line_landmarks.count(line_id) == 0) {
+                continue;
+            }
+            for (const mapping::map::line_observation& obs : line_observations) {
+                if (local_keyframe_ids.count(obs.frame_id) != 0) {
+                    this->local_line_ids_.push_back(line_id);
+                    break;
+                }
+            }
+        }
+        std::sort(this->local_line_ids_.begin(), this->local_line_ids_.end());
     }
 
     size_t track_local_map(mapping::frame& frame_current, const double radius = slam::local_map_projection_radius, const bool refine_pose = true, std::vector<int>* const linked_tracks = nullptr) {
@@ -2650,19 +3170,45 @@ public:
         core::logger::log(core::logger::level::info, "Tracked: %zu active tracks.", this->active_point_tracks().size());
 
         if (this->frontend.lines) {
+            this->prepare_line_rectification(frame_added);
+            image::image rectified(image_grey.get_rows(), image_grey.get_cols());
+            this->line_rectification_.apply(image_grey.get_data(), image_grey.get_cols(), rectified.get_data());
             feature::detector::elsed::options elsed_options;
             elsed_options.minimum_length = 10.0f;
             std::vector<feature::detector::elsed::segment> segments(8192);
-            const size_t segment_count = feature::detector::elsed::detect(image_grey.get_data(), static_cast<int>(image_grey.get_cols()), static_cast<int>(image_grey.get_rows()), static_cast<int>(image_grey.get_cols()), elsed_options, segments.data(), segments.size());
+            const size_t segment_count = feature::detector::elsed::detect(rectified.get_data(), static_cast<int>(rectified.get_cols()), static_cast<int>(rectified.get_rows()), static_cast<int>(rectified.get_cols()), elsed_options, segments.data(), segments.size());
             segments.resize(segment_count);
+            size_t inside = 0;
+            for (size_t i = 0; i < segments.size(); ++i) {
+                if (this->line_inside_rectification(segments[i])) {
+                    segments[inside++] = segments[i];
+                }
+            }
+            segments.resize(inside);
             if (segments.size() > slam::line_segments_maximum) {
                 std::stable_sort(segments.begin(), segments.end(), [](const feature::detector::elsed::segment& lhs, const feature::detector::elsed::segment& rhs) {
                     return lhs.length > rhs.length;
                 });
                 segments.resize(slam::line_segments_maximum);
             }
-            this->line_tracker_.update(frame_id, segments);
-            core::logger::log(core::logger::level::info, "Detected Lines: %zu segments, %zu line tracks.", segment_count, this->line_tracker_.active_tracks().size());
+            std::vector<int> polarities(segments.size(), 0);
+            for (size_t i = 0; i < segments.size(); ++i) {
+                polarities[i] = feature::tracker::line::polarity(rectified.get_data(), static_cast<int>(rectified.get_cols()), static_cast<int>(rectified.get_rows()), static_cast<int>(rectified.get_cols()), segments[i].x1, segments[i].y1, segments[i].x2, segments[i].y2);
+            }
+            const std::vector<feature::tracker::line::prediction> predictions = this->predict_lines(frame_added);
+            size_t predicted = 0;
+            for (const feature::tracker::line::prediction& prediction : predictions) {
+                predicted += prediction.valid ? 1 : 0;
+            }
+            this->line_tracker_.update(frame_id, segments, predictions, polarities);
+            this->line_previous_frame_id_ = frame_id;
+            size_t continued = 0;
+            size_t linked = 0;
+            for (const feature::tracker::line::track* const t : this->line_tracker_.active_tracks()) {
+                continued += (t->length > 1) ? 1 : 0;
+                linked += (t->landmark_id >= 0) ? 1 : 0;
+            }
+            core::logger::log(core::logger::level::info, "Detected Lines: %zu segments (%zu inside the rectified view), %zu of %zu line tracks predicted, %zu continued, %zu with a landmark.", segment_count, inside, predicted, predictions.size(), continued, linked);
         }
 
         // Nothing to do for the first frame.
@@ -3043,6 +3589,10 @@ public:
 
             if (pnp_success) {
                 this->track_local_map(frame_current);
+                if (this->frontend.lines && (this->track_local_lines(frame_current) > 0) && this->frontend.line_pose) {
+                    size_t refined_inliers = 0;
+                    static_cast<void>(this->refine_pose_from_prior(frame_current, refined_inliers));
+                }
             }
             if (pnp_success) {
                 this->blind_frames_ = 0;
@@ -3110,7 +3660,18 @@ public:
                 if ((t->landmark_id < 0) || (this->reconstruction.line_landmarks.count(t->landmark_id) == 0)) {
                     continue;
                 }
-                this->reconstruction.add_line_observation(frame_current.id, this->reconstruction.line_landmarks.at(t->landmark_id), static_cast<double>(t->x1), static_cast<double>(t->y1), static_cast<double>(t->x2), static_cast<double>(t->y2));
+                double pixels[2][2];
+                if (!slam::line_pixels(frame_current, t->x1, t->y1, t->x2, t->y2, pixels)) {
+                    continue;
+                }
+                mapping::line& line_landmark = this->reconstruction.line_landmarks.at(t->landmark_id);
+                const double off = slam::line_track_distance(frame_current, *t, line_landmark);
+                if (!(off >= 0.0) || (off > slam::line_stray_pixels)) {
+                    t->landmark_id = -1;
+                    continue;
+                }
+                this->reconstruction.add_line_observation(frame_current.id, line_landmark, pixels[0][0], pixels[0][1], pixels[1][0], pixels[1][1]);
+                slam::extend_line_endpoints(frame_current, *t, line_landmark);
             }
         }
         this->reconstruction.optimise(1, true, 50);

@@ -27,6 +27,9 @@ namespace mapping {
         int id;
         geometry::plucker plucker_line;
         math::matrix<double, 3, 1> locations[2];
+        // The sign of the intensity step across the line as an image shows it looking from locations[0] to locations[1],
+        // left side minus right side, or 0 when unknown.
+        int polarity = 0;
 
     public:
         line();
