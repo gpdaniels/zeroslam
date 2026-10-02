@@ -113,7 +113,7 @@ The `process` and `regression` tools pass any setting through with `--config key
 | `refiner_sigma` | `1.5` | The structure tensor refiner's integration scale (up to `3.2`). |
 | `tracker` | `klt` | `klt` pyramidal optical flow of the detected features, or `extrema` curvature extrema tracks. |
 | `association` | `both` | How frames are associated: `klt` flow alone, `match` descriptor matching alone, or `both`. |
-| `descriptor` | `orb` | `orb`, `teblid`, or `bsift` (binarised sift). |
+| `descriptor` | `orb` | `orb`, `teblid`, `bsift` (binarised sift), or their 512-bit forms `teblid512` (TEBLID's own 512 tests) and `bsift512` (a four level thermometer code of the sift vector). |
 | `affine` | `off` | Match landmarks against their whole descriptor history, and with `descriptor=bsift` add affine (tilted) views of each descriptor. |
 | `blur` | `on` | Weight measurements by the frame's blur against the recent frames. |
 | `lines` | `off` | Detect, track and map line segments too. |

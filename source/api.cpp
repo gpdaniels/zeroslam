@@ -163,6 +163,22 @@ namespace {
         return "subpixel";
     }
 
+    const char* descriptor_name(const mapping::frame::settings& frontend) {
+        switch (frontend.descriptor) {
+            case mapping::frame::settings::descriptor_kind::orb:
+                return "orb";
+            case mapping::frame::settings::descriptor_kind::teblid:
+                return "teblid";
+            case mapping::frame::settings::descriptor_kind::bsift:
+                return "bsift";
+            case mapping::frame::settings::descriptor_kind::teblid512:
+                return "teblid512";
+            case mapping::frame::settings::descriptor_kind::bsift512:
+                return "bsift512";
+        }
+        return "orb";
+    }
+
     int print_configuration(char* const buffer, const size_t capacity, const mapping::frame::settings& frontend) {
         char collisions[16];
         if (frontend.track_collision_distance > 0.0f) {
@@ -211,7 +227,7 @@ namespace {
             configuration_key_association,
             (frontend.association == mapping::frame::settings::association_kind::match) ? "match" : ((frontend.association == mapping::frame::settings::association_kind::both) ? "both" : "klt"),
             configuration_key_descriptor,
-            (frontend.descriptor == mapping::frame::settings::descriptor_kind::teblid) ? "teblid" : ((frontend.descriptor == mapping::frame::settings::descriptor_kind::bsift) ? "bsift" : "orb"),
+            descriptor_name(frontend),
             configuration_key_affine,
             frontend.affine ? "on" : "off",
             configuration_key_blur,
@@ -447,6 +463,12 @@ namespace {
                 }
                 else if (token_equals(value, value_length, "bsift")) {
                     frontend.descriptor = mapping::frame::settings::descriptor_kind::bsift;
+                }
+                else if (token_equals(value, value_length, "teblid512")) {
+                    frontend.descriptor = mapping::frame::settings::descriptor_kind::teblid512;
+                }
+                else if (token_equals(value, value_length, "bsift512")) {
+                    frontend.descriptor = mapping::frame::settings::descriptor_kind::bsift512;
                 }
                 else {
                     return false;

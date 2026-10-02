@@ -1623,7 +1623,8 @@ private:
 
     void add_landmark_descriptors(mapping::point& landmark, const mapping::frame& frame, const float x, const float y, const int octave, const feature::descriptor::stored& track_descriptor) {
         landmark.add_descriptor(&track_descriptor.data[0]);
-        if (!this->frontend.affine || (this->frontend.descriptor != mapping::frame::settings::descriptor_kind::bsift) || (octave < 0) || (static_cast<size_t>(octave) >= frame.image_pyramid.size())) {
+        const bool binarised_sift = (this->frontend.descriptor == mapping::frame::settings::descriptor_kind::bsift) || (this->frontend.descriptor == mapping::frame::settings::descriptor_kind::bsift512);
+        if (!this->frontend.affine || !binarised_sift || (octave < 0) || (static_cast<size_t>(octave) >= frame.image_pyramid.size())) {
             return;
         }
         const image::image& level = frame.image_pyramid[static_cast<size_t>(octave)];
@@ -1646,9 +1647,15 @@ private:
                 const float affine[4] = { (c * c) + ((s * s) / tilt), -(c * s) * (1.0f - (1.0f / tilt)), -(c * s) * (1.0f - (1.0f / tilt)), (s * s) + ((c * c) / tilt) };
                 float vector[feature::descriptor::sift::dimensions];
                 feature::descriptor::sift::describe_float(data, columns, angle, &affine[0], vector);
-                feature::descriptor::binary<256> tilted;
-                feature::descriptor::sift::binarise(vector, tilted);
-                const feature::descriptor::stored tilted_stored = feature::descriptor::stored::widened(tilted);
+                feature::descriptor::stored tilted_stored;
+                if (this->frontend.descriptor == mapping::frame::settings::descriptor_kind::bsift512) {
+                    feature::descriptor::sift::binarise(vector, tilted_stored);
+                }
+                else {
+                    feature::descriptor::binary<256> tilted;
+                    feature::descriptor::sift::binarise(vector, tilted);
+                    tilted_stored = feature::descriptor::stored::widened(tilted);
+                }
                 landmark.add_descriptor(&tilted_stored.data[0]);
             }
         }

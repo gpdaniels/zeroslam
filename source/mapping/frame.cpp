@@ -170,7 +170,8 @@ namespace mapping {
             }
             // TEBLID describes from sums over the whole level, computed once here rather than per keypoint.
             std::vector<unsigned int> level_sums;
-            if (frontend.descriptor == settings::descriptor_kind::teblid) {
+            const bool describe_teblid = (frontend.descriptor == settings::descriptor_kind::teblid) || (frontend.descriptor == settings::descriptor_kind::teblid512);
+            if (describe_teblid) {
                 level_sums.resize(static_cast<size_t>(width + 1) * static_cast<size_t>(height + 1));
                 feature::descriptor::teblid::integral(image_grey.get_data(), width, height, width, level_sums.data());
             }
@@ -212,12 +213,20 @@ namespace mapping {
                     else {
                         angle = feature::angle::orb::dominant_angle(feature, width);
                     }
-                    if (frontend.descriptor == settings::descriptor_kind::teblid) {
+                    if (describe_teblid) {
                         const float centre_x = describe_refined ? kps[i].x : static_cast<float>(pixel_x);
                         const float centre_y = describe_refined ? kps[i].y : static_cast<float>(pixel_y);
-                        feature::descriptor::binary<256> narrow;
-                        feature::descriptor::teblid::describe_integral(level_sums.data(), width + 1, centre_x, centre_y, angle, narrow);
-                        des[i] = feature::descriptor::stored::widened(narrow);
+                        if (frontend.descriptor == settings::descriptor_kind::teblid512) {
+                            feature::descriptor::teblid::describe_integral(level_sums.data(), width + 1, centre_x, centre_y, angle, des[i]);
+                        }
+                        else {
+                            feature::descriptor::binary<256> narrow;
+                            feature::descriptor::teblid::describe_integral(level_sums.data(), width + 1, centre_x, centre_y, angle, narrow);
+                            des[i] = feature::descriptor::stored::widened(narrow);
+                        }
+                    }
+                    else if (frontend.descriptor == settings::descriptor_kind::bsift512) {
+                        feature::descriptor::sift::describe(feature, width, describe_refined ? offset_x : 0.0f, describe_refined ? offset_y : 0.0f, angle, des[i]);
                     }
                     else {
                         feature::descriptor::binary<256> narrow;

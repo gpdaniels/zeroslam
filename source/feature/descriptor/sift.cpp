@@ -186,11 +186,32 @@ namespace feature::descriptor {
         }
     }
 
+    void sift::binarise(const float (&vector)[sift::dimensions], binary<512>& descriptor) {
+        static_assert((sift::thermometer_levels * sift::dimensions) == 512, "The thermometer code fills the descriptor.");
+        for (size_t byte = 0; byte < binary<512>::size_bytes; ++byte) {
+            descriptor.data[byte] = 0;
+        }
+        for (int level = 0; level < sift::thermometer_levels; ++level) {
+            for (int d = 0; d < sift::dimensions; ++d) {
+                if (vector[d] > sift::thermometer_thresholds[level]) {
+                    const int bit = (level * sift::dimensions) + d;
+                    descriptor.data[bit >> 3] = static_cast<unsigned char>(descriptor.data[bit >> 3] | (1u << (bit & 7)));
+                }
+            }
+        }
+    }
+
     void sift::describe(const unsigned char* __restrict const data, const int stride, const float angle_radians, binary<256>& descriptor) {
         sift::describe(data, stride, 0.0f, 0.0f, angle_radians, descriptor);
     }
 
     void sift::describe(const unsigned char* __restrict const data, const int stride, const float offset_x, const float offset_y, const float angle_radians, binary<256>& descriptor) {
+        float vector[sift::dimensions];
+        sift::describe_float(data, stride, offset_x, offset_y, angle_radians, nullptr, vector);
+        sift::binarise(vector, descriptor);
+    }
+
+    void sift::describe(const unsigned char* __restrict const data, const int stride, const float offset_x, const float offset_y, const float angle_radians, binary<512>& descriptor) {
         float vector[sift::dimensions];
         sift::describe_float(data, stride, offset_x, offset_y, angle_radians, nullptr, vector);
         sift::binarise(vector, descriptor);

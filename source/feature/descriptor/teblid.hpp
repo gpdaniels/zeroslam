@@ -37,11 +37,14 @@ namespace feature::descriptor {
         };
 
         constexpr static const int test_count = 256;
+        // TEBLID-512 is trained on its own (Suarez et al. 2021, as OpenCV's xfeatures2d ships it), so its first 256 tests are not the 256 above.
+        constexpr static const int test_count_512 = 512;
         constexpr static const int patch_size = 32;
         constexpr static const float keypoint_size = 31.0f;
         constexpr static const int window_radius = 25;
 
         static const test tests[test_count];
+        static const test tests_512[test_count_512];
 
     public:
         static void describe(
@@ -49,6 +52,13 @@ namespace feature::descriptor {
             const int stride,
             const float angle_radians,
             binary<256>& descriptor
+        );
+
+        static void describe(
+            const unsigned char* __restrict const data,
+            const int stride,
+            const float angle_radians,
+            binary<512>& descriptor
         );
 
         // Sums of a whole level for describe_integral, (width + 1) by (height + 1) entries with a zero first row and column; no sum wraps up to 4096 by 4096 pixels, and beyond that the wrap still leaves every box sum exact.
@@ -68,6 +78,15 @@ namespace feature::descriptor {
             const float y,
             const float angle_radians,
             binary<256>& descriptor
+        );
+
+        static void describe_integral(
+            const unsigned int* __restrict const integral_data,
+            const int integral_stride,
+            const float x,
+            const float y,
+            const float angle_radians,
+            binary<512>& descriptor
         );
     };
 }

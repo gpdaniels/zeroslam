@@ -97,6 +97,32 @@ int main(int argc, char* argv[]) {
     REQUIRE(match::distance::hamming::distance(first, descriptor_elsewhere) > 70);
 
     {
+        // TEBLID-512 has its own trained tests: as stable under a subpixel shift and a rotation, and further from unrelated texture.
+        feature::descriptor::binary<512> wide_first;
+        feature::descriptor::binary<512> wide_again;
+        feature::descriptor::teblid::describe(at_centre, size, angle, wide_first);
+        feature::descriptor::teblid::describe(at_centre, size, angle, wide_again);
+        REQUIRE(match::distance::hamming::distance(wide_first, wide_again) == 0);
+        unsigned int wide_set_bits = 0;
+        for (int byte = 0; byte < 64; ++byte) {
+            for (int bit = 0; bit < 8; ++bit) {
+                wide_set_bits += (static_cast<unsigned int>(wide_first.data[byte]) >> bit) & 1u;
+            }
+        }
+        REQUIRE((wide_set_bits > 80) && (wide_set_bits < 432));
+        feature::descriptor::binary<512> wide_shifted;
+        feature::descriptor::teblid::describe(shifted.data() + (centre * size) + centre, size, feature::angle::orb::dominant_angle(shifted.data() + (centre * size) + centre, size), wide_shifted);
+        feature::descriptor::binary<512> wide_rotated;
+        feature::descriptor::teblid::describe(rotated_centre, size, feature::angle::orb::dominant_angle(rotated_centre, size), wide_rotated);
+        feature::descriptor::binary<512> wide_elsewhere;
+        feature::descriptor::teblid::describe(elsewhere, size, feature::angle::orb::dominant_angle(elsewhere, size), wide_elsewhere);
+        std::printf("TEBLID-512: shifted %u, rotated %u, elsewhere %u (256: %u, %u, %u)\n", match::distance::hamming::distance(wide_first, wide_shifted), match::distance::hamming::distance(wide_first, wide_rotated), match::distance::hamming::distance(wide_first, wide_elsewhere), match::distance::hamming::distance(first, descriptor_shifted), match::distance::hamming::distance(first, descriptor_rotated), match::distance::hamming::distance(first, descriptor_elsewhere));
+        REQUIRE(match::distance::hamming::distance(wide_first, wide_shifted) < 80);
+        REQUIRE(match::distance::hamming::distance(wide_first, wide_rotated) < 140);
+        REQUIRE(match::distance::hamming::distance(wide_first, wide_elsewhere) > 140);
+    }
+
+    {
         // The level sums, on a region narrower than its stride.
         const int width = 7;
         const int height = 5;
@@ -141,6 +167,11 @@ int main(int argc, char* argv[]) {
                 feature::descriptor::teblid::describe_integral(wrapped.data(), size + 1, static_cast<float>(x), static_cast<float>(y), keypoint_angle, described_wrapped);
                 REQUIRE(match::distance::hamming::distance(expected, described) == 0);
                 REQUIRE(match::distance::hamming::distance(expected, described_wrapped) == 0);
+                feature::descriptor::binary<512> wide_expected;
+                feature::descriptor::binary<512> wide_described;
+                feature::descriptor::teblid::describe(plain.data() + (y * size) + x, size, keypoint_angle, wide_expected);
+                feature::descriptor::teblid::describe_integral(wrapped.data(), size + 1, static_cast<float>(x), static_cast<float>(y), keypoint_angle, wide_described);
+                REQUIRE(match::distance::hamming::distance(wide_expected, wide_described) == 0);
                 if ((x < size - radius - 1) && (y < size - radius - 1)) {
                     feature::descriptor::teblid::describe_integral(sums.data(), size + 1, static_cast<float>(x) + 0.37f, static_cast<float>(y) + 0.81f, keypoint_angle, described);
                     feature::descriptor::teblid::describe_integral(wrapped.data(), size + 1, static_cast<float>(x) + 0.37f, static_cast<float>(y) + 0.81f, keypoint_angle, described_wrapped);

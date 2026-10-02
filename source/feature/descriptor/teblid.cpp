@@ -278,10 +278,525 @@ namespace feature::descriptor {
         { 16, 20, 12, 19, 1, 2.75f }
     };
 
+    constexpr const teblid::test teblid::tests_512[teblid::test_count_512] = {
+        { 17, 18, 12, 15, 2, 14.45f },
+        { 13, 14, 5, 7, 5, 4.15f },
+        { 21, 16, 16, 14, 1, 7.75f },
+        { 27, 11, 18, 20, 3, 9.65f },
+        { 17, 13, 16, 19, 2, 2.25f },
+        { 18, 24, 18, 16, 5, 0.15f },
+        { 12, 11, 10, 25, 6, 0.45f },
+        { 14, 17, 14, 13, 1, -0.95f },
+        { 7, 4, 4, 15, 4, 3.65f },
+        { 27, 27, 23, 8, 4, -1.75f },
+        { 19, 13, 19, 6, 6, 1.05f },
+        { 14, 15, 10, 16, 1, 5.45f },
+        { 13, 15, 12, 22, 1, -0.05f },
+        { 8, 22, 3, 27, 3, -2.65f },
+        { 13, 19, 8, 13, 1, 3.35f },
+        { 18, 16, 17, 12, 1, 1.65f },
+        { 27, 7, 25, 11, 4, -1.55f },
+        { 24, 20, 20, 15, 2, 2.85f },
+        { 16, 24, 14, 3, 3, 3.05f },
+        { 23, 18, 7, 18, 7, 22.05f },
+        { 8, 7, 2, 1, 1, -3.65f },
+        { 17, 28, 17, 26, 3, -0.15f },
+        { 17, 13, 17, 10, 2, -0.55f },
+        { 10, 18, 10, 11, 1, -0.05f },
+        { 11, 28, 7, 22, 2, 3.25f },
+        { 18, 13, 15, 15, 1, -2.85f },
+        { 7, 14, 3, 20, 3, -1.25f },
+        { 17, 19, 14, 15, 1, 10.45f },
+        { 14, 12, 14, 8, 2, -1.05f },
+        { 14, 12, 13, 11, 1, 1.25f },
+        { 21, 9, 19, 19, 2, 3.15f },
+        { 4, 28, 3, 10, 3, 2.05f },
+        { 27, 27, 26, 26, 4, -0.55f },
+        { 19, 22, 19, 19, 2, -1.25f },
+        { 12, 25, 12, 20, 1, 3.45f },
+        { 19, 12, 15, 12, 1, 4.35f },
+        { 28, 21, 23, 21, 2, 2.45f },
+        { 10, 15, 7, 18, 2, 2.55f },
+        { 12, 7, 10, 3, 3, 1.35f },
+        { 21, 16, 19, 15, 1, 1.25f },
+        { 19, 20, 18, 17, 1, 2.75f },
+        { 26, 2, 19, 7, 2, -0.15f },
+        { 18, 2, 15, 22, 2, 8.35f },
+        { 24, 26, 24, 22, 5, 0.35f },
+        { 15, 26, 15, 19, 1, -1.25f },
+        { 13, 19, 11, 20, 1, 0.75f },
+        { 5, 14, 4, 10, 4, -0.45f },
+        { 15, 7, 15, 4, 2, -0.05f },
+        { 13, 16, 11, 7, 1, 0.85f },
+        { 15, 22, 15, 18, 1, 3.65f },
+        { 24, 8, 23, 4, 4, 1.55f },
+        { 13, 11, 11, 14, 1, 1.75f },
+        { 4, 19, 3, 19, 3, -0.35f },
+        { 22, 12, 19, 10, 1, 1.35f },
+        { 24, 27, 15, 22, 2, 4.85f },
+        { 12, 13, 10, 10, 1, -2.25f },
+        { 11, 25, 9, 29, 2, 0.25f },
+        { 15, 21, 15, 10, 1, -2.15f },
+        { 19, 16, 18, 19, 1, 3.35f },
+        { 29, 13, 24, 8, 2, 1.95f },
+        { 17, 16, 16, 20, 1, 6.25f },
+        { 12, 17, 12, 15, 1, 0.35f },
+        { 28, 4, 2, 11, 2, 24.45f },
+        { 7, 25, 5, 19, 3, -1.15f },
+        { 22, 13, 20, 16, 1, 0.85f },
+        { 14, 16, 13, 17, 1, -1.95f },
+        { 10, 3, 8, 11, 3, 5.15f },
+        { 18, 7, 17, 11, 2, 1.35f },
+        { 27, 11, 25, 22, 2, 0.85f },
+        { 5, 26, 3, 28, 3, 0.35f },
+        { 28, 13, 27, 13, 3, -0.45f },
+        { 22, 20, 20, 28, 3, 4.95f },
+        { 12, 6, 5, 2, 2, -0.25f },
+        { 14, 18, 13, 16, 1, 2.45f },
+        { 17, 29, 3, 25, 2, 11.75f },
+        { 20, 20, 19, 19, 1, 0.85f },
+        { 15, 12, 14, 15, 1, -1.65f },
+        { 12, 14, 12, 13, 1, 0.05f },
+        { 17, 14, 10, 26, 3, 4.05f },
+        { 11, 15, 6, 12, 6, -0.35f },
+        { 9, 22, 9, 19, 1, -0.95f },
+        { 19, 18, 19, 14, 1, -0.25f },
+        { 23, 15, 12, 18, 2, 49.35f },
+        { 12, 15, 11, 14, 1, 0.85f },
+        { 28, 2, 27, 9, 2, 1.95f },
+        { 11, 19, 11, 11, 7, 0.25f },
+        { 13, 29, 13, 23, 2, 1.15f },
+        { 27, 19, 22, 17, 3, -2.65f },
+        { 17, 3, 17, 2, 2, -0.25f },
+        { 4, 6, 3, 3, 3, 0.85f },
+        { 19, 15, 16, 16, 1, -5.65f },
+        { 22, 5, 20, 9, 2, 1.15f },
+        { 14, 6, 13, 9, 2, 3.05f },
+        { 17, 16, 13, 16, 2, 4.05f },
+        { 24, 18, 12, 6, 6, 7.35f },
+        { 20, 14, 18, 15, 2, 9.05f },
+        { 20, 9, 18, 13, 1, 0.35f },
+        { 18, 20, 17, 8, 2, 1.65f },
+        { 10, 15, 9, 15, 2, 1.65f },
+        { 13, 7, 12, 26, 2, 2.55f },
+        { 13, 12, 11, 19, 2, 6.95f },
+        { 15, 2, 2, 29, 2, 1.75f },
+        { 15, 12, 14, 13, 1, 0.85f },
+        { 20, 30, 19, 26, 1, -1.15f },
+        { 28, 26, 28, 4, 3, 1.35f },
+        { 16, 13, 15, 12, 1, 5.45f },
+        { 18, 11, 17, 25, 2, 1.35f },
+        { 3, 17, 1, 24, 1, -2.35f },
+        { 21, 18, 19, 22, 1, -0.15f },
+        { 9, 13, 9, 8, 2, 0.85f },
+        { 19, 18, 16, 16, 1, -3.05f },
+        { 21, 22, 17, 20, 1, 0.05f },
+        { 13, 4, 13, 3, 3, -0.35f },
+        { 24, 15, 21, 9, 1, -0.65f },
+        { 24, 25, 19, 17, 6, 11.65f },
+        { 4, 14, 3, 14, 2, -0.85f },
+        { 17, 13, 14, 19, 1, 1.15f },
+        { 7, 19, 4, 16, 3, 2.35f },
+        { 4, 20, 1, 5, 1, -9.25f },
+        { 15, 13, 12, 14, 3, 16.05f },
+        { 19, 26, 19, 21, 2, -1.45f },
+        { 11, 26, 10, 18, 5, 1.95f },
+        { 17, 16, 17, 13, 1, 0.35f },
+        { 19, 16, 19, 11, 1, -0.35f },
+        { 4, 26, 4, 23, 4, 0.15f },
+        { 14, 19, 14, 13, 5, 0.25f },
+        { 10, 13, 8, 13, 2, -1.35f },
+        { 14, 12, 14, 10, 1, 0.65f },
+        { 29, 24, 26, 19, 2, -4.05f },
+        { 26, 9, 19, 19, 5, -2.25f },
+        { 16, 23, 16, 17, 1, 1.05f },
+        { 4, 13, 3, 4, 3, -0.05f },
+        { 13, 16, 7, 21, 2, -1.55f },
+        { 17, 16, 16, 17, 1, 0.25f },
+        { 29, 15, 5, 18, 2, 69.45f },
+        { 29, 2, 23, 5, 2, 0.15f },
+        { 9, 17, 9, 14, 2, -1.25f },
+        { 25, 26, 25, 22, 5, -1.85f },
+        { 13, 21, 13, 20, 1, -0.65f },
+        { 23, 12, 7, 20, 6, 8.75f },
+        { 6, 8, 6, 3, 3, -0.95f },
+        { 13, 19, 13, 17, 1, 1.95f },
+        { 25, 21, 22, 20, 1, 1.05f },
+        { 24, 17, 23, 15, 2, -1.45f },
+        { 20, 8, 17, 4, 1, 2.15f },
+        { 11, 19, 10, 17, 1, -1.85f },
+        { 9, 11, 6, 9, 1, -1.75f },
+        { 25, 9, 24, 14, 1, -2.95f },
+        { 18, 20, 13, 14, 3, 2.65f },
+        { 26, 23, 25, 23, 5, 0.65f },
+        { 14, 20, 11, 4, 4, -1.05f },
+        { 28, 7, 25, 13, 3, 4.35f },
+        { 13, 13, 12, 12, 1, 0.25f },
+        { 7, 29, 2, 2, 2, 19.65f },
+        { 16, 17, 16, 8, 5, 0.35f },
+        { 20, 6, 19, 12, 3, 1.65f },
+        { 19, 7, 19, 6, 6, 0.65f },
+        { 20, 13, 19, 14, 1, 2.75f },
+        { 19, 24, 16, 29, 2, 2.85f },
+        { 8, 15, 4, 13, 1, -10.95f },
+        { 7, 9, 2, 10, 2, 3.65f },
+        { 15, 14, 14, 13, 1, -4.15f },
+        { 18, 13, 18, 11, 1, 0.25f },
+        { 8, 19, 5, 23, 2, -0.65f },
+        { 3, 13, 1, 14, 1, -2.25f },
+        { 23, 20, 16, 14, 1, 3.75f },
+        { 17, 15, 13, 18, 2, 35.75f },
+        { 16, 16, 9, 14, 5, 3.15f },
+        { 15, 28, 15, 27, 3, -0.55f },
+        { 18, 20, 16, 19, 1, 1.95f },
+        { 16, 17, 16, 11, 2, -6.55f },
+        { 30, 1, 10, 19, 1, 88.35f },
+        { 12, 19, 9, 23, 2, 7.25f },
+        { 25, 13, 21, 13, 1, 1.75f },
+        { 9, 23, 5, 24, 5, -4.15f },
+        { 13, 20, 13, 18, 1, 0.25f },
+        { 13, 13, 12, 13, 3, 0.25f },
+        { 29, 18, 25, 2, 2, 0.65f },
+        { 30, 30, 25, 26, 1, 3.75f },
+        { 16, 20, 15, 11, 1, 1.65f },
+        { 18, 16, 18, 14, 1, 2.85f },
+        { 15, 18, 5, 7, 4, 42.15f },
+        { 16, 13, 15, 19, 1, 11.75f },
+        { 26, 24, 16, 9, 5, -1.25f },
+        { 1, 28, 1, 5, 1, -8.25f },
+        { 20, 17, 20, 16, 1, 0.05f },
+        { 15, 19, 10, 17, 4, 2.15f },
+        { 12, 9, 10, 5, 1, 0.65f },
+        { 30, 29, 28, 29, 1, -1.55f },
+        { 29, 17, 27, 18, 2, -2.75f },
+        { 17, 29, 15, 27, 2, 1.15f },
+        { 9, 29, 9, 28, 2, -0.15f },
+        { 23, 24, 21, 22, 1, -0.75f },
+        { 22, 2, 1, 1, 1, 16.85f },
+        { 20, 4, 20, 1, 1, 1.15f },
+        { 5, 30, 4, 25, 1, 1.45f },
+        { 20, 8, 17, 12, 7, 15.35f },
+        { 10, 7, 3, 17, 3, 19.45f },
+        { 21, 17, 14, 15, 5, 8.65f },
+        { 14, 10, 13, 8, 1, -1.25f },
+        { 4, 21, 4, 13, 3, 0.25f },
+        { 30, 1, 24, 10, 1, 2.15f },
+        { 15, 17, 14, 16, 3, 0.15f },
+        { 21, 23, 20, 15, 3, 2.85f },
+        { 17, 20, 17, 18, 3, -2.25f },
+        { 12, 11, 12, 6, 5, 1.75f },
+        { 15, 15, 12, 17, 1, -15.15f },
+        { 25, 9, 16, 25, 6, 4.15f },
+        { 22, 28, 22, 27, 3, -0.45f },
+        { 5, 8, 3, 3, 3, -8.25f },
+        { 9, 5, 9, 1, 1, 1.25f },
+        { 30, 12, 29, 23, 1, -0.85f },
+        { 20, 21, 5, 9, 5, 3.55f },
+        { 15, 21, 15, 20, 1, 0.45f },
+        { 11, 17, 10, 23, 2, -1.25f },
+        { 16, 11, 15, 13, 1, 9.65f },
+        { 16, 12, 16, 10, 1, 1.25f },
+        { 15, 6, 14, 3, 3, 3.15f },
+        { 2, 4, 1, 1, 1, -2.05f },
+        { 15, 16, 11, 15, 1, -6.85f },
+        { 24, 6, 24, 2, 2, -0.05f },
+        { 8, 15, 6, 12, 1, 3.25f },
+        { 21, 27, 1, 30, 1, 7.05f },
+        { 17, 10, 14, 16, 3, 2.35f },
+        { 13, 9, 7, 7, 7, -1.45f },
+        { 22, 17, 19, 17, 1, -1.05f },
+        { 16, 14, 14, 13, 2, 20.25f },
+        { 14, 21, 13, 23, 1, 1.15f },
+        { 18, 2, 15, 7, 2, 1.35f },
+        { 3, 25, 1, 24, 1, 1.05f },
+        { 24, 20, 7, 14, 7, 5.15f },
+        { 26, 25, 24, 19, 2, 2.55f },
+        { 6, 25, 6, 23, 6, 0.55f },
+        { 15, 24, 15, 17, 7, 0.55f },
+        { 22, 14, 16, 15, 1, -0.15f },
+        { 17, 25, 17, 23, 1, 0.65f },
+        { 12, 18, 2, 26, 2, -28.35f },
+        { 30, 30, 26, 11, 1, 3.85f },
+        { 22, 8, 16, 14, 5, 2.05f },
+        { 9, 16, 8, 20, 1, -1.15f },
+        { 4, 14, 2, 13, 2, 3.05f },
+        { 28, 7, 27, 8, 1, -0.95f },
+        { 10, 22, 9, 24, 1, -1.55f },
+        { 14, 16, 13, 18, 3, -0.35f },
+        { 28, 26, 3, 15, 2, 101.95f },
+        { 12, 15, 10, 15, 1, 0.35f },
+        { 18, 17, 17, 15, 1, -2.05f },
+        { 30, 10, 28, 14, 1, -2.15f },
+        { 30, 14, 28, 30, 1, 4.25f },
+        { 30, 18, 7, 13, 1, 105.15f },
+        { 3, 19, 2, 20, 1, 1.15f },
+        { 16, 19, 14, 13, 2, 27.45f },
+        { 11, 9, 5, 27, 4, 30.15f },
+        { 16, 19, 15, 15, 2, 18.45f },
+        { 24, 22, 18, 19, 7, -2.45f },
+        { 12, 17, 12, 12, 1, 1.85f },
+        { 28, 5, 28, 1, 1, 2.95f },
+        { 4, 29, 2, 30, 1, -3.75f },
+        { 27, 11, 27, 8, 1, -0.65f },
+        { 8, 3, 8, 1, 1, 0.05f },
+        { 15, 10, 15, 8, 3, 0.25f },
+        { 12, 27, 11, 18, 4, 34.45f },
+        { 25, 6, 22, 8, 6, -2.05f },
+        { 15, 3, 15, 2, 2, 0.25f },
+        { 19, 22, 17, 19, 1, 3.25f },
+        { 24, 21, 24, 16, 2, 2.05f },
+        { 9, 7, 6, 6, 6, 2.85f },
+        { 13, 26, 11, 27, 2, 3.45f },
+        { 24, 10, 19, 12, 4, 20.95f },
+        { 22, 17, 22, 9, 2, 1.45f },
+        { 17, 14, 14, 11, 1, -1.95f },
+        { 13, 4, 13, 3, 1, -0.35f },
+        { 15, 18, 15, 17, 1, -6.85f },
+        { 29, 30, 29, 24, 1, 1.15f },
+        { 29, 29, 20, 17, 2, -31.95f },
+        { 6, 12, 2, 27, 2, 11.85f },
+        { 18, 17, 14, 13, 2, 2.75f },
+        { 11, 27, 11, 26, 4, 0.15f },
+        { 22, 12, 3, 18, 3, 8.35f },
+        { 15, 13, 13, 9, 1, 1.15f },
+        { 12, 20, 7, 18, 1, 2.15f },
+        { 16, 6, 15, 9, 1, -1.15f },
+        { 3, 6, 1, 7, 1, -1.05f },
+        { 12, 17, 11, 19, 1, 2.45f },
+        { 15, 8, 8, 18, 7, 1.45f },
+        { 11, 19, 11, 5, 3, 0.15f },
+        { 17, 20, 16, 23, 3, -1.65f },
+        { 12, 6, 9, 13, 1, 41.85f },
+        { 2, 1, 1, 2, 1, 0.35f },
+        { 14, 26, 13, 21, 3, 0.65f },
+        { 25, 16, 16, 14, 3, -0.35f },
+        { 30, 14, 29, 14, 1, 0.25f },
+        { 27, 25, 15, 22, 4, 56.75f },
+        { 13, 10, 8, 7, 2, 23.55f },
+        { 18, 19, 13, 14, 1, 88.85f },
+        { 28, 28, 28, 22, 3, -7.25f },
+        { 8, 14, 8, 11, 1, 1.05f },
+        { 23, 28, 22, 24, 2, 0.75f },
+        { 8, 2, 3, 18, 2, -1.05f },
+        { 22, 24, 22, 23, 7, -1.65f },
+        { 20, 17, 15, 16, 1, -9.75f },
+        { 8, 11, 6, 4, 4, -16.95f },
+        { 25, 13, 23, 13, 2, -0.05f },
+        { 18, 18, 16, 15, 1, -10.05f },
+        { 20, 16, 16, 15, 1, 34.15f },
+        { 18, 20, 14, 26, 3, 14.75f },
+        { 17, 12, 17, 8, 1, -0.95f },
+        { 1, 5, 1, 3, 1, 1.45f },
+        { 22, 13, 13, 20, 2, 4.85f },
+        { 17, 16, 17, 14, 3, -0.05f },
+        { 27, 17, 25, 17, 2, -0.35f },
+        { 8, 23, 6, 29, 2, 0.75f },
+        { 15, 4, 14, 18, 1, 64.75f },
+        { 10, 24, 10, 17, 4, 24.25f },
+        { 25, 30, 25, 28, 1, -0.35f },
+        { 3, 22, 1, 29, 1, -13.65f },
+        { 24, 8, 23, 17, 1, 2.85f },
+        { 26, 3, 26, 1, 1, 1.75f },
+        { 18, 22, 18, 17, 2, -0.35f },
+        { 9, 17, 8, 10, 2, 0.25f },
+        { 29, 22, 29, 2, 2, -12.15f },
+        { 19, 4, 5, 10, 3, 108.05f },
+        { 3, 28, 3, 27, 1, -0.35f },
+        { 12, 15, 11, 18, 1, -3.35f },
+        { 30, 3, 28, 4, 1, 1.95f },
+        { 7, 9, 7, 8, 1, -0.35f },
+        { 24, 15, 8, 14, 7, 21.25f },
+        { 30, 6, 20, 16, 1, -20.05f },
+        { 18, 18, 1, 10, 1, 95.85f },
+        { 30, 20, 28, 21, 1, -1.05f },
+        { 15, 15, 13, 14, 1, -17.75f },
+        { 6, 3, 5, 1, 1, -0.55f },
+        { 3, 8, 1, 17, 1, 2.75f },
+        { 3, 2, 2, 2, 2, 0.65f },
+        { 19, 28, 18, 20, 1, 0.75f },
+        { 20, 20, 20, 17, 2, -1.85f },
+        { 21, 30, 19, 29, 1, 2.65f },
+        { 12, 19, 12, 13, 1, -2.15f },
+        { 29, 10, 29, 4, 2, 1.05f },
+        { 20, 16, 20, 14, 1, -0.05f },
+        { 15, 9, 11, 16, 2, 4.25f },
+        { 8, 13, 6, 26, 4, 3.75f },
+        { 13, 11, 12, 8, 2, -13.55f },
+        { 17, 27, 17, 26, 4, -0.05f },
+        { 29, 29, 14, 12, 1, 105.95f },
+        { 29, 2, 28, 3, 2, 0.45f },
+        { 9, 15, 7, 9, 4, 3.05f },
+        { 27, 28, 12, 30, 1, 9.35f },
+        { 14, 30, 2, 28, 1, 79.25f },
+        { 19, 12, 18, 14, 1, 1.75f },
+        { 26, 5, 24, 15, 5, 7.65f },
+        { 2, 24, 2, 2, 2, -0.45f },
+        { 6, 21, 5, 21, 1, 0.95f },
+        { 22, 16, 9, 17, 2, 79.15f },
+        { 16, 19, 15, 17, 1, 28.05f },
+        { 2, 29, 2, 28, 2, 0.05f },
+        { 25, 11, 24, 1, 1, 0.65f },
+        { 16, 30, 16, 29, 1, -0.35f },
+        { 14, 20, 14, 17, 3, 0.95f },
+        { 15, 14, 11, 17, 3, 2.05f },
+        { 18, 17, 16, 21, 1, 1.15f },
+        { 17, 8, 17, 4, 2, 2.75f },
+        { 11, 4, 11, 3, 3, -1.65f },
+        { 25, 16, 9, 17, 6, 8.65f },
+        { 18, 8, 18, 6, 6, 3.55f },
+        { 17, 22, 17, 19, 1, -0.25f },
+        { 8, 20, 3, 11, 3, -28.95f },
+        { 20, 17, 4, 17, 1, -7.35f },
+        { 29, 12, 12, 19, 2, 122.25f },
+        { 14, 29, 14, 28, 2, 0.55f },
+        { 12, 18, 10, 18, 1, 4.75f },
+        { 13, 15, 13, 11, 2, 1.75f },
+        { 18, 15, 14, 15, 2, 11.15f },
+        { 19, 17, 17, 19, 1, 0.15f },
+        { 22, 17, 12, 16, 6, 2.55f },
+        { 30, 22, 29, 18, 1, 0.05f },
+        { 30, 2, 29, 20, 1, -7.95f },
+        { 12, 3, 1, 1, 1, 51.05f },
+        { 4, 7, 1, 7, 1, 6.25f },
+        { 27, 10, 21, 13, 4, 0.05f },
+        { 18, 21, 18, 13, 3, -1.15f },
+        { 12, 4, 3, 6, 2, 0.75f },
+        { 12, 10, 9, 3, 2, 26.65f },
+        { 3, 28, 2, 29, 2, -1.25f },
+        { 22, 2, 20, 5, 2, 1.15f },
+        { 27, 18, 20, 3, 3, -0.55f },
+        { 6, 24, 6, 23, 1, 0.05f },
+        { 27, 26, 9, 16, 4, 5.85f },
+        { 5, 18, 5, 11, 5, 1.55f },
+        { 20, 14, 15, 12, 3, 2.25f },
+        { 19, 16, 19, 15, 1, -1.65f },
+        { 27, 4, 21, 9, 4, -16.85f },
+        { 3, 19, 2, 29, 1, -62.65f },
+        { 20, 24, 18, 22, 1, -1.25f },
+        { 18, 7, 18, 2, 1, -1.05f },
+        { 28, 30, 28, 28, 1, -1.55f },
+        { 11, 24, 10, 9, 1, 1.35f },
+        { 21, 18, 21, 14, 3, 0.25f },
+        { 27, 19, 26, 18, 2, -0.65f },
+        { 16, 18, 10, 6, 6, 0.85f },
+        { 11, 18, 5, 19, 1, 17.45f },
+        { 24, 16, 22, 16, 1, 0.25f },
+        { 17, 15, 17, 9, 5, -9.35f },
+        { 27, 29, 20, 11, 2, 34.35f },
+        { 29, 25, 28, 22, 1, 0.95f },
+        { 21, 11, 21, 5, 1, -0.95f },
+        { 12, 15, 8, 16, 2, -10.05f },
+        { 2, 29, 1, 30, 1, 1.45f },
+        { 18, 12, 4, 21, 3, -6.05f },
+        { 18, 9, 11, 13, 3, 93.25f },
+        { 18, 3, 10, 21, 3, 3.15f },
+        { 17, 11, 16, 16, 1, -10.85f },
+        { 15, 17, 13, 14, 1, -1.65f },
+        { 7, 7, 7, 5, 5, -0.15f },
+        { 9, 29, 5, 18, 2, -2.45f },
+        { 10, 11, 10, 6, 6, -0.35f },
+        { 28, 26, 25, 26, 1, 0.15f },
+        { 19, 30, 8, 20, 1, 118.15f },
+        { 8, 15, 7, 29, 2, -81.85f },
+        { 21, 18, 19, 17, 1, 4.05f },
+        { 2, 22, 1, 22, 1, 1.05f },
+        { 12, 20, 4, 17, 1, -0.85f },
+        { 27, 8, 4, 14, 2, 152.35f },
+        { 26, 10, 25, 13, 1, 0.65f },
+        { 19, 13, 19, 8, 3, 1.35f },
+        { 12, 16, 7, 18, 7, -12.35f },
+        { 20, 26, 12, 3, 3, 95.35f },
+        { 6, 10, 3, 10, 2, -23.25f },
+        { 25, 25, 25, 21, 2, -0.75f },
+        { 12, 3, 7, 16, 2, 75.65f },
+        { 8, 4, 4, 17, 4, 50.85f },
+        { 12, 20, 5, 8, 5, 47.85f },
+        { 22, 15, 8, 13, 7, 2.55f },
+        { 12, 13, 12, 8, 2, 0.55f },
+        { 20, 15, 19, 13, 1, 0.15f },
+        { 30, 5, 29, 8, 1, 0.25f },
+        { 14, 29, 13, 23, 2, 38.15f },
+        { 18, 19, 9, 10, 7, -2.65f },
+        { 2, 11, 1, 10, 1, -1.95f },
+        { 12, 13, 12, 11, 1, -1.05f },
+        { 27, 15, 9, 5, 4, 110.25f },
+        { 13, 12, 7, 17, 2, 35.25f },
+        { 8, 17, 1, 26, 1, 2.65f },
+        { 20, 24, 11, 12, 4, 3.65f },
+        { 12, 24, 10, 22, 6, 18.75f },
+        { 19, 29, 14, 20, 1, 89.45f },
+        { 20, 27, 20, 25, 2, -0.55f },
+        { 9, 25, 8, 27, 1, 0.35f },
+        { 7, 11, 5, 11, 1, 0.25f },
+        { 20, 11, 11, 8, 1, 105.05f },
+        { 9, 8, 9, 5, 1, 0.25f },
+        { 27, 9, 25, 10, 1, 1.25f },
+        { 30, 20, 22, 20, 1, -34.65f },
+        { 26, 21, 26, 20, 1, -0.55f },
+        { 30, 14, 27, 16, 1, -0.15f },
+        { 12, 16, 11, 19, 3, 0.75f },
+        { 7, 28, 6, 29, 1, -0.15f },
+        { 17, 23, 17, 22, 2, -0.15f },
+        { 12, 17, 2, 2, 1, -94.25f },
+        { 17, 14, 17, 13, 1, -12.05f },
+        { 18, 12, 16, 16, 1, -15.35f },
+        { 7, 23, 7, 17, 1, -1.75f },
+        { 25, 12, 9, 15, 4, 31.35f },
+        { 16, 6, 16, 5, 5, 0.15f },
+        { 8, 16, 7, 16, 7, -2.15f },
+        { 6, 7, 5, 7, 5, -0.15f },
+        { 15, 13, 15, 12, 2, -12.05f },
+        { 13, 15, 13, 13, 3, -0.35f },
+        { 16, 12, 16, 11, 1, -0.65f },
+        { 18, 15, 15, 14, 3, -0.55f },
+        { 17, 8, 14, 5, 4, 28.95f },
+        { 9, 26, 6, 22, 5, 39.05f },
+        { 17, 16, 14, 17, 3, 7.05f },
+        { 25, 1, 24, 2, 1, 0.65f },
+        { 14, 16, 14, 15, 1, -1.65f },
+        { 24, 22, 4, 23, 4, 2.85f },
+        { 30, 29, 27, 29, 1, 4.85f },
+        { 17, 18, 17, 17, 1, -1.85f },
+        { 19, 30, 19, 28, 1, 1.75f },
+        { 21, 27, 21, 23, 3, -31.65f },
+        { 16, 18, 15, 20, 1, 0.05f },
+        { 27, 27, 13, 12, 4, 13.75f },
+        { 30, 25, 27, 26, 1, -0.35f },
+        { 4, 21, 3, 7, 1, 0.35f },
+        { 10, 5, 10, 4, 4, -5.75f },
+        { 14, 14, 5, 3, 1, 83.85f },
+        { 23, 6, 21, 3, 3, 0.95f },
+        { 9, 20, 2, 15, 2, 27.95f },
+        { 23, 9, 20, 13, 1, -0.25f },
+        { 15, 14, 12, 3, 3, -19.05f },
+        { 19, 25, 19, 18, 4, 2.45f },
+        { 27, 25, 24, 22, 4, -13.25f },
+        { 15, 15, 15, 11, 1, 44.05f },
+        { 17, 16, 14, 13, 1, 51.85f },
+        { 12, 18, 12, 17, 1, -0.05f },
+        { 30, 3, 30, 2, 1, 0.05f },
+        { 21, 20, 18, 28, 3, 79.35f },
+        { 25, 25, 7, 14, 5, 111.25f },
+        { 3, 11, 2, 3, 2, -61.65f },
+        { 25, 5, 9, 21, 4, 3.05f },
+        { 6, 15, 4, 28, 3, -69.95f },
+        { 9, 9, 3, 3, 3, 35.65f },
+        { 16, 19, 14, 16, 2, 62.05f },
+        { 10, 25, 10, 20, 1, -0.25f },
+        { 2, 17, 2, 15, 1, -1.05f },
+        { 17, 15, 15, 16, 1, -2.95f },
+        { 20, 15, 19, 15, 1, 0.95f },
+        { 22, 2, 22, 1, 1, -0.15f },
+        { 15, 19, 15, 18, 1, -18.15f },
+        { 15, 16, 10, 12, 1, -18.65f },
+        { 28, 2, 23, 14, 2, 74.55f },
+        { 11, 3, 9, 2, 1, 2.65f }
+    };
+
     namespace {
         // Every test compares the means of two boxes centred on rotated pattern points, box_sum takes a box [x0, x1) by [y0, y1) in the coordinates of the window around the centre pixel.
-        template <typename box_sum_type>
-        void describe_boxes(const float angle_radians, const box_sum_type& box_sum, binary<256>& descriptor) {
+        template <size_t size_bits, typename box_sum_type>
+        void describe_boxes(const teblid::test* const tests, const float angle_radians, const box_sum_type& box_sum, binary<size_bits>& descriptor) {
             constexpr static const int window_size = (2 * teblid::window_radius) + 1;
             const auto box_mean = [&](int x0, int y0, int x1, int y1) {
                 x0 = math::max(0, math::min(x0, window_size - 1));
@@ -304,11 +819,11 @@ namespace feature::descriptor {
                 window_x = round_positive((cosine * px) - (sine * py) + static_cast<float>(teblid::window_radius));
                 window_y = round_positive((sine * px) + (cosine * py) + static_cast<float>(teblid::window_radius));
             };
-            for (int byte = 0; byte < 32; ++byte) {
+            for (size_t byte = 0; byte < binary<size_bits>::size_bytes; ++byte) {
                 descriptor.data[byte] = 0;
             }
-            for (int index = 0; index < teblid::test_count; ++index) {
-                const teblid::test& t = teblid::tests[index];
+            for (int index = 0; index < static_cast<int>(size_bits); ++index) {
+                const teblid::test& t = tests[index];
                 int x1 = 0;
                 int y1 = 0;
                 int x2 = 0;
@@ -322,29 +837,38 @@ namespace feature::descriptor {
                 }
             }
         }
+
+        template <size_t size_bits>
+        void describe_window(const teblid::test* const tests, const unsigned char* __restrict const data, const int stride, const float angle_radians, binary<size_bits>& descriptor) {
+            constexpr static const int window_size = (2 * teblid::window_radius) + 1;
+            constexpr static const int integral_size = window_size + 1;
+            int integral_window[integral_size * integral_size];
+            for (int x = 0; x < integral_size; ++x) {
+                integral_window[x] = 0;
+            }
+            for (int y = 1; y < integral_size; ++y) {
+                const unsigned char* const row = data + static_cast<long>(y - 1 - teblid::window_radius) * stride - teblid::window_radius;
+                int row_sum = 0;
+                integral_window[y * integral_size] = 0;
+                for (int x = 1; x < integral_size; ++x) {
+                    row_sum += row[x - 1];
+                    integral_window[(y * integral_size) + x] = integral_window[((y - 1) * integral_size) + x] + row_sum;
+                }
+            }
+            const auto box_sum = [&](const int x0, const int y0, const int x1, const int y1) {
+                const int sum = integral_window[(y1 * integral_size) + x1] - integral_window[(y0 * integral_size) + x1] - integral_window[(y1 * integral_size) + x0] + integral_window[(y0 * integral_size) + x0];
+                return static_cast<float>(sum);
+            };
+            describe_boxes(tests, angle_radians, box_sum, descriptor);
+        }
     }
 
     void teblid::describe(const unsigned char* __restrict const data, const int stride, const float angle_radians, binary<256>& descriptor) {
-        constexpr static const int window_size = (2 * teblid::window_radius) + 1;
-        constexpr static const int integral_size = window_size + 1;
-        int integral_window[integral_size * integral_size];
-        for (int x = 0; x < integral_size; ++x) {
-            integral_window[x] = 0;
-        }
-        for (int y = 1; y < integral_size; ++y) {
-            const unsigned char* const row = data + static_cast<long>(y - 1 - teblid::window_radius) * stride - teblid::window_radius;
-            int row_sum = 0;
-            integral_window[y * integral_size] = 0;
-            for (int x = 1; x < integral_size; ++x) {
-                row_sum += row[x - 1];
-                integral_window[(y * integral_size) + x] = integral_window[((y - 1) * integral_size) + x] + row_sum;
-            }
-        }
-        const auto box_sum = [&](const int x0, const int y0, const int x1, const int y1) {
-            const int sum = integral_window[(y1 * integral_size) + x1] - integral_window[(y0 * integral_size) + x1] - integral_window[(y1 * integral_size) + x0] + integral_window[(y0 * integral_size) + x0];
-            return static_cast<float>(sum);
-        };
-        describe_boxes(angle_radians, box_sum, descriptor);
+        describe_window(teblid::tests, data, stride, angle_radians, descriptor);
+    }
+
+    void teblid::describe(const unsigned char* __restrict const data, const int stride, const float angle_radians, binary<512>& descriptor) {
+        describe_window(teblid::tests_512, data, stride, angle_radians, descriptor);
     }
 
     void teblid::integral(const unsigned char* __restrict const data, const int width, const int height, const int stride, unsigned int* __restrict const integral_data) {
@@ -365,32 +889,43 @@ namespace feature::descriptor {
         }
     }
 
+    namespace {
+        template <size_t size_bits>
+        void describe_integral_with(const teblid::test* const tests, const unsigned int* __restrict const integral_data, const int integral_stride, const float x, const float y, const float angle_radians, binary<size_bits>& descriptor) {
+            const float pixel_x = math::floor(x);
+            const float pixel_y = math::floor(y);
+            const float fraction_x = x - pixel_x;
+            const float fraction_y = y - pixel_y;
+            const unsigned int* __restrict const window = integral_data + static_cast<long>(static_cast<int>(pixel_y) - teblid::window_radius) * integral_stride + (static_cast<int>(pixel_x) - teblid::window_radius);
+            // Note: Large levels wrap the sums, so combine the four corners in unsigned arithmetic before anything else.
+            const auto pixel_box_sum = [&](const int x0, const int y0, const int x1, const int y1) {
+                const unsigned int sum = window[(y1 * integral_stride) + x1] - window[(y0 * integral_stride) + x1] - window[(y1 * integral_stride) + x0] + window[(y0 * integral_stride) + x0];
+                return static_cast<float>(sum);
+            };
+            // Note: The corners of a moved box all share the centre's fraction, so its area sampled sum blends the box with its copies one pixel right and one pixel down.
+            const auto row_box_sum = [&](const int x0, const int y0, const int x1, const int y1) {
+                const float sum = pixel_box_sum(x0, y0, x1, y1);
+                if (fraction_x == 0.0f) {
+                    return sum;
+                }
+                return sum + fraction_x * (pixel_box_sum(x0 + 1, y0, x1 + 1, y1) - sum);
+            };
+            const auto box_sum = [&](const int x0, const int y0, const int x1, const int y1) {
+                const float sum = row_box_sum(x0, y0, x1, y1);
+                if (fraction_y == 0.0f) {
+                    return sum;
+                }
+                return sum + fraction_y * (row_box_sum(x0, y0 + 1, x1, y1 + 1) - sum);
+            };
+            describe_boxes(tests, angle_radians, box_sum, descriptor);
+        }
+    }
+
     void teblid::describe_integral(const unsigned int* __restrict const integral_data, const int integral_stride, const float x, const float y, const float angle_radians, binary<256>& descriptor) {
-        const float pixel_x = math::floor(x);
-        const float pixel_y = math::floor(y);
-        const float fraction_x = x - pixel_x;
-        const float fraction_y = y - pixel_y;
-        const unsigned int* __restrict const window = integral_data + static_cast<long>(static_cast<int>(pixel_y) - teblid::window_radius) * integral_stride + (static_cast<int>(pixel_x) - teblid::window_radius);
-        // Note: Large levels wrap the sums, so combine the four corners in unsigned arithmetic before anything else.
-        const auto pixel_box_sum = [&](const int x0, const int y0, const int x1, const int y1) {
-            const unsigned int sum = window[(y1 * integral_stride) + x1] - window[(y0 * integral_stride) + x1] - window[(y1 * integral_stride) + x0] + window[(y0 * integral_stride) + x0];
-            return static_cast<float>(sum);
-        };
-        // Note: The corners of a moved box all share the centre's fraction, so its area sampled sum blends the box with its copies one pixel right and one pixel down.
-        const auto row_box_sum = [&](const int x0, const int y0, const int x1, const int y1) {
-            const float sum = pixel_box_sum(x0, y0, x1, y1);
-            if (fraction_x == 0.0f) {
-                return sum;
-            }
-            return sum + fraction_x * (pixel_box_sum(x0 + 1, y0, x1 + 1, y1) - sum);
-        };
-        const auto box_sum = [&](const int x0, const int y0, const int x1, const int y1) {
-            const float sum = row_box_sum(x0, y0, x1, y1);
-            if (fraction_y == 0.0f) {
-                return sum;
-            }
-            return sum + fraction_y * (row_box_sum(x0, y0 + 1, x1, y1 + 1) - sum);
-        };
-        describe_boxes(angle_radians, box_sum, descriptor);
+        describe_integral_with(teblid::tests, integral_data, integral_stride, x, y, angle_radians, descriptor);
+    }
+
+    void teblid::describe_integral(const unsigned int* __restrict const integral_data, const int integral_stride, const float x, const float y, const float angle_radians, binary<512>& descriptor) {
+        describe_integral_with(teblid::tests_512, integral_data, integral_stride, x, y, angle_radians, descriptor);
     }
 }

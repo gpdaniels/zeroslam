@@ -71,7 +71,9 @@ namespace mapping {
             enum class descriptor_kind {
                 orb,
                 teblid,
-                bsift
+                bsift,
+                teblid512,
+                bsift512
             };
             tracker_kind tracker = tracker_kind::klt;
             association_kind association = association_kind::both;
@@ -79,9 +81,22 @@ namespace mapping {
             bool affine = false;
             bool blur_weighting = true;
 
-            // Every Hamming gate is an ORB bound times this scale.
+            // Every Hamming gate is an ORB bound times this scale. The 512-bit scales let as many nearest wrong neighbours
+            // within 30 px through each ORB gate (50, 64 and 80 bits) as ORB does, measured on frame pairs one to ten frames
+            // apart in six EuRoC scenes (TEBLID-512 1.70-1.94, bSIFT-512 1.10-1.45).
             float descriptor_distance_scale() const {
-                return (this->descriptor == descriptor_kind::orb) ? 1.0f : 0.75f;
+                switch (this->descriptor) {
+                    case descriptor_kind::orb:
+                        return 1.0f;
+                    case descriptor_kind::teblid:
+                    case descriptor_kind::bsift:
+                        return 0.75f;
+                    case descriptor_kind::teblid512:
+                        return 1.75f;
+                    case descriptor_kind::bsift512:
+                        return 1.3f;
+                }
+                return 1.0f;
             }
 
             bool lines = false;

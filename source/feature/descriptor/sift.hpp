@@ -57,6 +57,15 @@ namespace feature::descriptor {
 
         static void binarise(const float (&vector)[dimensions], binary<256>& descriptor);
 
+        // Four levels per component, as a thermometer code: bit (level * dimensions + component) is set when the component
+        // exceeds that level's threshold, so the Hamming distance between two codes is the L1 distance between their
+        // quantised components. The thresholds are the quintiles of RootSIFT components on EuRoC (within 0.01 on all six
+        // scenes measured).
+        constexpr static const int thermometer_levels = 4;
+        constexpr static const float thermometer_thresholds[thermometer_levels] = { 0.032f, 0.055f, 0.079f, 0.111f };
+
+        static void binarise(const float (&vector)[dimensions], binary<512>& descriptor);
+
         static void describe(
             const unsigned char* __restrict const data,
             const int stride,
@@ -72,6 +81,15 @@ namespace feature::descriptor {
             const float offset_y,
             const float angle_radians,
             binary<256>& descriptor
+        );
+
+        static void describe(
+            const unsigned char* __restrict const data,
+            const int stride,
+            const float offset_x,
+            const float offset_y,
+            const float angle_radians,
+            binary<512>& descriptor
         );
     };
 }

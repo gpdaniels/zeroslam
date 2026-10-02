@@ -212,5 +212,34 @@ int main(int argc, char* argv[]) {
         }
         REQUIRE(complements < 64);
     }
+
+    {
+        // The 512-bit code is a thermometer: a dimension sets one bit per threshold it exceeds, so the Hamming distance between
+        // two codes is the sum over dimensions of how many thresholds lie between their values.
+        float lower[feature::descriptor::sift::dimensions];
+        float upper[feature::descriptor::sift::dimensions];
+        int expected_distance = 0;
+        for (int d = 0; d < feature::descriptor::sift::dimensions; ++d) {
+            lower[d] = 0.15f * static_cast<float>((d * 37) % 128) / 128.0f;
+            upper[d] = lower[d] + ((d % 3 == 0) ? 0.04f : 0.0f);
+            for (int level = 0; level < feature::descriptor::sift::thermometer_levels; ++level) {
+                const float threshold = feature::descriptor::sift::thermometer_thresholds[level];
+                expected_distance += ((lower[d] > threshold) != (upper[d] > threshold)) ? 1 : 0;
+            }
+        }
+        feature::descriptor::binary<512> code_lower;
+        feature::descriptor::binary<512> code_upper;
+        feature::descriptor::sift::binarise(lower, code_lower);
+        feature::descriptor::sift::binarise(upper, code_upper);
+        for (int d = 0; d < feature::descriptor::sift::dimensions; ++d) {
+            for (int level = 0; level < feature::descriptor::sift::thermometer_levels; ++level) {
+                const int bit = (level * feature::descriptor::sift::dimensions) + d;
+                const bool set = ((code_lower.data[bit >> 3] >> (bit & 7)) & 1) != 0;
+                REQUIRE(set == (lower[d] > feature::descriptor::sift::thermometer_thresholds[level]));
+            }
+        }
+        REQUIRE(expected_distance > 0);
+        REQUIRE(static_cast<int>(match::distance::hamming::distance(code_lower, code_upper)) == expected_distance);
+    }
     return EXIT_SUCCESS;
 }
