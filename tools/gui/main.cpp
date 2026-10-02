@@ -46,6 +46,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -1731,32 +1732,38 @@ int main(int argc, char* argv[]) {
                 gl_draw_arrays(GL_POINTS, cloud.vertices, cloud.colours);
             }
 
+            // The trajectory runs through every posed frame, and Keyframes Only thins out the camera poses drawn along it.
             const std::map<int, const gui::render_snapshot::frame*> ordered_frames = [&]() {
                 std::map<int, const gui::render_snapshot::frame*> ordered;
                 for (const auto& [id, pose] : snapshot.frames) {
-                    if (show_keyframes_only && (snapshot.keyframes.count(id) == 0)) {
-                        continue;
-                    }
                     ordered[id] = &pose;
                 }
                 return ordered;
             }();
             const int current_frame = snapshot.processed_frame_count - 1;
             if (show_camera_poses) {
-                int index = 0;
+                std::vector<std::pair<int, const gui::render_snapshot::frame*>> posed;
+                posed.reserve(ordered_frames.size());
                 for (const auto& [id, pose] : ordered_frames) {
-                    const float age = (ordered_frames.size() > 1) ? static_cast<float>(index) / static_cast<float>(ordered_frames.size() - 1) : 0.0f;
+                    if (!show_keyframes_only || (snapshot.keyframes.count(id) != 0)) {
+                        posed.emplace_back(id, pose);
+                    }
+                }
+                // Note: The frustums leave the depth buffer alone, so a frustum at every frame cannot bury the trajectory drawn through them.
+                glDepthMask(GL_FALSE);
+                for (std::size_t index = 0; index < posed.size(); ++index) {
+                    const float age = (posed.size() > 1) ? static_cast<float>(index) / static_cast<float>(posed.size() - 1) : 0.0f;
                     glPushMatrix();
-                    gl_multiply_camera_to_world(*pose);
-                    gl_draw_frustum(*pose, frustum_scale, age, 1.0f - (age * 0.7f), 0.2f);
-                    if (id == current_frame) {
+                    gl_multiply_camera_to_world(*posed[index].second);
+                    gl_draw_frustum(*posed[index].second, frustum_scale, age, 1.0f - (age * 0.7f), 0.2f);
+                    if (posed[index].first == current_frame) {
                         glLineWidth(2.0f);
                         gl_draw_axes(frustum_scale * 2.0f);
                         glLineWidth(line_size);
                     }
                     glPopMatrix();
-                    ++index;
                 }
+                glDepthMask(GL_TRUE);
             }
             if (show_camera_trajectory && (ordered_frames.size() > 1)) {
                 glColor3f(0.0f, 1.0f, 1.0f);
