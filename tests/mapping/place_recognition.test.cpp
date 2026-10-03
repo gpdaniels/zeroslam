@@ -146,5 +146,88 @@ int main(int argc, char* argv[]) {
         REQUIRE(candidates[0].keyframe_id == 10);
     }
 
+    // The ibow engine: places seen by three consecutive keyframes each, as tracked landmarks are, so their words survive
+    // the purge of words seen only once.
+    {
+        mapping::place_recognition recognition;
+        recognition.set_engine(mapping::place_recognition::engine::ibow);
+        REQUIRE(recognition.get_engine() == mapping::place_recognition::engine::ibow);
+        core::random_pcg random(0x1b0eull);
+        const auto noisy_copy = [&random](const std::vector<feature::descriptor::stored>& base, const int flips) {
+            std::vector<feature::descriptor::stored> noisy = base;
+            for (feature::descriptor::stored& descriptor : noisy) {
+                for (int flip = 0; flip < flips; ++flip) {
+                    descriptor[random.get_random_raw() % 32] ^= static_cast<unsigned char>(1u << (random.get_random_raw() % 8));
+                }
+            }
+            return noisy;
+        };
+        std::vector<std::vector<feature::descriptor::stored>> places;
+        int keyframe_id = 0;
+        for (int place = 0; place < 6; ++place) {
+            places.push_back(random_descriptors(random, 150));
+            for (int view = 0; view < 3; ++view) {
+                const std::vector<feature::descriptor::stored> seen = noisy_copy(places.back(), 2);
+                recognition.add_keyframe(keyframe_id++, seen.data(), seen.size());
+            }
+        }
+        REQUIRE(recognition.num_keyframes() == 18);
+        const auto place_of = [](const int id) {
+            return id / 3;
+        };
+
+        // A view of place 2 ranks one of its keyframes first, by tf-idf.
+        const std::vector<feature::descriptor::stored> query = noisy_copy(places[2], 6);
+        const std::vector<mapping::place_recognition::candidate> ranked = recognition.get_candidates(query.data(), query.size(), 100, 5);
+        REQUIRE(!ranked.empty());
+        REQUIRE(place_of(ranked[0].keyframe_id) == 2);
+        REQUIRE(ranked[0].votes > 50);
+        for (size_t i = 1; i < ranked.size(); ++i) {
+            REQUIRE(ranked[i].score <= ranked[i - 1].score);
+        }
+
+        // A loop query returns one keyframe per island, the place first; keyframes it may not close with never come back.
+        const auto none = [](const int) {
+            return false;
+        };
+        const std::vector<mapping::place_recognition::candidate> islands = recognition.get_loop_candidates(query.data(), query.size(), 100, 5, none);
+        REQUIRE(!islands.empty());
+        REQUIRE(place_of(islands[0].keyframe_id) == 2);
+        for (size_t i = 1; i < islands.size(); ++i) {
+            REQUIRE(place_of(islands[i].keyframe_id) != 2);
+        }
+        const auto not_place_2 = [&place_of](const int id) {
+            return place_of(id) == 2;
+        };
+        for (const mapping::place_recognition::candidate& candidate : recognition.get_loop_candidates(query.data(), query.size(), 100, 5, not_place_2)) {
+            REQUIRE(place_of(candidate.keyframe_id) != 2);
+        }
+
+        // The island next to the last query's choice goes first, even when another island scores higher.
+        const std::vector<feature::descriptor::stored> first_visit = noisy_copy(places[4], 6);
+        REQUIRE(place_of(recognition.get_loop_candidates(first_visit.data(), first_visit.size(), 100, 5, none)[0].keyframe_id) == 4);
+        std::vector<feature::descriptor::stored> mixed = noisy_copy(places[1], 6);
+        mixed.resize(100);
+        const std::vector<feature::descriptor::stored> some_of_4 = noisy_copy(places[4], 6);
+        mixed.insert(mixed.end(), some_of_4.begin(), some_of_4.begin() + 50);
+        const std::vector<mapping::place_recognition::candidate> preferred = recognition.get_loop_candidates(mixed.data(), mixed.size(), 100, 5, none);
+        REQUIRE(preferred.size() >= 2);
+        REQUIRE(place_of(preferred[0].keyframe_id) == 4);
+        REQUIRE(place_of(preferred[1].keyframe_id) == 1);
+
+        // Removing a place's keyframes removes it from the rankings.
+        for (int removed = 6; removed < 9; ++removed) {
+            recognition.remove_keyframe(removed);
+        }
+        REQUIRE(recognition.num_keyframes() == 15);
+        for (const mapping::place_recognition::candidate& candidate : recognition.get_candidates(query.data(), query.size(), 100, 15)) {
+            REQUIRE(place_of(candidate.keyframe_id) != 2);
+        }
+        // Switching engines empties the index.
+        recognition.set_engine(mapping::place_recognition::engine::hbst);
+        REQUIRE(recognition.num_keyframes() == 0);
+        REQUIRE(recognition.get_candidates(query.data(), query.size(), 100, 5).empty());
+    }
+
     return EXIT_SUCCESS;
 }
