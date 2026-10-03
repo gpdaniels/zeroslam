@@ -132,6 +132,17 @@ namespace mapping {
 
         bool covisible_revisit_loop(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const int candidate_id, const keyframe& candidate, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<correspondence>& pairs, const std::vector<std::pair<size_t, size_t>>& pair_records, result& outcome) const;
 
+        // The pairs the similarity predicts within the guided search's radius, mutual nearest descriptors in both keyframes,
+        // among the records neither side has paired yet; returns how many were added.
+        size_t guided_pairs(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const keyframe& candidate, const math::sim3<double>& correction, std::vector<unsigned char>& current_paired, std::vector<unsigned char>& recorded_paired, std::vector<estimation::correspondence_3d_3d<double>>& correspondences, std::vector<correspondence>& pairs, std::vector<std::pair<size_t, size_t>>& pair_records) const;
+
+        // Whether a pair reprojects through the similarity within the bound in both keyframes.
+        static bool reprojects(const math::se3<double>& pose, const sensor::model& camera, const record& current_record, const keyframe& candidate, const record& recorded_record, const estimation::correspondence_3d_3d<double>& correspondence, const math::sim3<double>& similarity, const math::sim3<double>& similarity_inverse, const double bound_squared);
+
+        // The similarity refined over the seeded pairs by their reprojection into both keyframes, the pairs then beyond the
+        // inlier bound dropped and the rest solved again.
+        static math::sim3<double> refine_similarity(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const keyframe& candidate, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, const std::vector<unsigned char>& seeded, const size_t seeded_count, const math::sim3<double>& initial);
+
         bool verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::stored>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const;
 
     public:

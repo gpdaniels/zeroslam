@@ -356,9 +356,133 @@ namespace mapping {
         return true;
     }
 
+    size_t loop_closure::guided_pairs(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const keyframe& candidate, const math::sim3<double>& correction, std::vector<unsigned char>& current_paired, std::vector<unsigned char>& recorded_paired, std::vector<estimation::correspondence_3d_3d<double>>& correspondences, std::vector<correspondence>& pairs, std::vector<std::pair<size_t, size_t>>& pair_records) const {
+        const std::vector<record>& candidate_records = candidate.records;
+        const auto project_into = [](const sensor::model& into_camera, const math::se3<double>& into_pose, const math::matrix<double, 3, 1>& world, double (&pixel)[2]) -> bool {
+            const math::matrix<double, 3, 1> in_camera = into_pose * world;
+            return into_camera.project(in_camera.data(), &pixel[0]);
+        };
+        const unsigned int guided_bound = static_cast<unsigned int>(loop_closure::guided_hamming_maximum * this->hamming_scale);
+        const double radius_squared = loop_closure::guided_search_radius * loop_closure::guided_search_radius;
+        const auto nearest = [&](const feature::descriptor::stored& descriptor, const record* const searched, const size_t searched_size, const std::vector<unsigned char>& claimed, const double (&predicted)[2]) -> size_t {
+            size_t best = static_cast<size_t>(-1);
+            unsigned int best_distance = guided_bound;
+            for (size_t i = 0; i < searched_size; ++i) {
+                if (claimed[i] != 0) {
+                    continue;
+                }
+                const double offset_x = static_cast<double>(searched[i].pixel_x) - predicted[0];
+                const double offset_y = static_cast<double>(searched[i].pixel_y) - predicted[1];
+                if (((offset_x * offset_x) + (offset_y * offset_y)) > radius_squared) {
+                    continue;
+                }
+                const unsigned int distance = match::distance::hamming::distance(descriptor, searched[i].descriptor);
+                if (distance < best_distance) {
+                    best_distance = distance;
+                    best = i;
+                }
+            }
+            return best;
+        };
+        const math::sim3<double> into_recorded = correction;
+        const math::sim3<double> into_current = correction.inverse();
+        std::vector<size_t> current_to_recorded(keyframe_records_size, static_cast<size_t>(-1));
+        std::vector<size_t> recorded_to_current(candidate_records.size(), static_cast<size_t>(-1));
+        for (size_t i = 0; i < keyframe_records_size; ++i) {
+            double predicted[2] = {};
+            if ((current_paired[i] != 0) || !project_into(candidate.camera, candidate.pose, into_recorded * keyframe_records[i].location, predicted)) {
+                continue;
+            }
+            current_to_recorded[i] = nearest(keyframe_records[i].descriptor, candidate_records.data(), candidate_records.size(), recorded_paired, predicted);
+        }
+        for (size_t j = 0; j < candidate_records.size(); ++j) {
+            double predicted[2] = {};
+            if ((recorded_paired[j] != 0) || !project_into(camera, pose, into_current * candidate_records[j].location, predicted)) {
+                continue;
+            }
+            recorded_to_current[j] = nearest(candidate_records[j].descriptor, keyframe_records, keyframe_records_size, current_paired, predicted);
+        }
+        size_t added = 0;
+        for (size_t i = 0; i < keyframe_records_size; ++i) {
+            const size_t j = current_to_recorded[i];
+            if ((j == static_cast<size_t>(-1)) || (recorded_to_current[j] != i)) {
+                continue;
+            }
+            correspondences.push_back({ keyframe_records[i].location, candidate_records[j].location });
+            pairs.push_back({ keyframe_records[i].landmark_id, candidate_records[j].landmark_id });
+            pair_records.push_back({ i, j });
+            current_paired[i] = 1;
+            recorded_paired[j] = 1;
+            ++added;
+        }
+        return added;
+    }
+
+    bool loop_closure::reprojects(const math::se3<double>& pose, const sensor::model& camera, const record& current_record, const keyframe& candidate, const record& recorded_record, const estimation::correspondence_3d_3d<double>& correspondence, const math::sim3<double>& similarity, const math::sim3<double>& similarity_inverse, const double bound_squared) {
+        const math::matrix<double, 3, 1> current_in_loop = candidate.pose * (similarity * correspondence.lhs);
+        const math::matrix<double, 3, 1> recorded_in_current = pose * (similarity_inverse * correspondence.rhs);
+        double projected_in_loop[2] = {};
+        double projected_in_current[2] = {};
+        if (!candidate.camera.project(current_in_loop.data(), &projected_in_loop[0]) || !camera.project(recorded_in_current.data(), &projected_in_current[0])) {
+            return false;
+        }
+        const double loop_error_x = projected_in_loop[0] - static_cast<double>(recorded_record.pixel_x);
+        const double loop_error_y = projected_in_loop[1] - static_cast<double>(recorded_record.pixel_y);
+        const double current_error_x = projected_in_current[0] - static_cast<double>(current_record.pixel_x);
+        const double current_error_y = projected_in_current[1] - static_cast<double>(current_record.pixel_y);
+        return ((loop_error_x * loop_error_x) + (loop_error_y * loop_error_y) <= bound_squared) && ((current_error_x * current_error_x) + (current_error_y * current_error_y) <= bound_squared);
+    }
+
+    math::sim3<double> loop_closure::refine_similarity(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const keyframe& candidate, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, const std::vector<unsigned char>& seeded, const size_t seeded_count, const math::sim3<double>& initial) {
+        optimisation::factor_graph refinement;
+        double parameters[8] = { initial.transformation().translation()[0], initial.transformation().translation()[1], initial.transformation().translation()[2], initial.transformation().rotation().get_quaternion()[1], initial.transformation().rotation().get_quaternion()[2], initial.transformation().rotation().get_quaternion()[3], initial.transformation().rotation().get_quaternion()[0], initial.scale() };
+        optimisation::vertex similarity_vertex{ optimisation::vertices::similarity() };
+        similarity_vertex.set_parameters(&parameters[0], 8);
+        optimisation::vertex* const vertex = refinement.add_vertex(static_cast<optimisation::vertex&&>(similarity_vertex));
+        const optimisation::loss lossfunction(optimisation::losses::huber(math::sqrt(loop_closure::reprojection_inlier_bound_squared)));
+        const auto add_edge = [&](const math::matrix<double, 3, 1>& location, const sensor::model& observer_camera, const math::se3<double>& observer_pose, const bool inverted, const float pixel_x, const float pixel_y) -> optimisation::edge* {
+            optimisation::edge factor{ optimisation::edges::similarity_reprojection(sensor::camera::model<double>(observer_camera), location, observer_pose, inverted) };
+            factor.add_vertex(vertex);
+            const double observed[2] = { static_cast<double>(pixel_x), static_cast<double>(pixel_y) };
+            factor.set_observation(math::matrix<double, 0, 0>(2, 1, &observed[0]));
+            factor.set_loss(lossfunction);
+            return refinement.add_edge(static_cast<optimisation::edge&&>(factor));
+        };
+        std::vector<std::pair<optimisation::edge*, optimisation::edge*>> factors;
+        factors.reserve(correspondences.size());
+        for (size_t i = 0; i < correspondences.size(); ++i) {
+            if (seeded[i] == 0) {
+                factors.push_back({ nullptr, nullptr });
+                continue;
+            }
+            const record& current_record = keyframe_records[pair_records[i].first];
+            const record& recorded_record = candidate.records[pair_records[i].second];
+            factors.push_back({ add_edge(correspondences[i].lhs, candidate.camera, candidate.pose, false, recorded_record.pixel_x, recorded_record.pixel_y), add_edge(correspondences[i].rhs, camera, pose, true, current_record.pixel_x, current_record.pixel_y) });
+        }
+        static_cast<void>(refinement.solve(loop_closure::refine_rounds, true));
+        static_cast<void>(refinement.get_current_chi(true));
+        size_t dropped = 0;
+        for (const std::pair<optimisation::edge*, optimisation::edge*>& factor : factors) {
+            if ((factor.first == nullptr) || (factor.second == nullptr)) {
+                continue;
+            }
+            if ((factor.first->chi2() > loop_closure::reprojection_inlier_bound_squared) || (factor.second->chi2() > loop_closure::reprojection_inlier_bound_squared)) {
+                static_cast<void>(refinement.remove_edge(factor.first));
+                static_cast<void>(refinement.remove_edge(factor.second));
+                ++dropped;
+            }
+        }
+        if ((dropped > 0) && (dropped < seeded_count)) {
+            static_cast<void>(refinement.solve(loop_closure::refine_rounds, true));
+        }
+        const double* const refined = vertex->get_parameters();
+        return math::sim3<double>(math::se3<double>(math::so3<double>(refined[6], refined[3], refined[4], refined[5]), { { refined[0], refined[1], refined[2] } }), refined[7]);
+    }
+
     bool loop_closure::verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::stored>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const {
         const keyframe* const candidate_keyframe = &candidate;
         const std::vector<record>& candidate_records = candidate_keyframe->records;
+        core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d: %zu records against %zu.", keyframe_id, candidate_id, candidate_records.size(), keyframe_records_size);
 
         std::unordered_map<int, size_t> recorded_by_landmark;
         recorded_by_landmark.reserve(candidate_records.size());
@@ -483,83 +607,11 @@ namespace mapping {
         math::sim3<double> correction(math::se3<double>(math::so3<double>(rotation), translation), model.scale);
 
         const size_t paired = correspondences.size();
-        size_t guided = 0;
-        {
-            const auto project_into = [](const sensor::model& into_camera, const math::se3<double>& into_pose, const math::matrix<double, 3, 1>& world, double (&pixel)[2]) -> bool {
-                const math::matrix<double, 3, 1> in_camera = into_pose * world;
-                return into_camera.project(in_camera.data(), &pixel[0]);
-            };
-            const unsigned int guided_bound = static_cast<unsigned int>(loop_closure::guided_hamming_maximum * this->hamming_scale);
-            const double radius_squared = loop_closure::guided_search_radius * loop_closure::guided_search_radius;
-            const auto nearest = [&](const feature::descriptor::stored& descriptor, const record* const searched, const size_t searched_size, const std::vector<unsigned char>& claimed, const double (&predicted)[2]) -> size_t {
-                size_t best = static_cast<size_t>(-1);
-                unsigned int best_distance = guided_bound;
-                for (size_t i = 0; i < searched_size; ++i) {
-                    if (claimed[i] != 0) {
-                        continue;
-                    }
-                    const double offset_x = static_cast<double>(searched[i].pixel_x) - predicted[0];
-                    const double offset_y = static_cast<double>(searched[i].pixel_y) - predicted[1];
-                    if (((offset_x * offset_x) + (offset_y * offset_y)) > radius_squared) {
-                        continue;
-                    }
-                    const unsigned int distance = match::distance::hamming::distance(descriptor, searched[i].descriptor);
-                    if (distance < best_distance) {
-                        best_distance = distance;
-                        best = i;
-                    }
-                }
-                return best;
-            };
-            const math::sim3<double> into_recorded = correction;
-            const math::sim3<double> into_current = correction.inverse();
-            std::vector<size_t> current_to_recorded(keyframe_records_size, static_cast<size_t>(-1));
-            std::vector<size_t> recorded_to_current(candidate_records.size(), static_cast<size_t>(-1));
-            for (size_t i = 0; i < keyframe_records_size; ++i) {
-                double predicted[2] = {};
-                if ((current_paired[i] != 0) || !project_into(candidate_keyframe->camera, candidate_keyframe->pose, into_recorded * keyframe_records[i].location, predicted)) {
-                    continue;
-                }
-                current_to_recorded[i] = nearest(keyframe_records[i].descriptor, candidate_records.data(), candidate_records.size(), recorded_paired, predicted);
-            }
-            for (size_t j = 0; j < candidate_records.size(); ++j) {
-                double predicted[2] = {};
-                if ((recorded_paired[j] != 0) || !project_into(camera, pose, into_current * candidate_records[j].location, predicted)) {
-                    continue;
-                }
-                recorded_to_current[j] = nearest(candidate_records[j].descriptor, keyframe_records, keyframe_records_size, current_paired, predicted);
-            }
-            for (size_t i = 0; i < keyframe_records_size; ++i) {
-                const size_t j = current_to_recorded[i];
-                if ((j == static_cast<size_t>(-1)) || (recorded_to_current[j] != i)) {
-                    continue;
-                }
-                correspondences.push_back({ keyframe_records[i].location, candidate_records[j].location });
-                pairs.push_back({ keyframe_records[i].landmark_id, candidate_records[j].landmark_id });
-                pair_records.push_back({ i, j });
-                current_paired[i] = 1;
-                recorded_paired[j] = 1;
-                ++guided;
-            }
-            outcome.correspondences = correspondences.size();
-        }
+        const size_t guided = this->guided_pairs(pose, camera, keyframe_records, keyframe_records_size, candidate, correction, current_paired, recorded_paired, correspondences, pairs, pair_records);
+        outcome.correspondences = correspondences.size();
 
-        // Whether pair i reprojects through the similarity within the bound in both keyframes.
-        const auto reprojects = [&](const size_t i, const math::sim3<double>& similarity, const math::sim3<double>& similarity_inverse, const double bound_squared) -> bool {
-            const record& current_record = keyframe_records[pair_records[i].first];
-            const record& recorded_record = candidate_records[pair_records[i].second];
-            const math::matrix<double, 3, 1> current_in_loop = candidate_keyframe->pose * (similarity * correspondences[i].lhs);
-            const math::matrix<double, 3, 1> recorded_in_current = pose * (similarity_inverse * correspondences[i].rhs);
-            double projected_in_loop[2] = {};
-            double projected_in_current[2] = {};
-            if (!candidate_keyframe->camera.project(current_in_loop.data(), &projected_in_loop[0]) || !camera.project(recorded_in_current.data(), &projected_in_current[0])) {
-                return false;
-            }
-            const double loop_error_x = projected_in_loop[0] - static_cast<double>(recorded_record.pixel_x);
-            const double loop_error_y = projected_in_loop[1] - static_cast<double>(recorded_record.pixel_y);
-            const double current_error_x = projected_in_current[0] - static_cast<double>(current_record.pixel_x);
-            const double current_error_y = projected_in_current[1] - static_cast<double>(current_record.pixel_y);
-            return ((loop_error_x * loop_error_x) + (loop_error_y * loop_error_y) <= bound_squared) && ((current_error_x * current_error_x) + (current_error_y * current_error_y) <= bound_squared);
+        const auto pair_reprojects = [&](const size_t i, const math::sim3<double>& similarity, const math::sim3<double>& similarity_inverse, const double bound_squared) {
+            return loop_closure::reprojects(pose, camera, keyframe_records[pair_records[i].first], candidate, candidate_records[pair_records[i].second], correspondences[i], similarity, similarity_inverse, bound_squared);
         };
 
         // The pairs the refinement starts from: with refine_from_hypothesis those the first similarity reprojects within the
@@ -572,7 +624,7 @@ namespace mapping {
             const double radius_squared = loop_closure::guided_search_radius * loop_closure::guided_search_radius;
             size_t explained = 0;
             for (size_t i = 0; i < correspondences.size(); ++i) {
-                seeded[i] = reprojects(i, correction, correction_inverse, radius_squared) ? 1 : 0;
+                seeded[i] = pair_reprojects(i, correction, correction_inverse, radius_squared) ? 1 : 0;
                 explained += seeded[i];
             }
             if (explained >= 3) {
@@ -583,61 +635,17 @@ namespace mapping {
             }
         }
 
-        {
-            optimisation::factor_graph refinement;
-            double parameters[8] = { correction.transformation().translation()[0], correction.transformation().translation()[1], correction.transformation().translation()[2], correction.transformation().rotation().get_quaternion()[1], correction.transformation().rotation().get_quaternion()[2], correction.transformation().rotation().get_quaternion()[3], correction.transformation().rotation().get_quaternion()[0], correction.scale() };
-            optimisation::vertex similarity_vertex{ optimisation::vertices::similarity() };
-            similarity_vertex.set_parameters(&parameters[0], 8);
-            optimisation::vertex* const vertex = refinement.add_vertex(static_cast<optimisation::vertex&&>(similarity_vertex));
-            const optimisation::loss lossfunction(optimisation::losses::huber(math::sqrt(loop_closure::reprojection_inlier_bound_squared)));
-            const auto add_edge = [&](const math::matrix<double, 3, 1>& location, const sensor::model& observer_camera, const math::se3<double>& observer_pose, const bool inverted, const float pixel_x, const float pixel_y) -> optimisation::edge* {
-                optimisation::edge factor{ optimisation::edges::similarity_reprojection(sensor::camera::model<double>(observer_camera), location, observer_pose, inverted) };
-                factor.add_vertex(vertex);
-                const double observed[2] = { static_cast<double>(pixel_x), static_cast<double>(pixel_y) };
-                factor.set_observation(math::matrix<double, 0, 0>(2, 1, &observed[0]));
-                factor.set_loss(lossfunction);
-                return refinement.add_edge(static_cast<optimisation::edge&&>(factor));
-            };
-            std::vector<std::pair<optimisation::edge*, optimisation::edge*>> factors;
-            factors.reserve(correspondences.size());
-            for (size_t i = 0; i < correspondences.size(); ++i) {
-                if (seeded[i] == 0) {
-                    factors.push_back({ nullptr, nullptr });
-                    continue;
-                }
-                const record& current_record = keyframe_records[pair_records[i].first];
-                const record& recorded_record = candidate_records[pair_records[i].second];
-                factors.push_back({ add_edge(correspondences[i].lhs, candidate_keyframe->camera, candidate_keyframe->pose, false, recorded_record.pixel_x, recorded_record.pixel_y), add_edge(correspondences[i].rhs, camera, pose, true, current_record.pixel_x, current_record.pixel_y) });
-            }
-            static_cast<void>(refinement.solve(loop_closure::refine_rounds, true));
-            static_cast<void>(refinement.get_current_chi(true));
-            size_t dropped = 0;
-            for (const std::pair<optimisation::edge*, optimisation::edge*>& factor : factors) {
-                if ((factor.first == nullptr) || (factor.second == nullptr)) {
-                    continue;
-                }
-                if ((factor.first->chi2() > loop_closure::reprojection_inlier_bound_squared) || (factor.second->chi2() > loop_closure::reprojection_inlier_bound_squared)) {
-                    static_cast<void>(refinement.remove_edge(factor.first));
-                    static_cast<void>(refinement.remove_edge(factor.second));
-                    ++dropped;
-                }
-            }
-            if ((dropped > 0) && (dropped < seeded_count)) {
-                static_cast<void>(refinement.solve(loop_closure::refine_rounds, true));
-            }
-            const double* const refined = vertex->get_parameters();
-            correction = math::sim3<double>(math::se3<double>(math::so3<double>(refined[6], refined[3], refined[4], refined[5]), { { refined[0], refined[1], refined[2] } }), refined[7]);
-            if (!foreign_submap && ((correction.scale() > loop_closure::max_scale_ratio) || (correction.scale() < 1.0 / loop_closure::max_scale_ratio))) {
-                core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d rejected, the refined scale %.4f is not plausible.", keyframe_id, candidate_id, correction.scale());
-                return false;
-            }
+        correction = loop_closure::refine_similarity(pose, camera, keyframe_records, candidate, correspondences, pair_records, seeded, seeded_count, correction);
+        if (!foreign_submap && ((correction.scale() > loop_closure::max_scale_ratio) || (correction.scale() < 1.0 / loop_closure::max_scale_ratio))) {
+            core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d rejected, the refined scale %.4f is not plausible.", keyframe_id, candidate_id, correction.scale());
+            return false;
         }
 
         const math::sim3<double> correction_inverse = correction.inverse();
         size_t paired_inliers = 0;
         outcome.matches.reserve(correspondences.size());
         for (size_t i = 0; i < correspondences.size(); ++i) {
-            if (!reprojects(i, correction, correction_inverse, loop_closure::reprojection_inlier_bound_squared)) {
+            if (!pair_reprojects(i, correction, correction_inverse, loop_closure::reprojection_inlier_bound_squared)) {
                 continue;
             }
             outcome.matches.push_back(pairs[i]);
