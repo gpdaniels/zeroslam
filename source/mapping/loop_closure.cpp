@@ -17,7 +17,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "mapping/loop_closure.hpp"
 
 #include "core/logger.hpp"
+#include "core/random_pcg.hpp"
 #include "estimation/correspondence_3d_3d.hpp"
+#include "estimation/minimal/similarity_3_point.hpp"
 #include "estimation/robust/solver/similarity.hpp"
 #include "match/distance/hamming.hpp"
 #include "match/matcher/bruteforce.hpp"
@@ -229,6 +231,131 @@ namespace mapping {
         return outcome;
     }
 
+    bool loop_closure::reprojection_consensus(const math::se3<double>& pose, const sensor::model& camera, const keyframe& candidate, const record* const keyframe_records, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, double (&rotation)[3][3], double (&translation)[3], double& scale, size_t& supporters) {
+        const size_t count = correspondences.size();
+        supporters = 0;
+        if (count < 3) {
+            return false;
+        }
+        const auto support = [&](const double (&hypothesis_rotation)[9], const double (&hypothesis_translation)[3], const double hypothesis_scale, std::vector<size_t>* const inliers) {
+            if (!(hypothesis_scale > 0.0) || !math::isfinite(hypothesis_scale)) {
+                return static_cast<size_t>(0);
+            }
+            const math::matrix<double, 3, 3> rotation_matrix = { { { hypothesis_rotation[0], hypothesis_rotation[1], hypothesis_rotation[2] }, { hypothesis_rotation[3], hypothesis_rotation[4], hypothesis_rotation[5] }, { hypothesis_rotation[6], hypothesis_rotation[7], hypothesis_rotation[8] } } };
+            const math::matrix<double, 3, 1> translation_vector = { { hypothesis_translation[0], hypothesis_translation[1], hypothesis_translation[2] } };
+            const math::matrix<double, 3, 3> rotation_inverse = math::transpose(rotation_matrix);
+            size_t supported = 0;
+            for (size_t i = 0; i < count; ++i) {
+                const record& current_record = keyframe_records[pair_records[i].first];
+                const record& recorded_record = candidate.records[pair_records[i].second];
+                const math::matrix<double, 3, 1> in_loop = candidate.pose * ((rotation_matrix * correspondences[i].lhs) * hypothesis_scale + translation_vector);
+                const math::matrix<double, 3, 1> in_current = pose * ((rotation_inverse * (correspondences[i].rhs - translation_vector)) * (1.0 / hypothesis_scale));
+                double projected_in_loop[2] = {};
+                double projected_in_current[2] = {};
+                if (!(in_loop[2] > 0.0) || !(in_current[2] > 0.0) || !candidate.camera.project(in_loop.data(), &projected_in_loop[0]) || !camera.project(in_current.data(), &projected_in_current[0])) {
+                    continue;
+                }
+                const double loop_x = projected_in_loop[0] - static_cast<double>(recorded_record.pixel_x);
+                const double loop_y = projected_in_loop[1] - static_cast<double>(recorded_record.pixel_y);
+                const double current_x = projected_in_current[0] - static_cast<double>(current_record.pixel_x);
+                const double current_y = projected_in_current[1] - static_cast<double>(current_record.pixel_y);
+                if (((loop_x * loop_x) + (loop_y * loop_y) > loop_closure::reprojection_inlier_bound_squared) || ((current_x * current_x) + (current_y * current_y) > loop_closure::reprojection_inlier_bound_squared)) {
+                    continue;
+                }
+                ++supported;
+                if (inliers != nullptr) {
+                    inliers->push_back(i);
+                }
+            }
+            return supported;
+        };
+        // Deterministic samples, as many as the support found so far leaves needed to draw a supported triple with 99%
+        // probability, between 10 and 300.
+        core::random_pcg random(0x5113ull + static_cast<unsigned long long>(count));
+        double best_rotation[9] = {};
+        double best_translation[3] = {};
+        double best_scale = 0.0;
+        size_t best = 0;
+        size_t needed = 300;
+        for (size_t iteration = 0; (iteration < needed) && (iteration < 300); ++iteration) {
+            size_t picks[3] = { 0, 0, 0 };
+            picks[0] = random.get_random(0u, static_cast<unsigned int>(count - 1));
+            do {
+                picks[1] = random.get_random(0u, static_cast<unsigned int>(count - 1));
+            } while (picks[1] == picks[0]);
+            do {
+                picks[2] = random.get_random(0u, static_cast<unsigned int>(count - 1));
+            } while ((picks[2] == picks[0]) || (picks[2] == picks[1]));
+            double source[9];
+            double target[9];
+            for (size_t p = 0; p < 3; ++p) {
+                for (size_t axis = 0; axis < 3; ++axis) {
+                    source[(p * 3) + axis] = correspondences[picks[p]].lhs[axis];
+                    target[(p * 3) + axis] = correspondences[picks[p]].rhs[axis];
+                }
+            }
+            double hypothesis_rotation[9];
+            double hypothesis_translation[3];
+            double hypothesis_scale = 0.0;
+            if (!estimation::minimal::similarity_3_point<double>::solve(&source[0], &target[0], 3, hypothesis_rotation, hypothesis_translation, hypothesis_scale)) {
+                continue;
+            }
+            const size_t supported = support(hypothesis_rotation, hypothesis_translation, hypothesis_scale, nullptr);
+            if (supported <= best) {
+                continue;
+            }
+            best = supported;
+            for (size_t i = 0; i < 9; ++i) {
+                best_rotation[i] = hypothesis_rotation[i];
+            }
+            for (size_t i = 0; i < 3; ++i) {
+                best_translation[i] = hypothesis_translation[i];
+            }
+            best_scale = hypothesis_scale;
+            const double fraction = static_cast<double>(best) / static_cast<double>(count);
+            const double all_supported = fraction * fraction * fraction;
+            needed = (all_supported >= 1.0) ? 10 : math::max<size_t>(10, static_cast<size_t>(math::log(0.01) / math::log(1.0 - all_supported)) + 1);
+        }
+        if (best < 3) {
+            return false;
+        }
+        std::vector<size_t> inliers;
+        support(best_rotation, best_translation, best_scale, &inliers);
+        std::vector<double> source(inliers.size() * 3);
+        std::vector<double> target(inliers.size() * 3);
+        for (size_t i = 0; i < inliers.size(); ++i) {
+            for (size_t axis = 0; axis < 3; ++axis) {
+                source[(i * 3) + axis] = correspondences[inliers[i]].lhs[axis];
+                target[(i * 3) + axis] = correspondences[inliers[i]].rhs[axis];
+            }
+        }
+        double refit_rotation[9];
+        double refit_translation[3];
+        double refit_scale = 0.0;
+        if (estimation::minimal::similarity_3_point<double>::solve(source.data(), target.data(), inliers.size(), refit_rotation, refit_translation, refit_scale)) {
+            const size_t refit_supported = support(refit_rotation, refit_translation, refit_scale, nullptr);
+            if (refit_supported >= best) {
+                best = refit_supported;
+                for (size_t i = 0; i < 9; ++i) {
+                    best_rotation[i] = refit_rotation[i];
+                }
+                for (size_t i = 0; i < 3; ++i) {
+                    best_translation[i] = refit_translation[i];
+                }
+                best_scale = refit_scale;
+            }
+        }
+        for (size_t row = 0; row < 3; ++row) {
+            for (size_t column = 0; column < 3; ++column) {
+                rotation[row][column] = best_rotation[(row * 3) + column];
+            }
+            translation[row] = best_translation[row];
+        }
+        scale = best_scale;
+        supporters = best;
+        return true;
+    }
+
     bool loop_closure::verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::stored>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const {
         const keyframe* const candidate_keyframe = &candidate;
         const std::vector<record>& candidate_records = candidate_keyframe->records;
@@ -338,7 +465,7 @@ namespace mapping {
         std::vector<size_t> inliers(correspondences.size());
         size_t inliers_size = 0;
         estimation::robust::solver::similarity<double>::model_type model{};
-        const bool solved = estimation::robust::solver::similarity<double>::solve(correspondences.data(), correspondences.size(), inlier_threshold, residuals.data(), inliers.data(), inliers_size, model);
+        const bool solved = this->reprojection_hypotheses ? loop_closure::reprojection_consensus(pose, camera, candidate, keyframe_records, correspondences, pair_records, model.rotation, model.translation, model.scale, inliers_size) : estimation::robust::solver::similarity<double>::solve(correspondences.data(), correspondences.size(), inlier_threshold, residuals.data(), inliers.data(), inliers_size, model);
         if (!solved) {
             core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d rejected, no similarity fits its %zu shared landmarks (%zu by id).", keyframe_id, candidate_id, correspondences.size(), shared_by_id);
             return false;
@@ -634,6 +761,10 @@ namespace mapping {
 
     place_recognition::engine loop_closure::get_place_recognition() const {
         return this->recognition.get_engine();
+    }
+
+    void loop_closure::set_reprojection_hypotheses(const bool enabled) {
+        this->reprojection_hypotheses = enabled;
     }
 
     void loop_closure::set_covisible_revisits(const bool enabled) {

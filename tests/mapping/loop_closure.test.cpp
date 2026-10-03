@@ -179,6 +179,23 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Scored by reprojection the same revisit verifies to the same similarity.
+    {
+        closure.set_reprojection_hypotheses(true);
+        const mapping::loop_closure::result result = closure.detect(40, current_pose, test_camera(), unconnected, revisit.data(), revisit.size());
+        closure.set_reprojection_hypotheses(false);
+        REQUIRE(result.found);
+        REQUIRE(result.keyframe_id == 0);
+        REQUIRE(result.inliers == 35);
+        REQUIRE(is_value_approx(result.correction.scale(), 1.0 / 1.1, 1e-6));
+        for (size_t i = 0; i < 35; ++i) {
+            const math::matrix<double, 3, 1> corrected = result.correction * revisit[i].location;
+            for (size_t axis = 0; axis < 3; ++axis) {
+                REQUIRE(is_value_approx(corrected[axis], first[i].location[axis], 1e-6));
+            }
+        }
+    }
+
     {
         std::vector<mapping::loop_closure::record> misobserved = revisit;
         for (size_t i = 0; i < misobserved.size(); ++i) {
@@ -188,6 +205,9 @@ int main(int argc, char* argv[]) {
         const mapping::loop_closure::result result = closure.detect(40, current_pose, test_camera(), unconnected, misobserved.data(), misobserved.size());
         REQUIRE(!result.found);
         REQUIRE(result.inliers < mapping::loop_closure::min_inliers);
+        closure.set_reprojection_hypotheses(true);
+        REQUIRE(!closure.detect(40, current_pose, test_camera(), unconnected, misobserved.data(), misobserved.size()).found);
+        closure.set_reprojection_hypotheses(false);
     }
 
     {

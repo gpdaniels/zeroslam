@@ -103,6 +103,13 @@ namespace mapping {
         std::unordered_map<int, keyframe> keyframes;
         float hamming_scale = 1.0f;
         bool covisible_revisits = true;
+        // Whether the first similarity of a verification comes from hypotheses scored by reprojection into both keyframes,
+        // as ORB-SLAM3 scores them, rather than by 3D distance.
+        bool reprojection_hypotheses = false;
+
+        // Similarities rhs = s R lhs + t from three pairs at a time, each supported by the pairs that reproject within the
+        // inlier bound in both keyframes, and the best refitted on its supporters.
+        static bool reprojection_consensus(const math::se3<double>& pose, const sensor::model& camera, const keyframe& candidate, const record* const keyframe_records, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, double (&rotation)[3][3], double (&translation)[3], double& scale, size_t& supporters);
 
         // The candidate's records of the keyframe's landmarks, by landmark id.
         static void shared_landmarks(const record* const keyframe_records, const size_t keyframe_records_size, const keyframe& candidate, std::vector<estimation::correspondence_3d_3d<double>>& correspondences, std::vector<correspondence>& pairs, std::vector<std::pair<size_t, size_t>>& pair_records);
@@ -139,6 +146,10 @@ namespace mapping {
         // visits. The drift is measured in the world frame, so a map without a fixed one, as relative adjustment holds
         // it, has to leave these to the appearance loops, whose similarity does not depend on the world frame.
         void set_covisible_revisits(const bool enabled);
+
+        // Whether a verification's first similarity is scored by reprojection into both keyframes (see
+        // reprojection_hypotheses) rather than by 3D distance.
+        void set_reprojection_hypotheses(const bool enabled);
 
         std::vector<int> recall(const feature::descriptor::stored* const descriptors, const size_t descriptors_size, const size_t max_recalled) const;
 
