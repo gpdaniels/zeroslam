@@ -599,6 +599,31 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // A loop that rescales the map threefold, as a monocular map drifts to over a long loop, is held for three keyframes
+        // even when one is enough for others, and then closes rather than being refused as implausible.
+        {
+            const math::sim3<double> rescaled(math::se3<double>(math::so3<double>::exp({ { 0.0, 0.0, 0.05 } }), { { 0.4, -0.3, 0.2 } }), 3.0);
+            std::vector<mapping::loop_closure::record> far = place;
+            for (size_t i = 0; i < far.size(); ++i) {
+                far[i].landmark_id = 5000 + static_cast<int>(i);
+                far[i].location = rescaled * place[i].location;
+            }
+            mapping::loop_closure rescaling;
+            earlier_visit(rescaling);
+            rescaling.set_loop_confirmations(1);
+            for (int keyframe_id = 40; keyframe_id < 43; ++keyframe_id) {
+                const math::se3<double> from = shifted(current_pose, 0.3 * static_cast<double>(keyframe_id - 40));
+                const std::vector<mapping::loop_closure::record> records = seen_from(far, from);
+                const mapping::loop_closure::result result = rescaling.detect(keyframe_id, from, test_camera(), unconnected, records.data(), records.size());
+                REQUIRE(result.found == (keyframe_id == 42));
+                if (result.found) {
+                    REQUIRE(result.keyframe_id < 3);
+                    REQUIRE(is_value_approx(result.correction.scale(), 1.0 / 3.0, 1e-6));
+                }
+                rescaling.add_keyframe(keyframe_id, from, test_camera(), records.data(), records.size());
+            }
+        }
+
         // Held, dropped after two keyframes that do not verify it, then found and confirmed afresh.
         {
             mapping::loop_closure dropping;

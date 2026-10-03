@@ -49,7 +49,7 @@ namespace mapping {
     loop_closure::loop_closure()
         : recognition()
         , keyframes()
-        , pending{ false, -1, -1, math::sim3<double>::identity(), math::sim3<double>::identity(), 0, 0 } {
+        , pending{ false, -1, -1, math::sim3<double>::identity(), math::sim3<double>::identity(), 0, 0, 0 } {
     }
 
     void loop_closure::shared_landmarks(const record* const keyframe_records, const size_t keyframe_records_size, const keyframe& candidate, std::vector<estimation::correspondence_3d_3d<double>>& correspondences, std::vector<correspondence>& pairs, std::vector<std::pair<size_t, size_t>>& pair_records) {
@@ -111,8 +111,8 @@ namespace mapping {
                     this->pending.keyframe_id = keyframe_id;
                     this->pending.correction = correction;
                     this->pending.relative = math::sim3<double>(candidate->second.pose, 1.0) * correction * math::sim3<double>(pose.inverse(), 1.0);
-                    if (this->pending.confirmations < this->loop_confirmations) {
-                        core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d verified again, %zu inliers, %zu of %zu keyframes.", keyframe_id, this->pending.candidate_id, inliers, this->pending.confirmations, this->loop_confirmations);
+                    if (this->pending.confirmations < this->pending.required) {
+                        core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d verified again, %zu inliers, %zu of %zu keyframes.", keyframe_id, this->pending.candidate_id, inliers, this->pending.confirmations, this->pending.required);
                         return outcome;
                     }
                     this->pending.active = false;
@@ -129,7 +129,7 @@ namespace mapping {
                 ++this->pending.failures;
                 core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d not verified again, %zu inliers.", keyframe_id, this->pending.candidate_id, inliers);
                 if (this->pending.failures >= loop_closure::max_confirmation_failures) {
-                    core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d dropped, verified by %zu of %zu keyframes before %zu in a row did not.", keyframe_id, this->pending.candidate_id, this->pending.confirmations, this->loop_confirmations, this->pending.failures);
+                    core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d dropped, verified by %zu of %zu keyframes before %zu in a row did not.", keyframe_id, this->pending.candidate_id, this->pending.confirmations, this->pending.required, this->pending.failures);
                     this->pending.active = false;
                 }
             }
@@ -190,7 +190,7 @@ namespace mapping {
                 }
                 result attempt = unfound();
                 if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found, attempt)) {
-                    return this->confirm_or_hold(keyframe_id, graph, attempt);
+                    return this->confirm_or_hold(keyframe_id, submap_start_id, graph, attempt);
                 }
                 if (&candidate == &candidates.front()) {
                     outcome.correspondences = attempt.correspondences;
@@ -237,7 +237,7 @@ namespace mapping {
                 }
                 result attempt = unfound();
                 if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found->second, attempt)) {
-                    return this->confirm_or_hold(keyframe_id, graph, attempt);
+                    return this->confirm_or_hold(keyframe_id, submap_start_id, graph, attempt);
                 }
                 // When nothing verifies, the counts reported are those of the best ranked candidate.
                 if (verified == 0) {
@@ -267,7 +267,7 @@ namespace mapping {
                 }
                 result attempt = unfound();
                 if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found->second, attempt)) {
-                    return this->confirm_or_hold(keyframe_id, graph, attempt);
+                    return this->confirm_or_hold(keyframe_id, submap_start_id, graph, attempt);
                 }
                 ++foreign_verified;
             }
@@ -541,6 +541,10 @@ namespace mapping {
         }
         const std::vector<unsigned char> seeded(correspondences.size(), static_cast<unsigned char>(1));
         const math::sim3<double> refined = loop_closure::refine_similarity(pose, camera, keyframe_records, candidate, correspondences, pair_records, seeded, correspondences.size(), correction);
+        const double scale_change = refined.scale() / correction.scale();
+        if (!(scale_change <= loop_closure::max_confirmation_scale_change) || !(scale_change >= 1.0 / loop_closure::max_confirmation_scale_change)) {
+            return 0;
+        }
         const math::sim3<double> refined_inverse = refined.inverse();
         for (size_t i = 0; i < correspondences.size(); ++i) {
             if (loop_closure::reprojects(pose, camera, keyframe_records[pair_records[i].first], candidate, candidate.records[pair_records[i].second], correspondences[i], refined, refined_inverse, loop_closure::reprojection_inlier_bound_squared)) {
@@ -551,8 +555,11 @@ namespace mapping {
         return matches.size();
     }
 
-    loop_closure::result loop_closure::confirm_or_hold(const int keyframe_id, const covisibility& graph, const result& verified) {
-        if (this->loop_confirmations <= 1) {
+    loop_closure::result loop_closure::confirm_or_hold(const int keyframe_id, const int submap_start_id, const covisibility& graph, const result& verified) {
+        const double scale = verified.correction.scale();
+        const bool rescaling = (verified.keyframe_id >= submap_start_id) && ((scale > loop_closure::max_scale_ratio) || (scale < 1.0 / loop_closure::max_scale_ratio));
+        const size_t required = rescaling ? math::max(this->loop_confirmations, loop_closure::rescaling_confirmations) : this->loop_confirmations;
+        if (required <= 1) {
             return verified;
         }
         const keyframe& candidate = this->keyframes.at(verified.keyframe_id);
@@ -567,7 +574,7 @@ namespace mapping {
         size_t confirmations = 1;
         size_t tried = 0;
         for (const int other_id : covisible) {
-            if ((confirmations >= this->loop_confirmations) || (tried >= loop_closure::max_confirming_covisibles)) {
+            if ((confirmations >= required) || (tried >= loop_closure::max_confirming_covisibles)) {
                 break;
             }
             const std::unordered_map<int, keyframe>::const_iterator other = this->keyframes.find(other_id);
@@ -581,13 +588,13 @@ namespace mapping {
             core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d %s by covisible keyframe %d, %zu inliers.", keyframe_id, verified.keyframe_id, (inliers >= loop_closure::min_inliers) ? "verified" : "not verified", other_id, inliers);
             confirmations += (inliers >= loop_closure::min_inliers) ? 1 : 0;
         }
-        if (confirmations >= this->loop_confirmations) {
+        if (confirmations >= required) {
             core::logger::log(core::logger::level::note, "Loop detected keyframe %d -> %d, verified by %zu keyframes, %zu inliers at this one, scale %.4f, translation %.4f.", keyframe_id, verified.keyframe_id, confirmations, verified.inliers, verified.correction.scale(), math::sqrt(verified.correction.transformation().translation().get_length_squared()));
             this->pending.active = false;
             return verified;
         }
-        this->pending = pending_loop{ true, verified.keyframe_id, keyframe_id, verified.correction, verified.relative, confirmations, 0 };
-        core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d held, verified by %zu of %zu keyframes.", keyframe_id, verified.keyframe_id, confirmations, this->loop_confirmations);
+        this->pending = pending_loop{ true, verified.keyframe_id, keyframe_id, verified.correction, verified.relative, confirmations, required, 0 };
+        core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d held, verified by %zu of %zu keyframes.", keyframe_id, verified.keyframe_id, confirmations, required);
         result held = verified;
         held.found = false;
         held.matches.clear();
@@ -715,7 +722,7 @@ namespace mapping {
                                                         { model.rotation[2][0], model.rotation[2][1], model.rotation[2][2] } } };
         const math::matrix<double, 3, 1> translation = { { model.translation[0], model.translation[1], model.translation[2] } };
         const bool foreign_submap = candidate_id < submap_start_id;
-        if (!foreign_submap && ((model.scale > loop_closure::max_scale_ratio) || (model.scale < 1.0 / loop_closure::max_scale_ratio))) {
+        if (!foreign_submap && ((model.scale > loop_closure::max_rescaling_ratio) || (model.scale < 1.0 / loop_closure::max_rescaling_ratio))) {
             core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d rejected, scale %.4f is not plausible.", keyframe_id, candidate_id, model.scale);
             return false;
         }
@@ -751,7 +758,7 @@ namespace mapping {
         }
 
         correction = loop_closure::refine_similarity(pose, camera, keyframe_records, candidate, correspondences, pair_records, seeded, seeded_count, correction);
-        if (!foreign_submap && ((correction.scale() > loop_closure::max_scale_ratio) || (correction.scale() < 1.0 / loop_closure::max_scale_ratio))) {
+        if (!foreign_submap && ((correction.scale() > loop_closure::max_rescaling_ratio) || (correction.scale() < 1.0 / loop_closure::max_rescaling_ratio))) {
             core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d rejected, the refined scale %.4f is not plausible.", keyframe_id, candidate_id, correction.scale());
             return false;
         }
@@ -784,7 +791,7 @@ namespace mapping {
         outcome.correction = correction;
         outcome.relative = math::sim3<double>(candidate_keyframe->pose, 1.0) * outcome.correction * math::sim3<double>(pose.inverse(), 1.0);
         // A loop that waits for more keyframes to verify it is reported by confirm_or_hold.
-        core::logger::log(core::logger::level::note, (this->loop_confirmations <= 1) ? "Loop detected keyframe %d -> %d, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity, scale %.4f, translation %.4f." : "Loop candidate keyframe %d -> %d verified, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity, scale %.4f, translation %.4f.", keyframe_id, candidate_id, outcome.inliers, correspondences.size(), shared_by_id, guided, correction.scale(), math::sqrt(correction.transformation().translation().get_length_squared()));
+        core::logger::log(core::logger::level::note, ((this->loop_confirmations <= 1) && (foreign_submap || ((correction.scale() <= loop_closure::max_scale_ratio) && (correction.scale() >= 1.0 / loop_closure::max_scale_ratio)))) ? "Loop detected keyframe %d -> %d, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity, scale %.4f, translation %.4f." : "Loop candidate keyframe %d -> %d verified, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity, scale %.4f, translation %.4f.", keyframe_id, candidate_id, outcome.inliers, correspondences.size(), shared_by_id, guided, correction.scale(), math::sqrt(correction.transformation().translation().get_length_squared()));
         return true;
     }
 

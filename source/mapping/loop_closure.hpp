@@ -91,6 +91,13 @@ namespace mapping {
         constexpr static const size_t foreign_min_inliers = 25;
         constexpr static const double foreign_min_inlier_fraction = 0.3;
         constexpr static const double max_scale_ratio = 2.0;
+        // A loop between keyframes of one submap whose scale is beyond max_scale_ratio, as a monocular map drifts to over a
+        // long loop (KITTI 06 and 07, 2.5 and 3.3 over 1.2 and 0.7 km), is taken only once rescaling_confirmations
+        // keyframes verify it, each within max_confirmation_scale_change of the loop's scale, and never beyond
+        // max_rescaling_ratio.
+        constexpr static const double max_rescaling_ratio = 10.0;
+        constexpr static const size_t rescaling_confirmations = 3;
+        constexpr static const double max_confirmation_scale_change = 1.2;
         // With accept_by_inliers, a similarity this many reprojection inliers support is accepted whatever share of the
         // initial pairs they are: the guided search finds most of a true loop's inliers, and the share of the initial pairs
         // does not count them (79 of the 224 true pairs verification refused for inliers on EuRoC had 15 or more, up to 83
@@ -120,6 +127,7 @@ namespace mapping {
             math::sim3<double> correction;
             math::sim3<double> relative;
             size_t confirmations;
+            size_t required;
             size_t failures;
         };
 
@@ -165,12 +173,14 @@ namespace mapping {
         static math::sim3<double> refine_similarity(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const keyframe& candidate, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, const std::vector<unsigned char>& seeded, const size_t seeded_count, const math::sim3<double>& initial);
 
         // How many of a keyframe's records the similarity explains against the candidate's: the pairs shared by id and those
-        // the guided search finds, the similarity refined over them and the inliers counted, which matches receives.
+        // the guided search finds, the similarity refined over them and the inliers counted, which matches receives; none
+        // when the refined scale strays beyond max_confirmation_scale_change of the given one.
         size_t confirm(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const keyframe& candidate, math::sim3<double>& correction, std::vector<correspondence>& matches) const;
 
         // A verified loop as reported: at once when loop_confirmations is one or enough keyframes covisible with the keyframe
-        // verify it as well, otherwise held as the pending loop and not found.
-        result confirm_or_hold(const int keyframe_id, const covisibility& graph, const result& verified);
+        // verify it as well, otherwise held as the pending loop and not found. A loop within one submap that rescales the map
+        // beyond max_scale_ratio needs rescaling_confirmations whatever loop_confirmations is.
+        result confirm_or_hold(const int keyframe_id, const int submap_start_id, const covisibility& graph, const result& verified);
 
         bool verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::stored>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const;
 

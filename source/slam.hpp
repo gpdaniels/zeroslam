@@ -724,6 +724,10 @@ private:
             return false;
         }
 
+        // A loop that rescales the map (verified by several keyframes, see mapping::loop_closure::max_scale_ratio) may rescale
+        // the keyframes up to a margin beyond its own scale.
+        const double loop_scale_ratio = math::max(loop.correction.scale(), 1.0 / loop.correction.scale());
+        const double rescale_bound = math::max(mapping::loop_closure::max_scale_ratio, slam::loop_rescale_margin * loop_scale_ratio);
         std::unordered_map<int, math::sim3<double>> corrected;
         for (const auto& [id, vertex] : vertices) {
             const double* const p = vertex->get_parameters();
@@ -733,7 +737,7 @@ private:
             if (joining && (this->submap_of(id) == current_submap)) {
                 continue;
             }
-            if ((similarity.scale() > mapping::loop_closure::max_scale_ratio) || (similarity.scale() < 1.0 / mapping::loop_closure::max_scale_ratio)) {
+            if ((similarity.scale() > rescale_bound) || (similarity.scale() < 1.0 / rescale_bound)) {
                 core::logger::log(core::logger::level::warn, "Loop %d -> %d not closed, the pose graph rescales keyframe %d by %.3f.", keyframe_id, loop.keyframe_id, id, similarity.scale());
                 return false;
             }
@@ -2184,6 +2188,8 @@ private:
     // keyframe's insertion pass every adjustment and loop correction since as drift: with them ibow, the reprojection
     // hypotheses and the acceptance by inliers closed loops that bent ETH3D planar_2 from 0.16 to 55 cm, refreshed 0.41 cm.
     static constexpr bool refresh_loop_records = true;
+    // How far beyond a loop's own scale the pose graph may rescale a keyframe before the loop is refused.
+    static constexpr double loop_rescale_margin = 1.5;
 
     // The active point tracks that own a landmark still in the map.
     size_t landmark_track_count() {
