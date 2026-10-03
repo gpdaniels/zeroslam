@@ -243,6 +243,29 @@ int main(int argc, char* argv[]) {
         }
         const char* const bad_local_map = "local_map=octree\n";
         REQUIRE(zeroslam_set_configuration(system, bad_local_map, static_cast<int>(std::strlen(bad_local_map))) == zeroslam_return_failure_invalid_configuration);
+        // Each place recognition reads back, and an unknown one is rejected.
+        const char* const place_recognitions[2] = { "place_recognition=ibow\n", "place_recognition=hbst\n" };
+        for (int index = 0; index < 2; ++index) {
+            REQUIRE(zeroslam_set_configuration(system, place_recognitions[index], static_cast<int>(std::strlen(place_recognitions[index]))) == zeroslam_return_success);
+            REQUIRE(zeroslam_get_configuration(system, nullptr, &length) == zeroslam_return_failure_insufficient_data_length);
+            buffer.assign(static_cast<size_t>(length), '\0');
+            capacity = length;
+            REQUIRE(zeroslam_get_configuration(system, buffer.data(), &capacity) == zeroslam_return_success);
+            REQUIRE(std::strstr(buffer.data(), place_recognitions[index]) != nullptr);
+        }
+        const char* const bad_place_recognition = "place_recognition=dbow\n";
+        REQUIRE(zeroslam_set_configuration(system, bad_place_recognition, static_cast<int>(std::strlen(bad_place_recognition))) == zeroslam_return_failure_invalid_configuration);
+        const char* const loop_revisits[2] = { "loop_revisits=off\n", "loop_revisits=on\n" };
+        for (int index = 0; index < 2; ++index) {
+            REQUIRE(zeroslam_set_configuration(system, loop_revisits[index], static_cast<int>(std::strlen(loop_revisits[index]))) == zeroslam_return_success);
+            REQUIRE(zeroslam_get_configuration(system, nullptr, &length) == zeroslam_return_failure_insufficient_data_length);
+            buffer.assign(static_cast<size_t>(length), '\0');
+            capacity = length;
+            REQUIRE(zeroslam_get_configuration(system, buffer.data(), &capacity) == zeroslam_return_success);
+            REQUIRE(std::strstr(buffer.data(), loop_revisits[index]) != nullptr);
+        }
+        const char* const bad_loop_revisits = "loop_revisits=sometimes\n";
+        REQUIRE(zeroslam_set_configuration(system, bad_loop_revisits, static_cast<int>(std::strlen(bad_loop_revisits))) == zeroslam_return_failure_invalid_configuration);
 
         const char* const collisions_off = "collisions=off\nanchor=off\nanchor_refresh=off\n";
         REQUIRE(zeroslam_set_configuration(system, collisions_off, static_cast<int>(std::strlen(collisions_off))) == zeroslam_return_success);

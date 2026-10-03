@@ -116,6 +116,17 @@ namespace mapping {
                 fallback
             };
             local_map_kind local_map = local_map_kind::voxels;
+            // Which place recognition proposes loops: hbst counts the keyframes of the descriptors in the query's leaf of a
+            // Hamming binary search tree, ibow scores the keyframes through an incremental vocabulary of binary words and
+            // groups them into islands (iBoW-LCD).
+            enum class place_recognition_kind {
+                hbst,
+                ibow
+            };
+            place_recognition_kind place_recognition = place_recognition_kind::hbst;
+            // Whether a keyframe that shares landmarks with an earlier one closes a loop when the shared landmarks have moved
+            // since the earlier keyframe recorded them (a covisible revisit).
+            bool loop_revisits = true;
             int global_adjustment_keyframes = 10;
             // How the map is adjusted as keyframes arrive: absolute, a window of world poses with periodic global adjustments
             // and a pose graph at each loop, or relative, an adaptive region of a graph of relative transforms (see

@@ -3320,7 +3320,8 @@ public:
         mapping::frame& frame_added = this->reconstruction.frames.at(frame_id);
 
         this->loop_closure_.set_hamming_scale(this->frontend.descriptor_distance_scale());
-        this->loop_closure_.set_covisible_revisits(!this->relative_adjustment());
+        this->loop_closure_.set_place_recognition((this->frontend.place_recognition == mapping::frame::settings::place_recognition_kind::ibow) ? mapping::place_recognition::engine::ibow : mapping::place_recognition::engine::hbst);
+        this->loop_closure_.set_covisible_revisits(this->frontend.loop_revisits && !this->relative_adjustment());
         this->reconstruction.line_ray_angle_degrees = this->frontend.line_angle;
         this->reconstruction.solver_strategy = this->frontend.solver;
         this->reconstruction.solver_precision = this->frontend.solver_precision;
