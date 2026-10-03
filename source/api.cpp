@@ -122,6 +122,7 @@ namespace {
     constexpr static const char configuration_key_local_map[] = "local_map";
     constexpr static const char configuration_key_place_recognition[] = "place_recognition";
     constexpr static const char configuration_key_loop_revisits[] = "loop_revisits";
+    constexpr static const char configuration_key_loop_confirmations[] = "loop_confirmations";
     constexpr static const char configuration_key_global_adjustment[] = "global_adjustment";
     constexpr static const char configuration_key_adjustment[] = "adjustment";
     constexpr static const char configuration_key_depth[] = "depth";
@@ -228,7 +229,7 @@ namespace {
         return std::snprintf(
             buffer,
             capacity,
-            "%s=%d\n%s=%s\n%s=%.9g\n%s=%s\n%s=%.9g\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n",
+            "%s=%d\n%s=%s\n%s=%.9g\n%s=%s\n%s=%.9g\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n",
             configuration_key_verbosity,
             core::logger::get_verbosity(),
             configuration_key_detector,
@@ -259,6 +260,8 @@ namespace {
             (frontend.place_recognition == mapping::frame::settings::place_recognition_kind::ibow) ? "ibow" : "hbst",
             configuration_key_loop_revisits,
             frontend.loop_revisits ? "on" : "off",
+            configuration_key_loop_confirmations,
+            frontend.loop_confirmations,
             configuration_key_global_adjustment,
             &global_adjustment[0],
             configuration_key_adjustment,
@@ -551,6 +554,13 @@ namespace {
                 else {
                     return false;
                 }
+            }
+            else if (token_equals(line, key_length, configuration_key_loop_confirmations)) {
+                int confirmations = 0;
+                if (!parse_configuration_int(value, value_length, confirmations) || (confirmations < 1)) {
+                    return false;
+                }
+                frontend.loop_confirmations = confirmations;
             }
             else if (token_equals(line, key_length, configuration_key_place_recognition)) {
                 if (token_equals(value, value_length, "hbst")) {

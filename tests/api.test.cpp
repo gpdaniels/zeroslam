@@ -266,6 +266,19 @@ int main(int argc, char* argv[]) {
         }
         const char* const bad_loop_revisits = "loop_revisits=sometimes\n";
         REQUIRE(zeroslam_set_configuration(system, bad_loop_revisits, static_cast<int>(std::strlen(bad_loop_revisits))) == zeroslam_return_failure_invalid_configuration);
+        const char* const loop_confirmations[2] = { "loop_confirmations=3\n", "loop_confirmations=1\n" };
+        for (int index = 0; index < 2; ++index) {
+            REQUIRE(zeroslam_set_configuration(system, loop_confirmations[index], static_cast<int>(std::strlen(loop_confirmations[index]))) == zeroslam_return_success);
+            REQUIRE(zeroslam_get_configuration(system, nullptr, &length) == zeroslam_return_failure_insufficient_data_length);
+            buffer.assign(static_cast<size_t>(length), '\0');
+            capacity = length;
+            REQUIRE(zeroslam_get_configuration(system, buffer.data(), &capacity) == zeroslam_return_success);
+            REQUIRE(std::strstr(buffer.data(), loop_confirmations[index]) != nullptr);
+        }
+        const char* const bad_loop_confirmations[2] = { "loop_confirmations=0\n", "loop_confirmations=three\n" };
+        for (int index = 0; index < 2; ++index) {
+            REQUIRE(zeroslam_set_configuration(system, bad_loop_confirmations[index], static_cast<int>(std::strlen(bad_loop_confirmations[index]))) == zeroslam_return_failure_invalid_configuration);
+        }
 
         const char* const collisions_off = "collisions=off\nanchor=off\nanchor_refresh=off\n";
         REQUIRE(zeroslam_set_configuration(system, collisions_off, static_cast<int>(std::strlen(collisions_off))) == zeroslam_return_success);

@@ -507,6 +507,115 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // A loop must be verified by three keyframes before it is reported: here two keyframes covisible with the one that finds
+    // it see the revisit too and confirm it at once; without them the loop is held until the next keyframes confirm it; and
+    // two keyframes in a row that do not verify it drop it, so that it has to be found and confirmed afresh.
+    {
+        core::random_pcg confirming_random(0xc0f1ae3ull);
+        std::vector<mapping::loop_closure::record> place;
+        for (int landmark_id = 0; landmark_id < 60; ++landmark_id) {
+            place.push_back(random_record(confirming_random, landmark_id));
+        }
+        const auto seen_from = [](std::vector<mapping::loop_closure::record> records, const math::se3<double>& from) {
+            observe_records(records, from);
+            return records;
+        };
+        const auto shifted = [](const math::se3<double>& from, const double x) {
+            return math::se3<double>(math::so3<double>::identity(), { { x, 0.0, 0.0 } }) * from;
+        };
+        std::vector<mapping::loop_closure::record> revisited = place;
+        for (size_t i = 0; i < revisited.size(); ++i) {
+            revisited[i].landmark_id = 4000 + static_cast<int>(i);
+            revisited[i].location = drift * place[i].location;
+        }
+        std::vector<std::vector<mapping::loop_closure::record>> fillers;
+        for (int keyframe_id = 3; keyframe_id < 38; ++keyframe_id) {
+            std::vector<mapping::loop_closure::record> records;
+            for (int i = 0; i < 30; ++i) {
+                records.push_back(random_record(confirming_random, 6000 + (100 * keyframe_id) + i));
+            }
+            fillers.push_back(seen_from(records, identity));
+        }
+        std::vector<mapping::loop_closure::record> unrelated;
+        for (int i = 0; i < 60; ++i) {
+            unrelated.push_back(random_record(confirming_random, 9000 + i));
+        }
+        const auto earlier_visit = [&](mapping::loop_closure& closure_under_test) {
+            closure_under_test.set_loop_confirmations(3);
+            for (int keyframe_id = 0; keyframe_id < 3; ++keyframe_id) {
+                const std::vector<mapping::loop_closure::record> records = seen_from(place, shifted(identity, 0.15 * static_cast<double>(keyframe_id - 1)));
+                closure_under_test.add_keyframe(keyframe_id, shifted(identity, 0.15 * static_cast<double>(keyframe_id - 1)), test_camera(), records.data(), records.size());
+            }
+            for (int keyframe_id = 3; keyframe_id < 38; ++keyframe_id) {
+                const std::vector<mapping::loop_closure::record>& records = fillers[static_cast<size_t>(keyframe_id - 3)];
+                closure_under_test.add_keyframe(keyframe_id, identity, test_camera(), records.data(), records.size());
+            }
+        };
+
+        // Confirmed at once by the two covisible keyframes.
+        {
+            mapping::loop_closure confirming;
+            earlier_visit(confirming);
+            mapping::covisibility graph;
+            for (size_t i = 0; i < revisited.size(); ++i) {
+                const int observers[3] = { 38, 39, 40 };
+                graph.update(revisited[i].landmark_id, &observers[0], 3);
+            }
+            for (int keyframe_id = 38; keyframe_id < 40; ++keyframe_id) {
+                const math::se3<double> from = shifted(current_pose, 0.1 * static_cast<double>(keyframe_id - 40));
+                const std::vector<mapping::loop_closure::record> records = seen_from(revisited, from);
+                confirming.add_keyframe(keyframe_id, from, test_camera(), records.data(), records.size());
+            }
+            const std::vector<mapping::loop_closure::record> records = seen_from(revisited, current_pose);
+            const mapping::loop_closure::result result = confirming.detect(40, current_pose, test_camera(), graph, records.data(), records.size());
+            REQUIRE(result.found);
+            REQUIRE(result.keyframe_id < 3);
+            REQUIRE(result.inliers == revisited.size());
+            REQUIRE(is_value_approx(result.correction.scale(), 1.0 / 1.1, 1e-6));
+        }
+
+        // Held, then confirmed by the next two keyframes, the loop reported for the last of them.
+        {
+            mapping::loop_closure holding;
+            earlier_visit(holding);
+            for (int keyframe_id = 40; keyframe_id < 43; ++keyframe_id) {
+                const math::se3<double> from = shifted(current_pose, 0.1 * static_cast<double>(keyframe_id - 40));
+                const std::vector<mapping::loop_closure::record> records = seen_from(revisited, from);
+                const mapping::loop_closure::result result = holding.detect(keyframe_id, from, test_camera(), unconnected, records.data(), records.size());
+                REQUIRE(result.found == (keyframe_id == 42));
+                if (result.found) {
+                    REQUIRE(result.keyframe_id < 3);
+                    REQUIRE(result.inliers == revisited.size());
+                    for (const mapping::loop_closure::correspondence& match : result.matches) {
+                        REQUIRE(match.landmark_id == match.recorded_landmark_id + 4000);
+                    }
+                    REQUIRE(is_value_approx(result.correction.scale(), 1.0 / 1.1, 1e-6));
+                    const math::sim3<double> expected_relative = math::sim3<double>(shifted(identity, 0.15 * static_cast<double>(result.keyframe_id - 1)), 1.0) * result.correction * math::sim3<double>(from.inverse(), 1.0);
+                    for (size_t axis = 0; axis < 3; ++axis) {
+                        REQUIRE(is_value_approx(result.relative.transformation().translation()[axis], expected_relative.transformation().translation()[axis], 1e-9));
+                    }
+                }
+                holding.add_keyframe(keyframe_id, from, test_camera(), records.data(), records.size());
+            }
+        }
+
+        // Held, dropped after two keyframes that do not verify it, then found and confirmed afresh.
+        {
+            mapping::loop_closure dropping;
+            earlier_visit(dropping);
+            for (int keyframe_id = 40; keyframe_id < 46; ++keyframe_id) {
+                const math::se3<double> from = shifted(current_pose, 0.1 * static_cast<double>(keyframe_id - 40));
+                const bool elsewhere = (keyframe_id == 41) || (keyframe_id == 42);
+                const std::vector<mapping::loop_closure::record> records = seen_from(elsewhere ? unrelated : revisited, from);
+                const mapping::loop_closure::result result = dropping.detect(keyframe_id, from, test_camera(), unconnected, records.data(), records.size());
+                REQUIRE(result.found == (keyframe_id == 45));
+                if (!elsewhere) {
+                    dropping.add_keyframe(keyframe_id, from, test_camera(), records.data(), records.size());
+                }
+            }
+        }
+    }
+
     // The ibow place recognition proposes the keyframes of an earlier visit, its landmarks detected again under new ids,
     // and verification closes the loop; switching to it indexes the keyframes already held again.
     {

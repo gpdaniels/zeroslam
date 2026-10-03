@@ -96,6 +96,11 @@ namespace mapping {
         // does not count them (79 of the 224 true pairs verification refused for inliers on EuRoC had 15 or more, up to 83
         // of 274).
         constexpr static const size_t min_inliers_any_share = 40;
+        // A loop that waits for confirmation is checked against at most this many keyframes covisible with the keyframe that
+        // found it, and dropped when this many keyframes in a row then fail to verify it (ORB-SLAM3's verification in
+        // covisible keyframes and in time).
+        constexpr static const size_t max_confirming_covisibles = 5;
+        constexpr static const size_t max_confirmation_failures = 2;
 
     private:
         class keyframe final {
@@ -103,6 +108,19 @@ namespace mapping {
             math::se3<double> pose;
             sensor::model camera;
             std::vector<record> records;
+        };
+
+        // A loop verified by fewer keyframes than loop_confirmations, held until the next keyframes confirm or drop it: its
+        // similarity as the camera of the last keyframe that verified it to the candidate's camera.
+        class pending_loop final {
+        public:
+            bool active;
+            int candidate_id;
+            int keyframe_id;
+            math::sim3<double> correction;
+            math::sim3<double> relative;
+            size_t confirmations;
+            size_t failures;
         };
 
         place_recognition recognition;
@@ -122,6 +140,9 @@ namespace mapping {
         // than from every pair. Off: on the harness it kept ETH3D planar_2 whole but closed a loop that bent LaMAria R_01
         // from 9.6 to 81 cm.
         bool refine_from_hypothesis = false;
+        // How many keyframes must verify a loop before it is reported, the keyframe that found it included.
+        size_t loop_confirmations = 1;
+        pending_loop pending;
 
         // Similarities rhs = s R lhs + t from three pairs at a time, each supported by the pairs that reproject within the
         // inlier bound in both keyframes, and the best refitted on its supporters.
@@ -142,6 +163,14 @@ namespace mapping {
         // The similarity refined over the seeded pairs by their reprojection into both keyframes, the pairs then beyond the
         // inlier bound dropped and the rest solved again.
         static math::sim3<double> refine_similarity(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const keyframe& candidate, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, const std::vector<unsigned char>& seeded, const size_t seeded_count, const math::sim3<double>& initial);
+
+        // How many of a keyframe's records the similarity explains against the candidate's: the pairs shared by id and those
+        // the guided search finds, the similarity refined over them and the inliers counted, which matches receives.
+        size_t confirm(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const keyframe& candidate, math::sim3<double>& correction, std::vector<correspondence>& matches) const;
+
+        // A verified loop as reported: at once when loop_confirmations is one or enough keyframes covisible with the keyframe
+        // verify it as well, otherwise held as the pending loop and not found.
+        result confirm_or_hold(const int keyframe_id, const covisibility& graph, const result& verified);
 
         bool verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::stored>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const;
 
@@ -188,6 +217,11 @@ namespace mapping {
         // Whether a verification's refinement starts from the pairs its first similarity explains (see
         // refine_from_hypothesis) rather than from every pair.
         void set_refine_from_hypothesis(const bool enabled);
+
+        // How many keyframes must verify a loop before detect reports it, as ORB-SLAM3 confirms a loop by three: the keyframe
+        // that found it, then up to max_confirming_covisibles keyframes covisible with it, then the keyframes that follow,
+        // each matched by projection through the loop's similarity; one reports a loop as soon as it verifies.
+        void set_loop_confirmations(const size_t count);
 
         std::vector<int> recall(const feature::descriptor::stored* const descriptors, const size_t descriptors_size, const size_t max_recalled) const;
 

@@ -48,7 +48,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 namespace mapping {
     loop_closure::loop_closure()
         : recognition()
-        , keyframes() {
+        , keyframes()
+        , pending{ false, -1, -1, math::sim3<double>::identity(), math::sim3<double>::identity(), 0, 0 } {
     }
 
     void loop_closure::shared_landmarks(const record* const keyframe_records, const size_t keyframe_records_size, const keyframe& candidate, std::vector<estimation::correspondence_3d_3d<double>>& correspondences, std::vector<correspondence>& pairs, std::vector<std::pair<size_t, size_t>>& pair_records) {
@@ -89,6 +90,49 @@ namespace mapping {
         result outcome = unfound();
         if (keyframe_records_size == 0) {
             return outcome;
+        }
+
+        // A loop waiting for confirmation is checked against this keyframe first, through its similarity carried from the
+        // last keyframe that verified it as the map holds that keyframe now. The place recognition is queried again only
+        // when this keyframe does not verify it, as ORB-SLAM3 does.
+        if (this->pending.active) {
+            const std::unordered_map<int, keyframe>::const_iterator candidate = this->keyframes.find(this->pending.candidate_id);
+            if (candidate == this->keyframes.end()) {
+                this->pending.active = false;
+            }
+            else {
+                const std::unordered_map<int, keyframe>::const_iterator last = this->keyframes.find(this->pending.keyframe_id);
+                math::sim3<double> correction = (last == this->keyframes.end()) ? this->pending.correction : (math::sim3<double>(candidate->second.pose, 1.0).inverse() * this->pending.relative * math::sim3<double>(last->second.pose, 1.0));
+                std::vector<correspondence> matches;
+                const size_t inliers = this->confirm(pose, camera, keyframe_records, keyframe_records_size, candidate->second, correction, matches);
+                if (inliers >= loop_closure::min_inliers) {
+                    ++this->pending.confirmations;
+                    this->pending.failures = 0;
+                    this->pending.keyframe_id = keyframe_id;
+                    this->pending.correction = correction;
+                    this->pending.relative = math::sim3<double>(candidate->second.pose, 1.0) * correction * math::sim3<double>(pose.inverse(), 1.0);
+                    if (this->pending.confirmations < this->loop_confirmations) {
+                        core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d verified again, %zu inliers, %zu of %zu keyframes.", keyframe_id, this->pending.candidate_id, inliers, this->pending.confirmations, this->loop_confirmations);
+                        return outcome;
+                    }
+                    this->pending.active = false;
+                    outcome.found = true;
+                    outcome.keyframe_id = this->pending.candidate_id;
+                    outcome.correspondences = inliers;
+                    outcome.inliers = inliers;
+                    outcome.correction = correction;
+                    outcome.relative = this->pending.relative;
+                    outcome.matches = static_cast<std::vector<correspondence>&&>(matches);
+                    core::logger::log(core::logger::level::note, "Loop detected keyframe %d -> %d, verified by %zu keyframes, %zu inliers at this one, scale %.4f, translation %.4f.", keyframe_id, outcome.keyframe_id, this->pending.confirmations, inliers, correction.scale(), math::sqrt(correction.transformation().translation().get_length_squared()));
+                    return outcome;
+                }
+                ++this->pending.failures;
+                core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d not verified again, %zu inliers.", keyframe_id, this->pending.candidate_id, inliers);
+                if (this->pending.failures >= loop_closure::max_confirmation_failures) {
+                    core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d dropped, verified by %zu of %zu keyframes before %zu in a row did not.", keyframe_id, this->pending.candidate_id, this->pending.confirmations, this->loop_confirmations, this->pending.failures);
+                    this->pending.active = false;
+                }
+            }
         }
 
         std::vector<feature::descriptor::stored> query(keyframe_records_size);
@@ -146,7 +190,7 @@ namespace mapping {
                 }
                 result attempt = unfound();
                 if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found, attempt)) {
-                    return attempt;
+                    return this->confirm_or_hold(keyframe_id, graph, attempt);
                 }
                 if (&candidate == &candidates.front()) {
                     outcome.correspondences = attempt.correspondences;
@@ -193,7 +237,7 @@ namespace mapping {
                 }
                 result attempt = unfound();
                 if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found->second, attempt)) {
-                    return attempt;
+                    return this->confirm_or_hold(keyframe_id, graph, attempt);
                 }
                 // When nothing verifies, the counts reported are those of the best ranked candidate.
                 if (verified == 0) {
@@ -223,7 +267,7 @@ namespace mapping {
                 }
                 result attempt = unfound();
                 if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found->second, attempt)) {
-                    return attempt;
+                    return this->confirm_or_hold(keyframe_id, graph, attempt);
                 }
                 ++foreign_verified;
             }
@@ -479,6 +523,77 @@ namespace mapping {
         return math::sim3<double>(math::se3<double>(math::so3<double>(refined[6], refined[3], refined[4], refined[5]), { { refined[0], refined[1], refined[2] } }), refined[7]);
     }
 
+    size_t loop_closure::confirm(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const keyframe& candidate, math::sim3<double>& correction, std::vector<correspondence>& matches) const {
+        matches.clear();
+        std::vector<estimation::correspondence_3d_3d<double>> correspondences;
+        std::vector<correspondence> pairs;
+        std::vector<std::pair<size_t, size_t>> pair_records;
+        loop_closure::shared_landmarks(keyframe_records, keyframe_records_size, candidate, correspondences, pairs, pair_records);
+        std::vector<unsigned char> current_paired(keyframe_records_size, 0);
+        std::vector<unsigned char> recorded_paired(candidate.records.size(), 0);
+        for (const std::pair<size_t, size_t>& paired : pair_records) {
+            current_paired[paired.first] = 1;
+            recorded_paired[paired.second] = 1;
+        }
+        static_cast<void>(this->guided_pairs(pose, camera, keyframe_records, keyframe_records_size, candidate, correction, current_paired, recorded_paired, correspondences, pairs, pair_records));
+        if (correspondences.size() < 3) {
+            return 0;
+        }
+        const std::vector<unsigned char> seeded(correspondences.size(), static_cast<unsigned char>(1));
+        const math::sim3<double> refined = loop_closure::refine_similarity(pose, camera, keyframe_records, candidate, correspondences, pair_records, seeded, correspondences.size(), correction);
+        const math::sim3<double> refined_inverse = refined.inverse();
+        for (size_t i = 0; i < correspondences.size(); ++i) {
+            if (loop_closure::reprojects(pose, camera, keyframe_records[pair_records[i].first], candidate, candidate.records[pair_records[i].second], correspondences[i], refined, refined_inverse, loop_closure::reprojection_inlier_bound_squared)) {
+                matches.push_back(pairs[i]);
+            }
+        }
+        correction = refined;
+        return matches.size();
+    }
+
+    loop_closure::result loop_closure::confirm_or_hold(const int keyframe_id, const covisibility& graph, const result& verified) {
+        if (this->loop_confirmations <= 1) {
+            return verified;
+        }
+        const keyframe& candidate = this->keyframes.at(verified.keyframe_id);
+        // The keyframes covisible with this one that the loop's similarity explains as well, the most covisible first; a
+        // keyframe covisible with the candidate too is already joined to it and tells nothing.
+        std::vector<int> covisible = graph.neighbours(keyframe_id, loop_closure::max_covisible_landmarks);
+        std::sort(covisible.begin(), covisible.end(), [&graph, keyframe_id](const int lhs, const int rhs) {
+            const int lhs_weight = graph.weight(keyframe_id, lhs);
+            const int rhs_weight = graph.weight(keyframe_id, rhs);
+            return (lhs_weight != rhs_weight) ? (lhs_weight > rhs_weight) : (lhs > rhs);
+        });
+        size_t confirmations = 1;
+        size_t tried = 0;
+        for (const int other_id : covisible) {
+            if ((confirmations >= this->loop_confirmations) || (tried >= loop_closure::max_confirming_covisibles)) {
+                break;
+            }
+            const std::unordered_map<int, keyframe>::const_iterator other = this->keyframes.find(other_id);
+            if ((other == this->keyframes.end()) || (other_id == verified.keyframe_id) || (graph.weight(other_id, verified.keyframe_id) >= loop_closure::max_covisible_landmarks)) {
+                continue;
+            }
+            ++tried;
+            math::sim3<double> correction = verified.correction;
+            std::vector<correspondence> matches;
+            const size_t inliers = this->confirm(other->second.pose, other->second.camera, other->second.records.data(), other->second.records.size(), candidate, correction, matches);
+            core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d %s by covisible keyframe %d, %zu inliers.", keyframe_id, verified.keyframe_id, (inliers >= loop_closure::min_inliers) ? "verified" : "not verified", other_id, inliers);
+            confirmations += (inliers >= loop_closure::min_inliers) ? 1 : 0;
+        }
+        if (confirmations >= this->loop_confirmations) {
+            core::logger::log(core::logger::level::note, "Loop detected keyframe %d -> %d, verified by %zu keyframes, %zu inliers at this one, scale %.4f, translation %.4f.", keyframe_id, verified.keyframe_id, confirmations, verified.inliers, verified.correction.scale(), math::sqrt(verified.correction.transformation().translation().get_length_squared()));
+            this->pending.active = false;
+            return verified;
+        }
+        this->pending = pending_loop{ true, verified.keyframe_id, keyframe_id, verified.correction, verified.relative, confirmations, 0 };
+        core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d held, verified by %zu of %zu keyframes.", keyframe_id, verified.keyframe_id, confirmations, this->loop_confirmations);
+        result held = verified;
+        held.found = false;
+        held.matches.clear();
+        return held;
+    }
+
     bool loop_closure::verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::stored>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const {
         const keyframe* const candidate_keyframe = &candidate;
         const std::vector<record>& candidate_records = candidate_keyframe->records;
@@ -668,7 +783,8 @@ namespace mapping {
         outcome.keyframe_id = candidate_id;
         outcome.correction = correction;
         outcome.relative = math::sim3<double>(candidate_keyframe->pose, 1.0) * outcome.correction * math::sim3<double>(pose.inverse(), 1.0);
-        core::logger::log(core::logger::level::note, "Loop detected keyframe %d -> %d, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity, scale %.4f, translation %.4f.", keyframe_id, candidate_id, outcome.inliers, correspondences.size(), shared_by_id, guided, correction.scale(), math::sqrt(correction.transformation().translation().get_length_squared()));
+        // A loop that waits for more keyframes to verify it is reported by confirm_or_hold.
+        core::logger::log(core::logger::level::note, (this->loop_confirmations <= 1) ? "Loop detected keyframe %d -> %d, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity, scale %.4f, translation %.4f." : "Loop candidate keyframe %d -> %d verified, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity, scale %.4f, translation %.4f.", keyframe_id, candidate_id, outcome.inliers, correspondences.size(), shared_by_id, guided, correction.scale(), math::sqrt(correction.transformation().translation().get_length_squared()));
         return true;
     }
 
@@ -811,6 +927,10 @@ namespace mapping {
         this->refine_from_hypothesis = enabled;
     }
 
+    void loop_closure::set_loop_confirmations(const size_t count) {
+        this->loop_confirmations = math::max<size_t>(count, 1);
+    }
+
     void loop_closure::set_reprojection_hypotheses(const bool enabled) {
         this->reprojection_hypotheses = enabled;
     }
@@ -842,6 +962,9 @@ namespace mapping {
     void loop_closure::remove_keyframe(const int keyframe_id) {
         this->recognition.remove_keyframe(keyframe_id);
         this->keyframes.erase(keyframe_id);
+        if (this->pending.active && (this->pending.candidate_id == keyframe_id)) {
+            this->pending.active = false;
+        }
     }
 
     size_t loop_closure::num_keyframes() const {

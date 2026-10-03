@@ -131,6 +131,9 @@ namespace mapping {
             // insertion, so every adjustment since reads as drift: on full EuRoC a quarter of these closures joined
             // keyframes more than 2.5 m or 60 degrees apart, and ORB-SLAM3 closes none.
             bool loop_revisits = false;
+            // How many keyframes must verify a loop before it closes (see mapping::loop_closure::set_loop_confirmations): the
+            // keyframe that found it, keyframes covisible with that one, then the keyframes that follow.
+            int loop_confirmations = 1;
             int global_adjustment_keyframes = 10;
             // How the map is adjusted as keyframes arrive: absolute, a window of world poses with periodic global adjustments
             // and a pose graph at each loop, or relative, an adaptive region of a graph of relative transforms (see
