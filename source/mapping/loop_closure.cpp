@@ -32,6 +32,16 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/vertex.hpp"
 #include "optimisation/vertices/similarity.hpp"
 
+#if defined(_MSC_VER)
+#pragma warning(push, 0)
+#endif
+
+#include <string>
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
 namespace mapping {
     loop_closure::loop_closure()
         : recognition()
@@ -59,6 +69,31 @@ namespace mapping {
             query[i] = keyframe_records[i].descriptor;
         }
         const std::vector<place_recognition::candidate> candidates = this->recognition.get_candidates(query.data(), query.size(), keyframe_id, loop_closure::max_candidates);
+        if (core::logger::enabled(core::logger::level::debug)) {
+            // The ranked candidates (keyframe id and votes) and the keyframes covisible with the query, which the outcome lines
+            // of each candidate below follow, so the detector can be scored offline against ground truth.
+            std::string ranked;
+            for (const place_recognition::candidate& candidate : candidates) {
+                ranked += " " + std::to_string(candidate.keyframe_id) + ":" + std::to_string(candidate.votes);
+            }
+            std::string covisible;
+            for (const int neighbour : graph.neighbours(keyframe_id, loop_closure::max_covisible_landmarks)) {
+                covisible += " " + std::to_string(neighbour);
+            }
+            // The ranking with the recent and covisible keyframes left out before the list is cut, for comparison.
+            std::string distant;
+            size_t distant_count = 0;
+            for (const place_recognition::candidate& candidate : this->recognition.get_candidates(query.data(), query.size(), keyframe_id, this->keyframes.size())) {
+                if (((candidate.keyframe_id >= submap_start_id) && (candidate.keyframe_id > keyframe_id - loop_closure::min_keyframe_gap)) || (graph.weight(keyframe_id, candidate.keyframe_id) >= loop_closure::max_covisible_landmarks)) {
+                    continue;
+                }
+                distant += " " + std::to_string(candidate.keyframe_id) + ":" + std::to_string(candidate.votes);
+                if (++distant_count >= loop_closure::max_candidates) {
+                    break;
+                }
+            }
+            core::logger::log(core::logger::level::debug, "Loop query keyframe %d: %zu records, %zu keyframes indexed, candidates%s; covisible%s; distant%s.", keyframe_id, keyframe_records_size, this->keyframes.size(), ranked.c_str(), covisible.c_str(), distant.c_str());
+        }
         size_t verified = 0;
         for (const place_recognition::candidate& candidate : candidates) {
             if ((candidate.keyframe_id >= submap_start_id) && (candidate.keyframe_id > keyframe_id - loop_closure::min_keyframe_gap)) {
@@ -115,7 +150,15 @@ namespace mapping {
         }
         if (seek_foreign && (submap_start_id > 0)) {
             size_t foreign_verified = 0;
-            for (const place_recognition::candidate& candidate : this->recognition.get_candidates(query.data(), query.size(), keyframe_id, loop_closure::max_candidates, submap_start_id)) {
+            const std::vector<place_recognition::candidate> foreign = this->recognition.get_candidates(query.data(), query.size(), keyframe_id, loop_closure::max_candidates, submap_start_id);
+            if (core::logger::enabled(core::logger::level::debug)) {
+                std::string ranked;
+                for (const place_recognition::candidate& candidate : foreign) {
+                    ranked += " " + std::to_string(candidate.keyframe_id) + ":" + std::to_string(candidate.votes);
+                }
+                core::logger::log(core::logger::level::debug, "Loop query keyframe %d before keyframe %d: candidates%s.", keyframe_id, submap_start_id, ranked.c_str());
+            }
+            for (const place_recognition::candidate& candidate : foreign) {
                 if (foreign_verified >= loop_closure::max_verified_candidates) {
                     break;
                 }
