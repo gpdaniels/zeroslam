@@ -778,8 +778,10 @@ static void test_loop_closure(const int width, const int height, const math::mat
     REQUIRE(system.state() == slam::tracking_state::tracking);
     // With the covisible keyframes as the local map, the landmarks at the start of the circle return only through the loop
     // closure. The voxel map's rays find them as soon as they are back in view, and matching them by projection joins the
-    // loop before any closure is needed, so then only the trajectory is checked.
-    if (local_map == mapping::frame::settings::local_map_kind::covisible) {
+    // loop before any closure is needed, so then only the trajectory is checked. Matching descriptors alone finds them
+    // again too, and the loop detector, its records refreshed from the map, then sees the start's keyframes share the
+    // frame's landmarks as covisible ones do.
+    if ((local_map == mapping::frame::settings::local_map_kind::covisible) && (association != mapping::frame::settings::association_kind::match)) {
         REQUIRE(!system.verified_loops.empty());
     }
     if ((local_map == mapping::frame::settings::local_map_kind::covisible) && (adjustment == mapping::frame::settings::adjustment_kind::relative)) {

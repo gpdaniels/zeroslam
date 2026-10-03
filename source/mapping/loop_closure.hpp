@@ -110,12 +110,17 @@ namespace mapping {
         float hamming_scale = 1.0f;
         bool covisible_revisits = true;
         // Whether the first similarity of a verification comes from hypotheses scored by reprojection into both keyframes,
-        // as ORB-SLAM3 scores them, rather than by 3D distance.
-        bool reprojection_hypotheses = false;
-        bool accept_by_inliers = false;
+        // as ORB-SLAM3 scores them, rather than by 3D distance, whose bound of a share of the cloud's radius suits monocular
+        // depth poorly: the best 3D hypothesis of a true EuRoC loop held a median 8 of its 35 pairs.
+        bool reprojection_hypotheses = true;
+        // Whether min_inliers_any_share inliers are enough whatever share of the initial pairs they are. With these two and
+        // the held keyframes refreshed (slam's refresh_loop_records), full EuRoC gave 0.63 of the default's error per run
+        // and the 35 scene harness 0.83; without the refresh the two of them bent ETH3D planar_2 from 0.16 to 55 cm.
+        bool accept_by_inliers = true;
         // Whether the refinement starts from the pairs the first similarity reprojects within the guided search's radius in
         // both keyframes, as ORB-SLAM3 optimises its similarity over the matches it finds by projection with it, rather
-        // than from every pair.
+        // than from every pair. Off: on the harness it kept ETH3D planar_2 whole but closed a loop that bent LaMAria R_01
+        // from 9.6 to 81 cm.
         bool refine_from_hypothesis = false;
 
         // Similarities rhs = s R lhs + t from three pairs at a time, each supported by the pairs that reproject within the

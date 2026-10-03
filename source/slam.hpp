@@ -2180,8 +2180,10 @@ private:
     static constexpr size_t voxel_occluding_points = static_cast<size_t>(-1);
     static constexpr size_t voxel_depth_minimum = 10;
     static constexpr size_t local_map_fallback_tracks = 100;
-    // Whether the loop detector's held keyframes are refreshed from the map before each detection.
-    static constexpr bool refresh_loop_records = false;
+    // Whether the loop detector's held keyframes are refreshed from the map before each detection. Records kept from each
+    // keyframe's insertion pass every adjustment and loop correction since as drift: with them ibow, the reprojection
+    // hypotheses and the acceptance by inliers closed loops that bent ETH3D planar_2 from 0.16 to 55 cm, refreshed 0.41 cm.
+    static constexpr bool refresh_loop_records = true;
 
     // The active point tracks that own a landmark still in the map.
     size_t landmark_track_count() {

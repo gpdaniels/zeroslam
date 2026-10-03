@@ -89,6 +89,11 @@ int main(int argc, char* argv[]) {
     }
     observe_records(first, identity);
     mapping::loop_closure closure;
+    // The checks on this detector are of the verification scored in 3D and accepted by the share of its initial pairs, which
+    // each check of another way switches back to; the defaults are checked on their own below.
+    closure.set_reprojection_hypotheses(false);
+    closure.set_accept_by_inliers(false);
+    closure.set_refine_from_hypothesis(false);
     REQUIRE(closure.num_keyframes() == 0);
 
     REQUIRE(!closure.detect(0, identity, test_camera(), unconnected, first.data(), first.size()).found);
@@ -208,6 +213,21 @@ int main(int argc, char* argv[]) {
         closure.set_reprojection_hypotheses(true);
         REQUIRE(!closure.detect(40, current_pose, test_camera(), unconnected, misobserved.data(), misobserved.size()).found);
         closure.set_reprojection_hypotheses(false);
+    }
+
+    // The default verification closes the same revisit to the same similarity.
+    {
+        mapping::loop_closure defaults;
+        defaults.add_keyframe(0, identity, test_camera(), first.data(), first.size());
+        const mapping::loop_closure::result result = defaults.detect(40, current_pose, test_camera(), unconnected, revisit.data(), revisit.size());
+        REQUIRE(result.found);
+        REQUIRE(result.keyframe_id == 0);
+        REQUIRE(result.inliers == 35);
+        for (const mapping::loop_closure::correspondence& match : result.matches) {
+            REQUIRE(match.landmark_id == match.recorded_landmark_id + 1000);
+            REQUIRE(match.recorded_landmark_id < 35);
+        }
+        REQUIRE(is_value_approx(result.correction.scale(), 1.0 / 1.1, 1e-6));
     }
 
     // A revisit most of whose inliers are found by the guided search, their descriptors too far from the recorded ones to be
