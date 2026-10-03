@@ -104,6 +104,9 @@ namespace mapping {
         float hamming_scale = 1.0f;
         bool covisible_revisits = true;
 
+        // The candidate's records of the keyframe's landmarks, by landmark id.
+        static void shared_landmarks(const record* const keyframe_records, const size_t keyframe_records_size, const keyframe& candidate, std::vector<estimation::correspondence_3d_3d<double>>& correspondences, std::vector<correspondence>& pairs, std::vector<std::pair<size_t, size_t>>& pair_records);
+
         bool covisible_revisit_loop(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const int candidate_id, const keyframe& candidate, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<correspondence>& pairs, const std::vector<std::pair<size_t, size_t>>& pair_records, result& outcome) const;
 
         bool verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::stored>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const;
@@ -114,7 +117,10 @@ namespace mapping {
     public:
         // With seek_foreign the keyframes before the submap's start are searched as well on their own, so that the recent
         // keyframes of a submap that stands apart, which the place recognition ranks highest, cannot hide the map it lost.
-        result detect(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const covisibility& graph, const record* const keyframe_records, const size_t keyframe_records_size, const int submap_start_id = 0, const bool seek_foreign = false) const;
+        // With the ibow place recognition the islands' best keyframes, recent and covisible ones left out, are verified
+        // first and the covisible keyframes it ranks are then tried as revisits; with hbst the ranked candidates are taken
+        // in turn, covisible ones as revisits.
+        result detect(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const covisibility& graph, const record* const keyframe_records, const size_t keyframe_records_size, const int submap_start_id = 0, const bool seek_foreign = false);
 
         void add_keyframe(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size);
 
@@ -123,6 +129,11 @@ namespace mapping {
         size_t num_keyframes() const;
 
         void set_hamming_scale(const float scale);
+
+        // Switching the place recognition empties it, so it is chosen before any keyframe is added.
+        void set_place_recognition(const place_recognition::engine engine);
+
+        place_recognition::engine get_place_recognition() const;
 
         // Whether a candidate that shares landmarks with the keyframe closes a loop when the map has drifted between the
         // visits. The drift is measured in the world frame, so a map without a fixed one, as relative adjustment holds

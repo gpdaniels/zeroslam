@@ -346,5 +346,52 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // The ibow place recognition proposes the keyframes of an earlier visit, its landmarks detected again under new ids,
+    // and verification closes the loop; switching to it indexes the keyframes already held again.
+    {
+        core::random_pcg sequence_random(0x1b0e5eedull);
+        mapping::loop_closure sequence;
+        std::vector<std::vector<mapping::loop_closure::record>> places;
+        int landmark_id = 0;
+        for (int place = 0; place < 12; ++place) {
+            std::vector<mapping::loop_closure::record> seen;
+            for (int i = 0; i < 40; ++i) {
+                seen.push_back(random_record(sequence_random, landmark_id++));
+            }
+            observe_records(seen, identity);
+            places.push_back(seen);
+            for (int view = 0; view < 3; ++view) {
+                const int keyframe_id = ((place * 3) + view) * 5;
+                if ((place == 6) && (view == 0)) {
+                    // Half way the place recognition switches, keeping what it held.
+                    REQUIRE(sequence.get_place_recognition() == mapping::place_recognition::engine::hbst);
+                    sequence.set_place_recognition(mapping::place_recognition::engine::ibow);
+                    REQUIRE(sequence.get_place_recognition() == mapping::place_recognition::engine::ibow);
+                    REQUIRE(sequence.num_keyframes() == static_cast<size_t>(place * 3 + view));
+                }
+                REQUIRE(!sequence.detect(keyframe_id, identity, test_camera(), unconnected, seen.data(), seen.size()).found);
+                sequence.add_keyframe(keyframe_id, identity, test_camera(), seen.data(), seen.size());
+            }
+        }
+        REQUIRE(sequence.num_keyframes() == 36);
+        std::vector<mapping::loop_closure::record> again = places[1];
+        for (size_t i = 0; i < again.size(); ++i) {
+            again[i].landmark_id = 9000 + static_cast<int>(i);
+            again[i].location = drift * places[1][i].location;
+            for (int flip = 0; flip < 3; ++flip) {
+                again[i].descriptor[sequence_random.get_random_raw() % 32] ^= static_cast<unsigned char>(1u << (sequence_random.get_random_raw() % 8));
+            }
+        }
+        observe_records(again, current_pose);
+        const mapping::loop_closure::result result = sequence.detect(400, current_pose, test_camera(), unconnected, again.data(), again.size());
+        REQUIRE(result.found);
+        REQUIRE((result.keyframe_id >= 15) && (result.keyframe_id <= 25));
+        REQUIRE(result.inliers >= mapping::loop_closure::min_inliers);
+        REQUIRE(is_value_approx(result.correction.scale(), 1.0 / 1.1, 1e-6));
+        for (const mapping::loop_closure::correspondence& match : result.matches) {
+            REQUIRE(match.landmark_id == match.recorded_landmark_id + 9000 - 40);
+        }
+    }
+
     return EXIT_SUCCESS;
 }

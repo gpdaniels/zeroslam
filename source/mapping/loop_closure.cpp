@@ -36,6 +36,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <algorithm>
 #include <string>
 
 #if defined(_MSC_VER)
@@ -48,7 +49,31 @@ namespace mapping {
         , keyframes() {
     }
 
-    loop_closure::result loop_closure::detect(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const covisibility& graph, const record* const keyframe_records, const size_t keyframe_records_size, const int submap_start_id, const bool seek_foreign) const {
+    void loop_closure::shared_landmarks(const record* const keyframe_records, const size_t keyframe_records_size, const keyframe& candidate, std::vector<estimation::correspondence_3d_3d<double>>& correspondences, std::vector<correspondence>& pairs, std::vector<std::pair<size_t, size_t>>& pair_records) {
+        const std::vector<record>& candidate_records = candidate.records;
+        std::unordered_map<int, size_t> recorded_by_landmark;
+        recorded_by_landmark.reserve(candidate_records.size());
+        for (size_t i = 0; i < candidate_records.size(); ++i) {
+            recorded_by_landmark[candidate_records[i].landmark_id] = i;
+        }
+        correspondences.clear();
+        pairs.clear();
+        pair_records.clear();
+        correspondences.reserve(keyframe_records_size);
+        pairs.reserve(keyframe_records_size);
+        pair_records.reserve(keyframe_records_size);
+        for (size_t i = 0; i < keyframe_records_size; ++i) {
+            const std::unordered_map<int, size_t>::const_iterator recorded = recorded_by_landmark.find(keyframe_records[i].landmark_id);
+            if (recorded == recorded_by_landmark.end()) {
+                continue;
+            }
+            correspondences.push_back({ keyframe_records[i].location, candidate_records[recorded->second].location });
+            pairs.push_back({ keyframe_records[i].landmark_id, candidate_records[recorded->second].landmark_id });
+            pair_records.push_back({ i, recorded->second });
+        }
+    }
+
+    loop_closure::result loop_closure::detect(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const covisibility& graph, const record* const keyframe_records, const size_t keyframe_records_size, const int submap_start_id, const bool seek_foreign) {
         const auto unfound = []() {
             result empty;
             empty.found = false;
@@ -68,7 +93,14 @@ namespace mapping {
         for (size_t i = 0; i < keyframe_records_size; ++i) {
             query[i] = keyframe_records[i].descriptor;
         }
-        const std::vector<place_recognition::candidate> candidates = this->recognition.get_candidates(query.data(), query.size(), keyframe_id, loop_closure::max_candidates);
+        const bool islands = this->recognition.get_engine() == place_recognition::engine::ibow;
+        const auto recent = [keyframe_id, submap_start_id](const int candidate_id) {
+            return (candidate_id >= submap_start_id) && (candidate_id > keyframe_id - loop_closure::min_keyframe_gap);
+        };
+        const auto excluded = [&](const int candidate_id) {
+            return recent(candidate_id) || (graph.weight(keyframe_id, candidate_id) >= loop_closure::max_covisible_landmarks) || (this->keyframes.count(candidate_id) == 0);
+        };
+        const std::vector<place_recognition::candidate> candidates = islands ? this->recognition.get_loop_candidates(query.data(), query.size(), keyframe_id, loop_closure::max_verified_candidates, excluded) : this->recognition.get_candidates(query.data(), query.size(), keyframe_id, loop_closure::max_candidates);
         if (core::logger::enabled(core::logger::level::debug)) {
             // The ranked candidates (keyframe id and votes) and the keyframes covisible with the query, which the outcome lines
             // of each candidate below follow, so the detector can be scored offline against ground truth.
@@ -94,59 +126,80 @@ namespace mapping {
             }
             core::logger::log(core::logger::level::debug, "Loop query keyframe %d: %zu records, %zu keyframes indexed, candidates%s; covisible%s; distant%s.", keyframe_id, keyframe_records_size, this->keyframes.size(), ranked.c_str(), covisible.c_str(), distant.c_str());
         }
-        size_t verified = 0;
-        for (const place_recognition::candidate& candidate : candidates) {
-            if ((candidate.keyframe_id >= submap_start_id) && (candidate.keyframe_id > keyframe_id - loop_closure::min_keyframe_gap)) {
-                continue;
-            }
-            const std::unordered_map<int, keyframe>::const_iterator found = this->keyframes.find(candidate.keyframe_id);
-            if (found == this->keyframes.end()) {
-                continue;
-            }
-            const bool covisible_candidate = (graph.weight(keyframe_id, candidate.keyframe_id) >= loop_closure::max_covisible_landmarks);
-            const std::vector<record>& candidate_records = found->second.records;
-            std::unordered_map<int, size_t> recorded_by_landmark;
-            recorded_by_landmark.reserve(candidate_records.size());
-            for (size_t i = 0; i < candidate_records.size(); ++i) {
-                recorded_by_landmark[candidate_records[i].landmark_id] = i;
-            }
-            std::vector<estimation::correspondence_3d_3d<double>> correspondences;
-            std::vector<correspondence> pairs;
-            std::vector<std::pair<size_t, size_t>> pair_records;
-            correspondences.reserve(keyframe_records_size);
-            pairs.reserve(keyframe_records_size);
-            pair_records.reserve(keyframe_records_size);
-            for (size_t i = 0; i < keyframe_records_size; ++i) {
-                const std::unordered_map<int, size_t>::const_iterator recorded = recorded_by_landmark.find(keyframe_records[i].landmark_id);
-                if (recorded == recorded_by_landmark.end()) {
+        std::vector<estimation::correspondence_3d_3d<double>> correspondences;
+        std::vector<correspondence> pairs;
+        std::vector<std::pair<size_t, size_t>> pair_records;
+        if (islands) {
+            // The islands' best keyframes first: a loop the map does not know of yet is worth more than a revisit.
+            for (const place_recognition::candidate& candidate : candidates) {
+                const keyframe& found = this->keyframes.at(candidate.keyframe_id);
+                loop_closure::shared_landmarks(keyframe_records, keyframe_records_size, found, correspondences, pairs, pair_records);
+                // Records that share many landmarks with the keyframe make it covisible whatever the graph says.
+                if (correspondences.size() >= loop_closure::max_covisible_landmarks) {
+                    if (this->covisible_revisits && this->covisible_revisit_loop(keyframe_id, pose, camera, keyframe_records, candidate.keyframe_id, found, correspondences, pairs, pair_records, outcome)) {
+                        return outcome;
+                    }
+                    core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d not a material covisible revisit (%zu landmarks shared by id).", keyframe_id, candidate.keyframe_id, correspondences.size());
                     continue;
                 }
-                correspondences.push_back({ keyframe_records[i].location, candidate_records[recorded->second].location });
-                pairs.push_back({ keyframe_records[i].landmark_id, candidate_records[recorded->second].landmark_id });
-                pair_records.push_back({ i, recorded->second });
-            }
-            const size_t shared_by_id = correspondences.size();
-            if (covisible_candidate || (shared_by_id >= loop_closure::max_covisible_landmarks)) {
-                if (this->covisible_revisits && this->covisible_revisit_loop(keyframe_id, pose, camera, keyframe_records, candidate.keyframe_id, found->second, correspondences, pairs, pair_records, outcome)) {
-                    return outcome;
+                result attempt = unfound();
+                if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found, attempt)) {
+                    return attempt;
                 }
-                core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d not a material covisible revisit (%zu landmarks shared by id).", keyframe_id, candidate.keyframe_id, shared_by_id);
-                continue;
+                if (&candidate == &candidates.front()) {
+                    outcome.correspondences = attempt.correspondences;
+                    outcome.inliers = attempt.inliers;
+                }
             }
-            // A candidate that fails verification leaves the next one in rank to be tried, so an alias ranked first cannot hide the true loop.
-            if (verified >= loop_closure::max_verified_candidates) {
-                break;
+            if (this->covisible_revisits) {
+                for (const place_recognition::candidate& candidate : this->recognition.get_candidates(query.data(), query.size(), keyframe_id, loop_closure::max_candidates)) {
+                    const std::unordered_map<int, keyframe>::const_iterator found = this->keyframes.find(candidate.keyframe_id);
+                    if (recent(candidate.keyframe_id) || (found == this->keyframes.end()) || (graph.weight(keyframe_id, candidate.keyframe_id) < loop_closure::max_covisible_landmarks)) {
+                        continue;
+                    }
+                    loop_closure::shared_landmarks(keyframe_records, keyframe_records_size, found->second, correspondences, pairs, pair_records);
+                    if (this->covisible_revisit_loop(keyframe_id, pose, camera, keyframe_records, candidate.keyframe_id, found->second, correspondences, pairs, pair_records, outcome)) {
+                        return outcome;
+                    }
+                    core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d not a material covisible revisit (%zu landmarks shared by id).", keyframe_id, candidate.keyframe_id, correspondences.size());
+                }
             }
-            result attempt = unfound();
-            if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found->second, attempt)) {
-                return attempt;
+        }
+        else {
+            size_t verified = 0;
+            for (const place_recognition::candidate& candidate : candidates) {
+                if ((candidate.keyframe_id >= submap_start_id) && (candidate.keyframe_id > keyframe_id - loop_closure::min_keyframe_gap)) {
+                    continue;
+                }
+                const std::unordered_map<int, keyframe>::const_iterator found = this->keyframes.find(candidate.keyframe_id);
+                if (found == this->keyframes.end()) {
+                    continue;
+                }
+                const bool covisible_candidate = (graph.weight(keyframe_id, candidate.keyframe_id) >= loop_closure::max_covisible_landmarks);
+                loop_closure::shared_landmarks(keyframe_records, keyframe_records_size, found->second, correspondences, pairs, pair_records);
+                const size_t shared_by_id = correspondences.size();
+                if (covisible_candidate || (shared_by_id >= loop_closure::max_covisible_landmarks)) {
+                    if (this->covisible_revisits && this->covisible_revisit_loop(keyframe_id, pose, camera, keyframe_records, candidate.keyframe_id, found->second, correspondences, pairs, pair_records, outcome)) {
+                        return outcome;
+                    }
+                    core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d not a material covisible revisit (%zu landmarks shared by id).", keyframe_id, candidate.keyframe_id, shared_by_id);
+                    continue;
+                }
+                // A candidate that fails verification leaves the next one in rank to be tried, so an alias ranked first cannot hide the true loop.
+                if (verified >= loop_closure::max_verified_candidates) {
+                    break;
+                }
+                result attempt = unfound();
+                if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found->second, attempt)) {
+                    return attempt;
+                }
+                // When nothing verifies, the counts reported are those of the best ranked candidate.
+                if (verified == 0) {
+                    outcome.correspondences = attempt.correspondences;
+                    outcome.inliers = attempt.inliers;
+                }
+                ++verified;
             }
-            // When nothing verifies, the counts reported are those of the best ranked candidate.
-            if (verified == 0) {
-                outcome.correspondences = attempt.correspondences;
-                outcome.inliers = attempt.inliers;
-            }
-            ++verified;
         }
         if (seek_foreign && (submap_start_id > 0)) {
             size_t foreign_verified = 0;
@@ -553,6 +606,34 @@ namespace mapping {
     void loop_closure::set_hamming_scale(const float scale) {
         this->hamming_scale = scale;
         this->recognition.set_distance_threshold(static_cast<unsigned int>((static_cast<float>(place_recognition::default_distance_threshold) * scale) + 0.5f));
+    }
+
+    void loop_closure::set_place_recognition(const place_recognition::engine engine) {
+        if (engine == this->recognition.get_engine()) {
+            return;
+        }
+        this->recognition.set_engine(engine);
+        // The keyframes already held are indexed again by the new engine, in the order they came.
+        std::vector<int> keyframe_ids;
+        keyframe_ids.reserve(this->keyframes.size());
+        for (const auto& [keyframe_id, stored] : this->keyframes) {
+            static_cast<void>(stored);
+            keyframe_ids.push_back(keyframe_id);
+        }
+        std::sort(keyframe_ids.begin(), keyframe_ids.end());
+        std::vector<feature::descriptor::stored> descriptors;
+        for (const int keyframe_id : keyframe_ids) {
+            const std::vector<record>& records = this->keyframes.at(keyframe_id).records;
+            descriptors.resize(records.size());
+            for (size_t i = 0; i < records.size(); ++i) {
+                descriptors[i] = records[i].descriptor;
+            }
+            this->recognition.add_keyframe(keyframe_id, descriptors.data(), descriptors.size());
+        }
+    }
+
+    place_recognition::engine loop_closure::get_place_recognition() const {
+        return this->recognition.get_engine();
     }
 
     void loop_closure::set_covisible_revisits(const bool enabled) {
