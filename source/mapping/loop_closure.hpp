@@ -30,6 +30,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
@@ -142,6 +143,10 @@ namespace mapping {
         void add_keyframe(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size);
 
         void remove_keyframe(const int keyframe_id);
+
+        // Brings the held keyframes up to date with the map: each keyframe's pose from pose_of, and each record's location
+        // from location_of, a record whose landmark is gone dropped; a keyframe pose_of does not know keeps its pose.
+        void refresh(const std::function<bool(const int, math::se3<double>&)>& pose_of, const std::function<bool(const int, math::matrix<double, 3, 1>&)>& location_of);
 
         size_t num_keyframes() const;
 

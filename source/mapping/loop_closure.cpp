@@ -811,6 +811,26 @@ namespace mapping {
         this->covisible_revisits = enabled;
     }
 
+    void loop_closure::refresh(const std::function<bool(const int, math::se3<double>&)>& pose_of, const std::function<bool(const int, math::matrix<double, 3, 1>&)>& location_of) {
+        for (auto& [keyframe_id, stored] : this->keyframes) {
+            math::se3<double> pose;
+            if (pose_of(keyframe_id, pose)) {
+                stored.pose = pose;
+            }
+            size_t kept = 0;
+            for (size_t i = 0; i < stored.records.size(); ++i) {
+                math::matrix<double, 3, 1> location;
+                if (!location_of(stored.records[i].landmark_id, location)) {
+                    continue;
+                }
+                stored.records[kept] = stored.records[i];
+                stored.records[kept].location = location;
+                ++kept;
+            }
+            stored.records.resize(kept);
+        }
+    }
+
     void loop_closure::remove_keyframe(const int keyframe_id) {
         this->recognition.remove_keyframe(keyframe_id);
         this->keyframes.erase(keyframe_id);

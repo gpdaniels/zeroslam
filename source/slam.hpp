@@ -2180,6 +2180,8 @@ private:
     static constexpr size_t voxel_occluding_points = static_cast<size_t>(-1);
     static constexpr size_t voxel_depth_minimum = 10;
     static constexpr size_t local_map_fallback_tracks = 100;
+    // Whether the loop detector's held keyframes are refreshed from the map before each detection.
+    static constexpr bool refresh_loop_records = false;
 
     // The active point tracks that own a landmark still in the map.
     size_t landmark_track_count() {
@@ -4104,6 +4106,27 @@ public:
             this->covisibility_.end_update();
             this->rebuild_local_map(frame_current.id);
             const math::se3<double> pose(frame_current.rotation, frame_current.translation);
+            if (slam::refresh_loop_records) {
+                // The held keyframes match against the map as it is now, as ORB-SLAM3 matches the current map points,
+                // rather than against copies taken when each keyframe was added.
+                const auto pose_of = [this](const int keyframe_id, math::se3<double>& held) {
+                    const std::unordered_map<int, mapping::frame>::const_iterator found = this->reconstruction.frames.find(keyframe_id);
+                    if (found == this->reconstruction.frames.end()) {
+                        return false;
+                    }
+                    held = math::se3<double>(found->second.rotation, found->second.translation);
+                    return true;
+                };
+                const auto location_of = [this](const int landmark_id, math::matrix<double, 3, 1>& location) {
+                    const std::unordered_map<int, mapping::point>::const_iterator landmark = this->reconstruction.landmarks.find(landmark_id);
+                    if ((landmark == this->reconstruction.landmarks.end()) || landmark->second.at_infinity()) {
+                        return false;
+                    }
+                    location = landmark->second.location;
+                    return true;
+                };
+                this->loop_closure_.refresh(pose_of, location_of);
+            }
             const mapping::loop_closure::result loop = this->loop_closure_.detect(frame_current.id, pose, frame_current.camera, this->covisibility_, records.data(), records.size(), this->submap_start_of(frame_current.id), this->map_component(frame_current.id) != 0);
             // A loop between two submaps that both stand apart cannot be recorded as a join to the map, so it waits until
             // one of them meets the map.

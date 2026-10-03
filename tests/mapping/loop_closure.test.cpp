@@ -459,6 +459,34 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Refreshing takes each record's location from the map and drops the records whose landmark is gone.
+    {
+        mapping::loop_closure refreshed;
+        refreshed.add_keyframe(0, identity, test_camera(), first.data(), first.size());
+        const math::matrix<double, 3, 1> shift = { { 0.5, -0.25, 1.0 } };
+        const auto pose_of = [](const int, math::se3<double>&) {
+            return false;
+        };
+        const auto location_of = [&first, &shift](const int landmark_id, math::matrix<double, 3, 1>& location) {
+            if ((landmark_id % 2) != 0) {
+                return false;
+            }
+            location = first[static_cast<size_t>(landmark_id)].location + shift;
+            return true;
+        };
+        refreshed.refresh(pose_of, location_of);
+        size_t records_size = 0;
+        const mapping::loop_closure::record* const records = refreshed.records_of(0, records_size);
+        REQUIRE(records_size == first.size() / 2);
+        for (size_t i = 0; i < records_size; ++i) {
+            REQUIRE((records[i].landmark_id % 2) == 0);
+            const math::matrix<double, 3, 1> expected = first[static_cast<size_t>(records[i].landmark_id)].location + shift;
+            for (size_t axis = 0; axis < 3; ++axis) {
+                REQUIRE(is_value_approx(records[i].location[axis], expected[axis], 1e-12));
+            }
+        }
+    }
+
     // The ibow place recognition proposes the keyframes of an earlier visit, its landmarks detected again under new ids,
     // and verification closes the loop; switching to it indexes the keyframes already held again.
     {
