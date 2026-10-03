@@ -755,6 +755,19 @@ private:
             frame.rotation = pose.rotation().get_matrix();
             frame.translation = pose.translation();
         }
+        // The loop detector's held keyframes go with the map, their records as each saw them, so that the next loop against
+        // one does not measure this correction again (KITTI 05: after a loop rescaled the map by 0.37, the next ones read
+        // 1.8 against records from before it).
+        if (!slam::refresh_loop_records) {
+            this->loop_closure_.correct([&corrected](const int id, math::sim3<double>& held) {
+                const std::unordered_map<int, math::sim3<double>>::const_iterator found = corrected.find(id);
+                if (found == corrected.end()) {
+                    return false;
+                }
+                held = found->second;
+                return true;
+            });
+        }
         for (const auto& [landmark_id, landmark_observations] : this->reconstruction.observations) {
             if (landmark_observations.empty()) {
                 continue;

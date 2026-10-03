@@ -529,6 +529,44 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Correcting a held keyframe carries its records through its corrected camera, pixels as they were, and a revisit seen
+    // in the corrected world verifies against it to the same scale.
+    {
+        mapping::loop_closure moved;
+        moved.set_reprojection_hypotheses(false);
+        moved.set_accept_by_inliers(false);
+        moved.add_keyframe(0, identity, test_camera(), first.data(), first.size());
+        const math::sim3<double> correction(math::se3<double>(math::so3<double>::exp({ { 0.1, -0.2, 0.05 } }), { { 1.0, 2.0, -0.5 } }), 2.0);
+        moved.correct([&correction](const int keyframe_id, math::sim3<double>& camera_to_world) {
+            if (keyframe_id != 0) {
+                return false;
+            }
+            camera_to_world = correction;
+            return true;
+        });
+        size_t moved_size = 0;
+        const mapping::loop_closure::record* const moved_records = moved.records_of(0, moved_size);
+        REQUIRE(moved_size == first.size());
+        for (size_t i = 0; i < moved_size; ++i) {
+            const math::matrix<double, 3, 1> expected = correction * first[i].location;
+            for (size_t axis = 0; axis < 3; ++axis) {
+                REQUIRE(is_value_approx(moved_records[i].location[axis], expected[axis], 1e-9));
+            }
+            REQUIRE(moved_records[i].pixel_x == first[i].pixel_x);
+            REQUIRE(moved_records[i].pixel_y == first[i].pixel_y);
+        }
+        std::vector<mapping::loop_closure::record> revisit_moved = revisit;
+        for (mapping::loop_closure::record& held : revisit_moved) {
+            held.location = correction * held.location;
+        }
+        const math::se3<double> moved_pose = (correction * math::sim3<double>(current_pose.inverse(), 1.0)).transformation().inverse();
+        const mapping::loop_closure::result result = moved.detect(40, moved_pose, test_camera(), unconnected, revisit_moved.data(), revisit_moved.size());
+        REQUIRE(result.found);
+        REQUIRE(result.keyframe_id == 0);
+        REQUIRE(result.inliers == 35);
+        REQUIRE(is_value_approx(result.correction.scale(), 1.0 / 1.1, 1e-6));
+    }
+
     // Refreshing takes each record's location from the map and drops the records whose landmark is gone.
     {
         mapping::loop_closure refreshed;

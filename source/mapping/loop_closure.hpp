@@ -214,6 +214,11 @@ namespace mapping {
         // from location_of, a record whose landmark is gone dropped; a keyframe pose_of does not know keeps its pose.
         void refresh(const std::function<bool(const int, math::se3<double>&)>& pose_of, const std::function<bool(const int, math::matrix<double, 3, 1>&)>& location_of);
 
+        // Carries the held keyframes with the map when a loop closes: each keyframe camera_to_world knows takes the pose of
+        // its corrected camera-to-world similarity, and its records go through it from the camera as they were seen, so
+        // that they keep reprojecting into its image rather than staying where the map was before the correction.
+        void correct(const std::function<bool(const int, math::sim3<double>&)>& camera_to_world);
+
         size_t num_keyframes() const;
 
         void set_hamming_scale(const float scale);

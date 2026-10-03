@@ -988,6 +988,27 @@ namespace mapping {
         }
     }
 
+    void loop_closure::correct(const std::function<bool(const int, math::sim3<double>&)>& camera_to_world) {
+        for (auto& [keyframe_id, stored] : this->keyframes) {
+            math::sim3<double> corrected;
+            if (!camera_to_world(keyframe_id, corrected)) {
+                continue;
+            }
+            for (record& held : stored.records) {
+                held.location = corrected * (stored.pose * held.location);
+            }
+            stored.pose = corrected.transformation().inverse();
+        }
+        // A loop waiting for confirmation keeps its similarity as one between cameras, which the correction leaves alone.
+        if (this->pending.active) {
+            const std::unordered_map<int, keyframe>::const_iterator candidate = this->keyframes.find(this->pending.candidate_id);
+            const std::unordered_map<int, keyframe>::const_iterator last = this->keyframes.find(this->pending.keyframe_id);
+            if ((candidate != this->keyframes.end()) && (last != this->keyframes.end())) {
+                this->pending.correction = math::sim3<double>(candidate->second.pose, 1.0).inverse() * this->pending.relative * math::sim3<double>(last->second.pose, 1.0);
+            }
+        }
+    }
+
     void loop_closure::remove_keyframe(const int keyframe_id) {
         this->recognition.remove_keyframe(keyframe_id);
         this->keyframes.erase(keyframe_id);
