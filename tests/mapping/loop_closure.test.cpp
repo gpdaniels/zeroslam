@@ -210,6 +210,57 @@ int main(int argc, char* argv[]) {
         closure.set_reprojection_hypotheses(false);
     }
 
+    // A revisit most of whose inliers are found by the guided search, their descriptors too far from the recorded ones to be
+    // paired at first, while more than half of the initial pairs are landmarks misplaced along their rays (monocular depth),
+    // which still match by descriptor and image motion: refused for the share of the initial pairs unless the inliers are
+    // accepted whatever share they are.
+    {
+        core::random_pcg accepting_random(0xacce97ull);
+        constexpr static const size_t paired_first = 20;
+        constexpr static const size_t guided_only = 30;
+        constexpr static const size_t misplaced = 25;
+        std::vector<mapping::loop_closure::record> earlier;
+        for (int landmark_id = 0; landmark_id < static_cast<int>(paired_first + guided_only + misplaced); ++landmark_id) {
+            earlier.push_back(random_record(accepting_random, landmark_id));
+        }
+        observe_records(earlier, identity);
+        mapping::loop_closure accepting;
+        accepting.set_reprojection_hypotheses(false);
+        accepting.set_accept_by_inliers(false);
+        accepting.add_keyframe(0, identity, test_camera(), earlier.data(), earlier.size());
+        std::vector<mapping::loop_closure::record> later = earlier;
+        for (size_t i = 0; i < later.size(); ++i) {
+            later[i].landmark_id = 2000 + static_cast<int>(i);
+            later[i].location = drift * earlier[i].location;
+        }
+        observe_records(later, current_pose);
+        for (size_t i = paired_first; i < paired_first + guided_only; ++i) {
+            for (size_t bit = 0; bit < 60; ++bit) {
+                later[i].descriptor[bit / 8] = static_cast<unsigned char>(later[i].descriptor[bit / 8] ^ (1u << (bit % 8)));
+            }
+        }
+        // Each by its own factor, as one factor about the camera centre would be a similarity they all fit.
+        const math::matrix<double, 3, 1> centre = current_pose.inverse().translation();
+        for (size_t i = paired_first + guided_only; i < later.size(); ++i) {
+            later[i].location = centre + ((later[i].location - centre) * (1.5 + (0.25 * static_cast<double>(i % 7))));
+        }
+        const mapping::loop_closure::result refused = accepting.detect(40, current_pose, test_camera(), unconnected, later.data(), later.size());
+        REQUIRE(!refused.found);
+        REQUIRE(refused.inliers == paired_first + guided_only);
+        accepting.set_accept_by_inliers(true);
+        const mapping::loop_closure::result result = accepting.detect(40, current_pose, test_camera(), unconnected, later.data(), later.size());
+        REQUIRE(result.found);
+        REQUIRE(result.keyframe_id == 0);
+        REQUIRE(result.correspondences == later.size());
+        REQUIRE(result.inliers == paired_first + guided_only);
+        REQUIRE(result.inliers >= mapping::loop_closure::min_inliers_any_share);
+        for (const mapping::loop_closure::correspondence& match : result.matches) {
+            REQUIRE(match.landmark_id == match.recorded_landmark_id + 2000);
+            REQUIRE(match.recorded_landmark_id < static_cast<int>(paired_first + guided_only));
+        }
+        REQUIRE(is_value_approx(result.correction.scale(), 1.0 / 1.1, 1e-6));
+    }
+
     {
         const mapping::loop_closure::result sparse = closure.detect(40, identity, test_camera(), unconnected, revisit.data(), 2);
         REQUIRE(!sparse.found);

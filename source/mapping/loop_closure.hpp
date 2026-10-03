@@ -90,6 +90,11 @@ namespace mapping {
         constexpr static const size_t foreign_min_inliers = 25;
         constexpr static const double foreign_min_inlier_fraction = 0.3;
         constexpr static const double max_scale_ratio = 2.0;
+        // With accept_by_inliers, a similarity this many reprojection inliers support is accepted whatever share of the
+        // initial pairs they are: the guided search finds most of a true loop's inliers, and the share of the initial pairs
+        // does not count them (79 of the 224 true pairs verification refused for inliers on EuRoC had 15 or more, up to 83
+        // of 274).
+        constexpr static const size_t min_inliers_any_share = 40;
 
     private:
         class keyframe final {
@@ -106,6 +111,7 @@ namespace mapping {
         // Whether the first similarity of a verification comes from hypotheses scored by reprojection into both keyframes,
         // as ORB-SLAM3 scores them, rather than by 3D distance.
         bool reprojection_hypotheses = false;
+        bool accept_by_inliers = false;
 
         // Similarities rhs = s R lhs + t from three pairs at a time, each supported by the pairs that reproject within the
         // inlier bound in both keyframes, and the best refitted on its supporters.
@@ -150,6 +156,9 @@ namespace mapping {
         // Whether a verification's first similarity is scored by reprojection into both keyframes (see
         // reprojection_hypotheses) rather than by 3D distance.
         void set_reprojection_hypotheses(const bool enabled);
+
+        // Whether a verification accepts min_inliers_any_share inliers whatever share of the initial pairs they are.
+        void set_accept_by_inliers(const bool enabled);
 
         std::vector<int> recall(const feature::descriptor::stored* const descriptors, const size_t descriptors_size, const size_t max_recalled) const;
 

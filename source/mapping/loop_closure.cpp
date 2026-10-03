@@ -618,7 +618,9 @@ namespace mapping {
         // costs the map its consistency until it joins; such a join may keep a smaller share of its pairs if it keeps more.
         const size_t inliers_required = foreign_submap ? loop_closure::foreign_min_inliers : loop_closure::min_inliers;
         const double fraction_required = foreign_submap ? loop_closure::foreign_min_inlier_fraction : loop_closure::min_inlier_fraction;
-        if ((outcome.inliers < inliers_required) || (static_cast<double>(paired_inliers) < fraction_required * static_cast<double>(paired))) {
+        const bool enough_share = static_cast<double>(paired_inliers) >= fraction_required * static_cast<double>(paired);
+        const bool enough_alone = this->accept_by_inliers && (outcome.inliers >= loop_closure::min_inliers_any_share);
+        if ((outcome.inliers < inliers_required) || (!enough_share && !enough_alone)) {
             core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d rejected, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity (%zu fitted it in 3D).", keyframe_id, candidate_id, outcome.inliers, correspondences.size(), shared_by_id, guided, inliers_size);
             outcome.matches.clear();
             return false;
@@ -761,6 +763,10 @@ namespace mapping {
 
     place_recognition::engine loop_closure::get_place_recognition() const {
         return this->recognition.get_engine();
+    }
+
+    void loop_closure::set_accept_by_inliers(const bool enabled) {
+        this->accept_by_inliers = enabled;
     }
 
     void loop_closure::set_reprojection_hypotheses(const bool enabled) {
