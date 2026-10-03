@@ -69,6 +69,9 @@ namespace mapping {
             math::sim3<double> correction;
             math::sim3<double> relative;
             std::vector<correspondence> matches;
+            // Verified by min_provisional_inliers rather than by the share of its initial pairs or min_inliers_any_share, so
+            // reported only once rescaling_confirmations keyframes verify it.
+            bool provisional;
         };
 
         constexpr static const size_t max_candidates = 20;
@@ -103,6 +106,10 @@ namespace mapping {
         // does not count them (79 of the 224 true pairs verification refused for inliers on EuRoC had 15 or more, up to 83
         // of 274).
         constexpr static const size_t min_inliers_any_share = 40;
+        // With provisional_loops, a similarity this many reprojection inliers support whatever share of the initial pairs
+        // they are is taken provisionally, to be confirmed by rescaling_confirmations keyframes: a true loop on KITTI 07,
+        // matched against one keyframe's records, keeps 26-28 inliers once the refinement starts from the hypothesis.
+        constexpr static const size_t min_provisional_inliers = 25;
         // A loop that waits for confirmation is checked against at most this many keyframes covisible with the keyframe that
         // found it, and dropped when this many keyframes in a row then fail to verify it (ORB-SLAM3's verification in
         // covisible keyframes and in time).
@@ -148,6 +155,10 @@ namespace mapping {
         // than from every pair. Off: on the harness it kept ETH3D planar_2 whole but closed a loop that bent LaMAria R_01
         // from 9.6 to 81 cm.
         bool refine_from_hypothesis = false;
+        // Whether a verification that meets neither the share of its initial pairs nor min_inliers_any_share is still taken,
+        // as provisional, with min_provisional_inliers. Off: it closes KITTI 07's loop to the start of the sequence (21.2 ->
+        // 0.9 m), but confirmed loops between nearby places taken so bent LaMAria R_01 from 7.3 to 21 cm.
+        bool provisional_loops = false;
         // How many keyframes must verify a loop before it is reported, the keyframe that found it included.
         size_t loop_confirmations = 1;
         pending_loop pending;
@@ -227,6 +238,9 @@ namespace mapping {
         // Whether a verification's refinement starts from the pairs its first similarity explains (see
         // refine_from_hypothesis) rather than from every pair.
         void set_refine_from_hypothesis(const bool enabled);
+
+        // Whether a verification may take a loop provisionally (see provisional_loops).
+        void set_provisional_loops(const bool enabled);
 
         // How many keyframes must verify a loop before detect reports it, as ORB-SLAM3 confirms a loop by three: the keyframe
         // that found it, then up to max_confirming_covisibles keyframes covisible with it, then the keyframes that follow,

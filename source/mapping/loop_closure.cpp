@@ -85,6 +85,7 @@ namespace mapping {
             empty.inliers = 0;
             empty.correction = math::sim3<double>::identity();
             empty.relative = math::sim3<double>::identity();
+            empty.provisional = false;
             return empty;
         };
         result outcome = unfound();
@@ -558,7 +559,7 @@ namespace mapping {
     loop_closure::result loop_closure::confirm_or_hold(const int keyframe_id, const int submap_start_id, const covisibility& graph, const result& verified) {
         const double scale = verified.correction.scale();
         const bool rescaling = (verified.keyframe_id >= submap_start_id) && ((scale > loop_closure::max_scale_ratio) || (scale < 1.0 / loop_closure::max_scale_ratio));
-        const size_t required = rescaling ? math::max(this->loop_confirmations, loop_closure::rescaling_confirmations) : this->loop_confirmations;
+        const size_t required = (rescaling || verified.provisional) ? math::max(this->loop_confirmations, loop_closure::rescaling_confirmations) : this->loop_confirmations;
         if (required <= 1) {
             return verified;
         }
@@ -795,7 +796,8 @@ namespace mapping {
         const double fraction_required = foreign_submap ? loop_closure::foreign_min_inlier_fraction : loop_closure::min_inlier_fraction;
         const bool enough_share = static_cast<double>(paired_inliers) >= fraction_required * static_cast<double>(paired);
         const bool enough_alone = this->accept_by_inliers && (outcome.inliers >= loop_closure::min_inliers_any_share);
-        if ((outcome.inliers < inliers_required) || (!enough_share && !enough_alone)) {
+        const bool provisional = !enough_share && !enough_alone && this->provisional_loops && (outcome.inliers >= loop_closure::min_provisional_inliers);
+        if ((outcome.inliers < inliers_required) || (!enough_share && !enough_alone && !provisional)) {
             core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d rejected, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity (%zu fitted it in 3D).", keyframe_id, candidate_id, outcome.inliers, correspondences.size(), shared_by_id, guided, inliers_size);
             outcome.matches.clear();
             return false;
@@ -803,10 +805,11 @@ namespace mapping {
 
         outcome.found = true;
         outcome.keyframe_id = candidate_id;
+        outcome.provisional = provisional;
         outcome.correction = correction;
         outcome.relative = math::sim3<double>(candidate_keyframe->pose, 1.0) * outcome.correction * math::sim3<double>(pose.inverse(), 1.0);
         // A loop that waits for more keyframes to verify it is reported by confirm_or_hold.
-        core::logger::log(core::logger::level::note, ((this->loop_confirmations <= 1) && (foreign_submap || ((correction.scale() <= loop_closure::max_scale_ratio) && (correction.scale() >= 1.0 / loop_closure::max_scale_ratio)))) ? "Loop detected keyframe %d -> %d, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity, scale %.4f, translation %.4f." : "Loop candidate keyframe %d -> %d verified, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity, scale %.4f, translation %.4f.", keyframe_id, candidate_id, outcome.inliers, correspondences.size(), shared_by_id, guided, correction.scale(), math::sqrt(correction.transformation().translation().get_length_squared()));
+        core::logger::log(core::logger::level::note, ((this->loop_confirmations <= 1) && !provisional && (foreign_submap || ((correction.scale() <= loop_closure::max_scale_ratio) && (correction.scale() >= 1.0 / loop_closure::max_scale_ratio)))) ? "Loop detected keyframe %d -> %d, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity, scale %.4f, translation %.4f." : "Loop candidate keyframe %d -> %d verified, %zu of %zu shared landmarks (%zu by id, %zu found by projection) reproject through the refined similarity, scale %.4f, translation %.4f.", keyframe_id, candidate_id, outcome.inliers, correspondences.size(), shared_by_id, guided, correction.scale(), math::sqrt(correction.transformation().translation().get_length_squared()));
         return true;
     }
 
@@ -947,6 +950,10 @@ namespace mapping {
 
     void loop_closure::set_refine_from_hypothesis(const bool enabled) {
         this->refine_from_hypothesis = enabled;
+    }
+
+    void loop_closure::set_provisional_loops(const bool enabled) {
+        this->provisional_loops = enabled;
     }
 
     void loop_closure::set_loop_confirmations(const size_t count) {

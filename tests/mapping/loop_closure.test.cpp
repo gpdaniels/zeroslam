@@ -282,6 +282,54 @@ int main(int argc, char* argv[]) {
         REQUIRE(is_value_approx(result.correction.scale(), 1.0 / 1.1, 1e-6));
     }
 
+    // A verification with fewer inliers than min_inliers_any_share, under half of its initial pairs, is refused unless loops
+    // may be taken provisionally, and then the loop is held until two more keyframes verify it.
+    {
+        core::random_pcg provisional_random(0x9a0715ull);
+        constexpr static const size_t paired_first = 10;
+        constexpr static const size_t guided_only = 20;
+        constexpr static const size_t misplaced = 15;
+        std::vector<mapping::loop_closure::record> earlier;
+        for (int landmark_id = 0; landmark_id < static_cast<int>(paired_first + guided_only + misplaced); ++landmark_id) {
+            earlier.push_back(random_record(provisional_random, landmark_id));
+        }
+        observe_records(earlier, identity);
+        const auto later_from = [&](const math::se3<double>& from) {
+            std::vector<mapping::loop_closure::record> later = earlier;
+            for (size_t i = 0; i < later.size(); ++i) {
+                later[i].landmark_id = 7000 + static_cast<int>(i);
+                later[i].location = drift * earlier[i].location;
+            }
+            observe_records(later, from);
+            for (size_t i = paired_first; i < paired_first + guided_only; ++i) {
+                for (size_t bit = 0; bit < 60; ++bit) {
+                    later[i].descriptor[bit / 8] = static_cast<unsigned char>(later[i].descriptor[bit / 8] ^ (1u << (bit % 8)));
+                }
+            }
+            const math::matrix<double, 3, 1> centre = from.inverse().translation();
+            for (size_t i = paired_first + guided_only; i < later.size(); ++i) {
+                later[i].location = centre + ((later[i].location - centre) * (1.5 + (0.25 * static_cast<double>(i % 7))));
+            }
+            return later;
+        };
+        for (const bool provisional : { false, true }) {
+            mapping::loop_closure taking;
+            taking.set_provisional_loops(provisional);
+            taking.add_keyframe(0, identity, test_camera(), earlier.data(), earlier.size());
+            for (int keyframe_id = 40; keyframe_id < 43; ++keyframe_id) {
+                const math::se3<double> from = math::se3<double>(math::so3<double>::identity(), { { 0.05 * static_cast<double>(keyframe_id - 40), 0.0, 0.0 } }) * current_pose;
+                const std::vector<mapping::loop_closure::record> later = later_from(from);
+                const mapping::loop_closure::result result = taking.detect(keyframe_id, from, test_camera(), unconnected, later.data(), later.size());
+                REQUIRE(result.found == (provisional && (keyframe_id == 42)));
+                if (result.found) {
+                    REQUIRE(result.keyframe_id == 0);
+                    REQUIRE(is_value_approx(result.correction.scale(), 1.0 / 1.1, 1e-6));
+                }
+                taking.add_keyframe(keyframe_id, from, test_camera(), later.data(), later.size());
+            }
+        }
+    }
+
     // When most of the initial pairs are landmarks misplaced along their rays, a refinement over every pair is pulled away
     // from the inliers, ending with fewer than the first similarity had, and starts again from the pairs that similarity
     // explains, which keeps them; started from those pairs at once it keeps them too.
