@@ -227,6 +227,7 @@ int main(int argc, char* argv[]) {
         mapping::loop_closure accepting;
         accepting.set_reprojection_hypotheses(false);
         accepting.set_accept_by_inliers(false);
+        accepting.set_refine_from_hypothesis(false);
         accepting.add_keyframe(0, identity, test_camera(), earlier.data(), earlier.size());
         std::vector<mapping::loop_closure::record> later = earlier;
         for (size_t i = 0; i < later.size(); ++i) {
@@ -257,6 +258,47 @@ int main(int argc, char* argv[]) {
         for (const mapping::loop_closure::correspondence& match : result.matches) {
             REQUIRE(match.landmark_id == match.recorded_landmark_id + 2000);
             REQUIRE(match.recorded_landmark_id < static_cast<int>(paired_first + guided_only));
+        }
+        REQUIRE(is_value_approx(result.correction.scale(), 1.0 / 1.1, 1e-6));
+    }
+
+    // When most of the initial pairs are landmarks misplaced along their rays, a refinement over every pair is pulled away
+    // from the inliers; one that starts from the pairs the first similarity explains keeps them.
+    {
+        core::random_pcg crowded_random(0xc0ded5eedull);
+        constexpr static const size_t placed = mapping::loop_closure::min_inliers_any_share + 5;
+        std::vector<mapping::loop_closure::record> earlier;
+        for (int landmark_id = 0; landmark_id < 100; ++landmark_id) {
+            earlier.push_back(random_record(crowded_random, landmark_id));
+        }
+        observe_records(earlier, identity);
+        mapping::loop_closure crowded;
+        crowded.set_reprojection_hypotheses(false);
+        crowded.set_accept_by_inliers(true);
+        crowded.set_refine_from_hypothesis(false);
+        crowded.add_keyframe(0, identity, test_camera(), earlier.data(), earlier.size());
+        std::vector<mapping::loop_closure::record> later = earlier;
+        for (size_t i = 0; i < later.size(); ++i) {
+            later[i].landmark_id = 3000 + static_cast<int>(i);
+            later[i].location = drift * earlier[i].location;
+        }
+        observe_records(later, current_pose);
+        const math::matrix<double, 3, 1> centre = current_pose.inverse().translation();
+        for (size_t i = placed; i < later.size(); ++i) {
+            later[i].location = centre + ((later[i].location - centre) * (1.5 + (0.25 * static_cast<double>(i % 7))));
+        }
+        const mapping::loop_closure::result pulled = crowded.detect(40, current_pose, test_camera(), unconnected, later.data(), later.size());
+        REQUIRE(!pulled.found);
+        REQUIRE(pulled.inliers < placed);
+        crowded.set_refine_from_hypothesis(true);
+        const mapping::loop_closure::result result = crowded.detect(40, current_pose, test_camera(), unconnected, later.data(), later.size());
+        REQUIRE(result.found);
+        REQUIRE(result.keyframe_id == 0);
+        REQUIRE(result.correspondences == later.size());
+        REQUIRE(result.inliers == placed);
+        for (const mapping::loop_closure::correspondence& match : result.matches) {
+            REQUIRE(match.landmark_id == match.recorded_landmark_id + 3000);
+            REQUIRE(match.recorded_landmark_id < static_cast<int>(placed));
         }
         REQUIRE(is_value_approx(result.correction.scale(), 1.0 / 1.1, 1e-6));
     }

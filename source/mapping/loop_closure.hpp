@@ -112,6 +112,10 @@ namespace mapping {
         // as ORB-SLAM3 scores them, rather than by 3D distance.
         bool reprojection_hypotheses = false;
         bool accept_by_inliers = false;
+        // Whether the refinement starts from the pairs the first similarity reprojects within the guided search's radius in
+        // both keyframes, as ORB-SLAM3 optimises its similarity over the matches it finds by projection with it, rather
+        // than from every pair.
+        bool refine_from_hypothesis = false;
 
         // Similarities rhs = s R lhs + t from three pairs at a time, each supported by the pairs that reproject within the
         // inlier bound in both keyframes, and the best refitted on its supporters.
@@ -159,6 +163,10 @@ namespace mapping {
 
         // Whether a verification accepts min_inliers_any_share inliers whatever share of the initial pairs they are.
         void set_accept_by_inliers(const bool enabled);
+
+        // Whether a verification's refinement starts from the pairs its first similarity explains (see
+        // refine_from_hypothesis) rather than from every pair.
+        void set_refine_from_hypothesis(const bool enabled);
 
         std::vector<int> recall(const feature::descriptor::stored* const descriptors, const size_t descriptors_size, const size_t max_recalled) const;
 

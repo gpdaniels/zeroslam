@@ -544,6 +544,45 @@ namespace mapping {
             outcome.correspondences = correspondences.size();
         }
 
+        // Whether pair i reprojects through the similarity within the bound in both keyframes.
+        const auto reprojects = [&](const size_t i, const math::sim3<double>& similarity, const math::sim3<double>& similarity_inverse, const double bound_squared) -> bool {
+            const record& current_record = keyframe_records[pair_records[i].first];
+            const record& recorded_record = candidate_records[pair_records[i].second];
+            const math::matrix<double, 3, 1> current_in_loop = candidate_keyframe->pose * (similarity * correspondences[i].lhs);
+            const math::matrix<double, 3, 1> recorded_in_current = pose * (similarity_inverse * correspondences[i].rhs);
+            double projected_in_loop[2] = {};
+            double projected_in_current[2] = {};
+            if (!candidate_keyframe->camera.project(current_in_loop.data(), &projected_in_loop[0]) || !camera.project(recorded_in_current.data(), &projected_in_current[0])) {
+                return false;
+            }
+            const double loop_error_x = projected_in_loop[0] - static_cast<double>(recorded_record.pixel_x);
+            const double loop_error_y = projected_in_loop[1] - static_cast<double>(recorded_record.pixel_y);
+            const double current_error_x = projected_in_current[0] - static_cast<double>(current_record.pixel_x);
+            const double current_error_y = projected_in_current[1] - static_cast<double>(current_record.pixel_y);
+            return ((loop_error_x * loop_error_x) + (loop_error_y * loop_error_y) <= bound_squared) && ((current_error_x * current_error_x) + (current_error_y * current_error_y) <= bound_squared);
+        };
+
+        // The pairs the refinement starts from: with refine_from_hypothesis those the first similarity reprojects within the
+        // guided search's radius, so that the initial pairs it does not explain cannot pull it away from its inliers when
+        // they are most of the pairs.
+        std::vector<unsigned char> seeded(correspondences.size(), static_cast<unsigned char>(1));
+        size_t seeded_count = correspondences.size();
+        if (this->refine_from_hypothesis) {
+            const math::sim3<double> correction_inverse = correction.inverse();
+            const double radius_squared = loop_closure::guided_search_radius * loop_closure::guided_search_radius;
+            size_t explained = 0;
+            for (size_t i = 0; i < correspondences.size(); ++i) {
+                seeded[i] = reprojects(i, correction, correction_inverse, radius_squared) ? 1 : 0;
+                explained += seeded[i];
+            }
+            if (explained >= 3) {
+                seeded_count = explained;
+            }
+            else {
+                seeded.assign(correspondences.size(), static_cast<unsigned char>(1));
+            }
+        }
+
         {
             optimisation::factor_graph refinement;
             double parameters[8] = { correction.transformation().translation()[0], correction.transformation().translation()[1], correction.transformation().translation()[2], correction.transformation().rotation().get_quaternion()[1], correction.transformation().rotation().get_quaternion()[2], correction.transformation().rotation().get_quaternion()[3], correction.transformation().rotation().get_quaternion()[0], correction.scale() };
@@ -562,6 +601,10 @@ namespace mapping {
             std::vector<std::pair<optimisation::edge*, optimisation::edge*>> factors;
             factors.reserve(correspondences.size());
             for (size_t i = 0; i < correspondences.size(); ++i) {
+                if (seeded[i] == 0) {
+                    factors.push_back({ nullptr, nullptr });
+                    continue;
+                }
                 const record& current_record = keyframe_records[pair_records[i].first];
                 const record& recorded_record = candidate_records[pair_records[i].second];
                 factors.push_back({ add_edge(correspondences[i].lhs, candidate_keyframe->camera, candidate_keyframe->pose, false, recorded_record.pixel_x, recorded_record.pixel_y), add_edge(correspondences[i].rhs, camera, pose, true, current_record.pixel_x, current_record.pixel_y) });
@@ -579,7 +622,7 @@ namespace mapping {
                     ++dropped;
                 }
             }
-            if ((dropped > 0) && (dropped < factors.size())) {
+            if ((dropped > 0) && (dropped < seeded_count)) {
                 static_cast<void>(refinement.solve(loop_closure::refine_rounds, true));
             }
             const double* const refined = vertex->get_parameters();
@@ -594,20 +637,7 @@ namespace mapping {
         size_t paired_inliers = 0;
         outcome.matches.reserve(correspondences.size());
         for (size_t i = 0; i < correspondences.size(); ++i) {
-            const record& current_record = keyframe_records[pair_records[i].first];
-            const record& recorded_record = candidate_records[pair_records[i].second];
-            const math::matrix<double, 3, 1> current_in_loop = candidate_keyframe->pose * (correction * correspondences[i].lhs);
-            const math::matrix<double, 3, 1> recorded_in_current = pose * (correction_inverse * correspondences[i].rhs);
-            double projected_in_loop[2] = {};
-            double projected_in_current[2] = {};
-            if (!candidate_keyframe->camera.project(current_in_loop.data(), &projected_in_loop[0]) || !camera.project(recorded_in_current.data(), &projected_in_current[0])) {
-                continue;
-            }
-            const double loop_error_x = projected_in_loop[0] - static_cast<double>(recorded_record.pixel_x);
-            const double loop_error_y = projected_in_loop[1] - static_cast<double>(recorded_record.pixel_y);
-            const double current_error_x = projected_in_current[0] - static_cast<double>(current_record.pixel_x);
-            const double current_error_y = projected_in_current[1] - static_cast<double>(current_record.pixel_y);
-            if (((loop_error_x * loop_error_x) + (loop_error_y * loop_error_y) > loop_closure::reprojection_inlier_bound_squared) || ((current_error_x * current_error_x) + (current_error_y * current_error_y) > loop_closure::reprojection_inlier_bound_squared)) {
+            if (!reprojects(i, correction, correction_inverse, loop_closure::reprojection_inlier_bound_squared)) {
                 continue;
             }
             outcome.matches.push_back(pairs[i]);
@@ -767,6 +797,10 @@ namespace mapping {
 
     void loop_closure::set_accept_by_inliers(const bool enabled) {
         this->accept_by_inliers = enabled;
+    }
+
+    void loop_closure::set_refine_from_hypothesis(const bool enabled) {
+        this->refine_from_hypothesis = enabled;
     }
 
     void loop_closure::set_reprojection_hypotheses(const bool enabled) {
