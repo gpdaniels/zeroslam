@@ -283,7 +283,8 @@ int main(int argc, char* argv[]) {
     }
 
     // When most of the initial pairs are landmarks misplaced along their rays, a refinement over every pair is pulled away
-    // from the inliers; one that starts from the pairs the first similarity explains keeps them.
+    // from the inliers, ending with fewer than the first similarity had, and starts again from the pairs that similarity
+    // explains, which keeps them; started from those pairs at once it keeps them too.
     {
         core::random_pcg crowded_random(0xc0ded5eedull);
         constexpr static const size_t placed = mapping::loop_closure::min_inliers_any_share + 5;
@@ -307,9 +308,10 @@ int main(int argc, char* argv[]) {
         for (size_t i = placed; i < later.size(); ++i) {
             later[i].location = centre + ((later[i].location - centre) * (1.5 + (0.25 * static_cast<double>(i % 7))));
         }
-        const mapping::loop_closure::result pulled = crowded.detect(40, current_pose, test_camera(), unconnected, later.data(), later.size());
-        REQUIRE(!pulled.found);
-        REQUIRE(pulled.inliers < placed);
+        const mapping::loop_closure::result recovered = crowded.detect(40, current_pose, test_camera(), unconnected, later.data(), later.size());
+        REQUIRE(recovered.found);
+        REQUIRE(recovered.inliers == placed);
+        REQUIRE(is_value_approx(recovered.correction.scale(), 1.0 / 1.1, 1e-6));
         crowded.set_refine_from_hypothesis(true);
         const mapping::loop_closure::result result = crowded.detect(40, current_pose, test_camera(), unconnected, later.data(), later.size());
         REQUIRE(result.found);

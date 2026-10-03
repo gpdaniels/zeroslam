@@ -736,28 +736,43 @@ namespace mapping {
             return loop_closure::reprojects(pose, camera, keyframe_records[pair_records[i].first], candidate, candidate_records[pair_records[i].second], correspondences[i], similarity, similarity_inverse, bound_squared);
         };
 
-        // The pairs the refinement starts from: with refine_from_hypothesis those the first similarity reprojects within the
-        // guided search's radius, so that the initial pairs it does not explain cannot pull it away from its inliers when
-        // they are most of the pairs.
-        std::vector<unsigned char> seeded(correspondences.size(), static_cast<unsigned char>(1));
-        size_t seeded_count = correspondences.size();
-        if (this->refine_from_hypothesis) {
-            const math::sim3<double> correction_inverse = correction.inverse();
-            const double radius_squared = loop_closure::guided_search_radius * loop_closure::guided_search_radius;
-            size_t explained = 0;
+        // The pairs the first similarity reprojects within the guided search's radius, and how many reproject within the
+        // inlier bound through it.
+        const math::sim3<double> hypothesis = correction;
+        const math::sim3<double> hypothesis_inverse = hypothesis.inverse();
+        const double radius_squared = loop_closure::guided_search_radius * loop_closure::guided_search_radius;
+        std::vector<unsigned char> explained(correspondences.size(), static_cast<unsigned char>(0));
+        size_t explained_count = 0;
+        size_t hypothesis_inliers = 0;
+        for (size_t i = 0; i < correspondences.size(); ++i) {
+            explained[i] = pair_reprojects(i, hypothesis, hypothesis_inverse, radius_squared) ? 1 : 0;
+            explained_count += explained[i];
+            hypothesis_inliers += pair_reprojects(i, hypothesis, hypothesis_inverse, loop_closure::reprojection_inlier_bound_squared) ? 1u : 0u;
+        }
+        const auto count_inliers = [&](const math::sim3<double>& similarity) {
+            const math::sim3<double> similarity_inverse = similarity.inverse();
+            size_t supported = 0;
             for (size_t i = 0; i < correspondences.size(); ++i) {
-                seeded[i] = pair_reprojects(i, correction, correction_inverse, radius_squared) ? 1 : 0;
-                explained += seeded[i];
+                supported += pair_reprojects(i, similarity, similarity_inverse, loop_closure::reprojection_inlier_bound_squared) ? 1u : 0u;
             }
-            if (explained >= 3) {
-                seeded_count = explained;
-            }
-            else {
-                seeded.assign(correspondences.size(), static_cast<unsigned char>(1));
+            return supported;
+        };
+
+        // The refinement starts from every pair, or with refine_from_hypothesis from the pairs the first similarity explains,
+        // so that the initial pairs it does not explain cannot pull it away from its inliers when they are most of the pairs.
+        // A refinement over every pair that ends with fewer inliers than the first similarity had has been pulled away, and
+        // starts again from the explained pairs (KITTI 07: 8 of 22 initial pairs and 33 found by projection fitted the
+        // hypothesis, none the refinement over every pair, 28 the refinement from the explained ones).
+        const std::vector<unsigned char> every(correspondences.size(), static_cast<unsigned char>(1));
+        const bool seed = this->refine_from_hypothesis && (explained_count >= 3);
+        correction = loop_closure::refine_similarity(pose, camera, keyframe_records, candidate, correspondences, pair_records, seed ? explained : every, seed ? explained_count : correspondences.size(), hypothesis);
+        if (!seed && (explained_count >= 3) && (count_inliers(correction) < hypothesis_inliers)) {
+            const math::sim3<double> reseeded = loop_closure::refine_similarity(pose, camera, keyframe_records, candidate, correspondences, pair_records, explained, explained_count, hypothesis);
+            if (count_inliers(reseeded) > count_inliers(correction)) {
+                core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d refined again from the %zu pairs its first similarity explains.", keyframe_id, candidate_id, explained_count);
+                correction = reseeded;
             }
         }
-
-        correction = loop_closure::refine_similarity(pose, camera, keyframe_records, candidate, correspondences, pair_records, seeded, seeded_count, correction);
         if (!foreign_submap && ((correction.scale() > loop_closure::max_rescaling_ratio) || (correction.scale() < 1.0 / loop_closure::max_rescaling_ratio))) {
             core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d rejected, the refined scale %.4f is not plausible.", keyframe_id, candidate_id, correction.scale());
             return false;
