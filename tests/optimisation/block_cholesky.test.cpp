@@ -286,6 +286,34 @@ int main(int argc, char* argv[]) {
         REQUIRE(factor.block_count() == 0);
         REQUIRE(factor.factorise());
         REQUIRE(factor.solve(nullptr, nullptr));
+        const optimisation::block_cholesky& constant = factor;
+        REQUIRE(constant.get_values() == factor.get_values());
+        REQUIRE(constant.block_count() == 0);
+    }
+
+    {
+        // Read only, a factor hands out the same storage and offsets the analysed pattern laid out.
+        std::vector<std::pair<int, int>> pattern;
+        for (int i = 0; i + 1 < 12; ++i) {
+            pattern.push_back({ i, i + 1 });
+        }
+        const block_problem problem = make_problem(rng, std::vector<int>(12, 6), pattern);
+        optimisation::block_cholesky factor;
+        factor.analyse(problem.dimensions, problem.neighbours);
+        const optimisation::block_cholesky& constant = factor;
+        REQUIRE(constant.get_values() == factor.get_values());
+        REQUIRE(constant.dimension_count() == factor.dimension_count());
+        REQUIRE(constant.factor_blocks() == factor.factor_blocks());
+        int pivots = 0;
+        for (int position = 0; position < factor.block_count(); ++position) {
+            REQUIRE(constant.diagonal_offset(position) == factor.diagonal_offset(position));
+            for (size_t entry = constant.column_entries_begin(position); entry < constant.column_entries_end(position); ++entry) {
+                REQUIRE(constant.entry_row(entry) > position);
+                REQUIRE(constant.entry_offset(entry) == factor.entry_offset(entry));
+            }
+            ++pivots;
+        }
+        REQUIRE(pivots > 1);
     }
 
     return EXIT_SUCCESS;

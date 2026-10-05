@@ -105,6 +105,18 @@ static void exercise() {
     }
 
     {
+        // A distorted model reads back the whole of its parameters, and only of the right count.
+        model erased = sensor::camera::pinhole_radial_tangential<type>(radial_parameters, 12);
+        type parameters[12] = {};
+        REQUIRE(!erased.get_parameters(parameters, 11));
+        REQUIRE(!erased.get_parameters(nullptr, 12));
+        REQUIRE(erased.get_parameters(parameters, 12));
+        for (size_t i = 0; i < 12; ++i) {
+            REQUIRE(parameters[i] == radial_parameters[i]);
+        }
+    }
+
+    {
         model erased = sensor::camera::pinhole_radial_tangential<type>(radial_parameters, 12);
         REQUIRE(erased.get_parameter_count() == 12);
         REQUIRE(std::strcmp(erased.name(), "pinhole_radial_tangential") == 0);

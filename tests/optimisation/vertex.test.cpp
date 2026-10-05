@@ -23,6 +23,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <utility>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -110,7 +112,33 @@ int main(int argc, char* argv[]) {
         REQUIRE(copy.get_parameters()[0] == 4.0);
         REQUIRE(copy.get_parameters()[1] == 5.0);
         REQUIRE(original.get_parameters()[0] == 9.0);
+
+        // Assignment takes the type, the flags and the parameters of the other vertex, and a self assignment leaves it alone.
+        optimisation::vertex assigned;
+        REQUIRE(!assigned.is_valid());
+        assigned = original;
+        REQUIRE(assigned.is_valid());
+        REQUIRE(std::strcmp(assigned.name(), "scalar") == 0);
+        REQUIRE(assigned.get_parameters()[0] == 9.0);
+        REQUIRE(assigned.get_local_dimensions() == 2);
+        optimisation::vertex& assigned_alias = assigned;
+        assigned = assigned_alias;
+        REQUIRE(assigned.is_valid());
+        REQUIRE(assigned.get_parameters()[0] == 9.0);
+        assigned.set_fixed();
+        assigned.set_ordering_id(4);
+        optimisation::vertex move_assigned{ scalar_vertex() };
+        move_assigned = std::move(assigned);
+        REQUIRE(move_assigned.is_valid());
+        REQUIRE(move_assigned.is_fixed());
+        REQUIRE(move_assigned.get_ordering_id() == 4);
+        REQUIRE(move_assigned.get_parameters()[0] == 9.0);
+        move_assigned.plus(&delta[0]);
+        REQUIRE(is_value_approx(move_assigned.get_parameters()[0], 9.5));
     }
+
+    // An erased vertex has no type to name.
+    REQUIRE(std::strcmp(empty.name(), "") == 0);
 
     return EXIT_SUCCESS;
 }

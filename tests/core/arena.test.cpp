@@ -87,6 +87,24 @@ int main(int argc, char* argv[]) {
     }
 
     {
+        // The counters follow the chunks the arena hands out: a request served from a chunk already in hand adds nothing,
+        // one too big for them buys a new chunk and the bytes that come with it.
+        core::arena::scope scope;
+        const size_t chunks_before = arena.chunk_count();
+        const size_t bytes_before = arena.chunk_bytes();
+        unsigned char* small = static_cast<unsigned char*>(arena.allocate(1234, 8));
+        REQUIRE(small != nullptr);
+        small[1233] = 1;
+        REQUIRE(arena.chunk_bytes() <= bytes_before + core::arena::chunk_size);
+        unsigned char* large = static_cast<unsigned char*>(arena.allocate(2 * core::arena::chunk_size, 16));
+        REQUIRE(large != nullptr);
+        large[(2 * core::arena::chunk_size) - 1] = 2;
+        REQUIRE(arena.chunk_count() > chunks_before);
+        REQUIRE(arena.chunk_bytes() >= bytes_before + core::arena::chunk_size);
+        REQUIRE(arena.depth() > 0);
+    }
+
+    {
         core::arena::scope scope;
         const size_t chunks_before = arena.chunk_count();
         unsigned char* large = static_cast<unsigned char*>(arena.allocate(3 * core::arena::chunk_size, 16));

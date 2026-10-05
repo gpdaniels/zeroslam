@@ -76,6 +76,40 @@ int main(int argc, char* argv[]) {
     }
 
     {
+        // Nearest neighbour sampling takes the pixel the nearest source corner falls in, and a zero sized target takes nothing.
+        unsigned char data[4][4] = {
+            { 0, 1, 2, 3 },
+            { 4, 5, 6, 7 },
+            { 8, 9, 10, 11 },
+            { 12, 13, 14, 15 }
+        };
+        unsigned char half[2][2] = {};
+        image::resize::nearest(&data[0][0], 4, 4, 2, 2, &half[0][0]);
+        REQUIRE(half[0][0] == 5);
+        REQUIRE(half[0][1] == 7);
+        REQUIRE(half[1][0] == 13);
+        REQUIRE(half[1][1] == 15);
+        unsigned char same[4][4] = {};
+        image::resize::nearest(&data[0][0], 4, 4, 4, 4, &same[0][0]);
+        REQUIRE(same[2][2] == 10);
+        REQUIRE(same[0][0] == 0);
+        unsigned char corner[2][2] = { { 1, 2 }, { 3, 4 } };
+        unsigned char doubled[4][4] = {};
+        image::resize::nearest(&corner[0][0], 2, 2, 4, 4, &doubled[0][0]);
+        REQUIRE(doubled[0][0] == 1);
+        REQUIRE(doubled[0][1] == 1);
+        REQUIRE(doubled[0][2] == 2);
+        REQUIRE(doubled[0][3] == 2);
+        REQUIRE(doubled[3][0] == 3);
+        REQUIRE(doubled[3][1] == 3);
+        REQUIRE(doubled[3][2] == 4);
+        REQUIRE(doubled[3][3] == 4);
+        unsigned char none[1][1] = { { 99 } };
+        image::resize::nearest(&data[0][0], 4, 4, 0, 2, &none[0][0]);
+        REQUIRE(none[0][0] == 99);
+    }
+
+    {
         image::image image(10, 20);
         for (size_t i = 0; i < image.get_rows(); ++i) {
             for (size_t j = 0; j < image.get_cols(); ++j) {

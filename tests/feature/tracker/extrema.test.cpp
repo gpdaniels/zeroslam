@@ -241,6 +241,29 @@ int main(int argc, char* argv[]) {
     }
 
     {
+        // The settings can be read back and replaced on a live tracker, and every track it holds is listed with the track itself, not a copy.
+        feature::tracker::extrema::options settings = test_options();
+        settings.maximum_tracks = 40;
+        feature::tracker::extrema tracker(settings);
+        REQUIRE(tracker.get_options().maximum_tracks == 40);
+        REQUIRE(tracker.get_options().flow_scale == test_options().flow_scale);
+        const std::vector<unsigned char> frame_data = sample_frame(waves, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        image::image frame(frame_height, frame_width, const_cast<unsigned char*>(frame_data.data()));
+        tracker.update(0, frame);
+        const std::vector<feature::tracker::tracker::track*> all = tracker.all_tracks();
+        REQUIRE(all.size() == tracker.size());
+        REQUIRE(all.size() == tracker.active_tracks().size());
+        for (feature::tracker::tracker::track* track : all) {
+            REQUIRE(tracker.find(track->id) == track);
+            REQUIRE(track->length == 1);
+        }
+        settings.maximum_tracks = 5;
+        tracker.set_options(settings);
+        REQUIRE(tracker.get_options().maximum_tracks == 5);
+        REQUIRE(tracker.all_tracks().size() == all.size());
+    }
+
+    {
         const int shift_x = 12;
         const int shift_y = 9;
         feature::tracker::extrema tracker(test_options());

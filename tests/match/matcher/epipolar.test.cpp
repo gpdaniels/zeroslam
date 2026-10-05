@@ -143,6 +143,7 @@ int main(int argc, char* argv[]) {
         const float tolerances[4] = { 1.0f, 3.0f, 50.0f, 200.0f };
         size_t wrapped_intervals = 0;
         size_t near_epipole_points = 0;
+        size_t degenerate_queries = 0;
         size_t compared = 0;
 
         const double translations[4][3] = {
@@ -171,6 +172,12 @@ int main(int argc, char* argv[]) {
                     }
 
                     match::matcher::epipolar::index index;
+                    index.reserve(point_count);
+                    REQUIRE(!index.is_valid());
+                    REQUIRE(index.size() == 0);
+                    size_t nothing[2] = { 0, 0 };
+                    REQUIRE(index.query(1.0f, 1.0f, nothing, 2) == 0);
+                    REQUIRE(index.query_linear(1.0f, 1.0f, nothing, 2) == 0);
                     REQUIRE(index.build(points.data(), points.size(), fundamental, tolerance));
                     REQUIRE(index.is_valid());
                     REQUIRE(index.size() == point_count);
@@ -179,6 +186,34 @@ int main(int argc, char* argv[]) {
                     double epipole_y = 0.0;
                     index.epipole(epipole_x, epipole_y);
                     const bool at_infinity = index.epipole_at_infinity();
+
+                    // The epipole has no epipolar line of its own, so every keypoint is a candidate there, by either route.
+                    {
+                        std::vector<size_t> from_tree(point_count + 1);
+                        std::vector<size_t> from_scan(point_count + 1);
+                        const size_t tree_count = index.query(static_cast<float>(epipole_x), static_cast<float>(epipole_y), from_tree.data(), from_tree.size());
+                        const size_t scan_count = index.query_linear(static_cast<float>(epipole_x), static_cast<float>(epipole_y), from_scan.data(), from_scan.size());
+                        REQUIRE(tree_count == scan_count);
+                        for (size_t i = 0; i < tree_count; ++i) {
+                            REQUIRE(from_tree[i] < point_count);
+                            REQUIRE(from_scan[i] == from_tree[i]);
+                        }
+                        // Where the line of the epipole has no direction to speak of, every keypoint is a candidate.
+                        if (tree_count == point_count) {
+                            for (size_t i = 0; i < point_count; ++i) {
+                                REQUIRE(from_tree[i] == i);
+                                REQUIRE(from_scan[i] == i);
+                            }
+                            degenerate_queries += 1;
+                        }
+                        // A candidate buffer smaller than the set keeps only the first of the keys.
+                        if (point_count > 3) {
+                            REQUIRE(index.query(static_cast<float>(epipole_x), static_cast<float>(epipole_y), from_tree.data(), 3) == std::min(tree_count, static_cast<size_t>(3)));
+                            REQUIRE(index.query_linear(static_cast<float>(epipole_x), static_cast<float>(epipole_y), from_scan.data(), 3) == std::min(scan_count, static_cast<size_t>(3)));
+                        }
+                        REQUIRE(index.query(static_cast<float>(epipole_x), static_cast<float>(epipole_y), from_tree.data(), 0) == 0);
+                        REQUIRE(index.query_linear(static_cast<float>(epipole_x), static_cast<float>(epipole_y), from_scan.data(), 0) == 0);
+                    }
 
                     if (!at_infinity) {
                         for (size_t i = 0; i < point_count; ++i) {
@@ -254,6 +289,7 @@ int main(int argc, char* argv[]) {
         }
         REQUIRE(wrapped_intervals > 0);
         REQUIRE(near_epipole_points > 0);
+        REQUIRE(degenerate_queries > 0);
         REQUIRE(compared > 100000);
     }
 

@@ -125,6 +125,11 @@ int main(int argc, char* argv[]) {
         feature::descriptor::binary<256> offset_descriptor;
         feature::descriptor::sift::describe(at_centre, size, 0.0f, 0.0f, angle, offset_descriptor);
         REQUIRE(match::distance::hamming::distance(first, offset_descriptor) == 0);
+        // Describing without an offset is the same description.
+        feature::descriptor::binary<256> centred_descriptor;
+        feature::descriptor::sift::describe(at_centre, size, angle, centred_descriptor);
+        REQUIRE(match::distance::hamming::distance(first, centred_descriptor) == 0);
+        REQUIRE(match::distance::hamming::distance(centred_descriptor, offset_descriptor) == 0);
     }
 
     {

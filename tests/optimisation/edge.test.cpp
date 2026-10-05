@@ -28,6 +28,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <utility>
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -135,6 +137,73 @@ int main(int argc, char* argv[]) {
     edge.robust_info(rho_delta, robust_information);
     REQUIRE(is_value_approx(rho_delta, 9.0 / 13.0));
     REQUIRE(is_value_approx(robust_information[0][0], 180.0 / 169.0));
+
+    // The ordering id is the edge's own, kept across a copy and set to order the solve.
+    REQUIRE(edge.get_ordering_id() == 0);
+    edge.set_ordering_id(3);
+    REQUIRE(edge.get_ordering_id() == 3);
+
+    // Vertices can be set in one go, but only as many as the edge holds jacobians for, and a rejected set leaves them as they were.
+    {
+        optimisation::edge replaced{ distance_edge() };
+        const std::vector<optimisation::vertex*> both{ &lhs, &rhs };
+        REQUIRE(replaced.set_vertices(both));
+        REQUIRE(replaced.num_vertices() == 2);
+        REQUIRE(replaced.get_vertices()[1] == &rhs);
+        const std::vector<optimisation::vertex*> three{ &lhs, &rhs, &lhs };
+        REQUIRE(!replaced.set_vertices(three));
+        REQUIRE(replaced.num_vertices() == 2);
+    }
+
+    // A copy holds the vertices and the observation but its own storage, so residualing it differently leaves the original's residual alone.
+    {
+        optimisation::edge copied{ edge };
+        REQUIRE(copied.is_valid());
+        REQUIRE(std::strcmp(copied.name(), "distance") == 0);
+        REQUIRE(copied.get_ordering_id() == 3);
+        REQUIRE(copied.num_vertices() == 2);
+        REQUIRE((copied.get_vertex(0) == &lhs) && (copied.get_vertex(1) == &rhs));
+        REQUIRE(copied.get_loss().is_valid());
+        REQUIRE(is_value_approx(copied.robust_chi2(), edge.robust_chi2()));
+        copied.set_observation(math::matrix<double, 0, 0>(1, 1, math::matrix<double, 1, 1>{ { 8.0 } }.data()));
+        copied.compute_residual();
+        REQUIRE(is_value_approx(copied.get_residual()[0][0], 3.0));
+        REQUIRE(is_value_approx(edge.get_residual()[0][0], 1.0));
+        copied.compute_jacobians();
+        REQUIRE(copied.get_jacobians().size() == 2);
+        REQUIRE(is_value_approx(copied.get_jacobians()[1][0][1], -0.8, 1e-6));
+
+        // A move hands over the residual and the vertices with the storage, leaving an empty edge behind.
+        {
+            optimisation::edge moved{ distance_edge() };
+            moved = std::move(copied);
+            REQUIRE(moved.is_valid());
+            REQUIRE(std::strcmp(moved.name(), "distance") == 0);
+            REQUIRE(moved.num_vertices() == 2);
+            REQUIRE(moved.get_vertex(1) == &rhs);
+            REQUIRE(!copied.is_valid());
+            REQUIRE(copied.num_vertices() == 0);
+            REQUIRE(std::strcmp(copied.name(), "") == 0);
+            moved.compute_residual();
+            REQUIRE(is_value_approx(moved.get_residual()[0][0], 3.0));
+        }
+    }
+
+    // Assignment copies into an edge that held nothing, and assigning an edge to itself leaves it alone.
+    {
+        optimisation::edge assigned;
+        REQUIRE(!assigned.is_valid());
+        assigned = edge;
+        REQUIRE(assigned.is_valid());
+        REQUIRE(std::strcmp(assigned.name(), "distance") == 0);
+        REQUIRE(assigned.num_vertices() == 2);
+        optimisation::edge& assigned_alias = assigned;
+        assigned = assigned_alias;
+        REQUIRE(assigned.is_valid());
+        REQUIRE(assigned.num_vertices() == 2);
+        assigned.compute_residual();
+        REQUIRE(is_value_approx(assigned.get_residual()[0][0], 1.0));
+    }
 
     return EXIT_SUCCESS;
 }

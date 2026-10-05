@@ -63,6 +63,34 @@ int main(int argc, char* argv[]) {
     feature::tracker::line tracker(opts);
 
     {
+        // The defaults, the options handed to the constructor, and a later change are all read back as set.
+        const feature::tracker::line defaulted;
+        REQUIRE(defaulted.get_options().min_length == 20.0f);
+        REQUIRE(defaulted.get_options().max_missed == 5);
+        REQUIRE(tracker.get_options().max_missed == 5);
+        REQUIRE(tracker.get_options().match_overlap == 0.3f);
+        feature::tracker::line::options changed;
+        changed.min_length = 40.0f;
+        changed.match_angle_tolerance = 2.5f;
+        changed.match_midpoint_distance = 12.0f;
+        changed.match_overlap = 0.75f;
+        changed.predicted_angle_tolerance = 1.5f;
+        changed.predicted_distance = 3.0f;
+        changed.max_missed = 2;
+        tracker.set_options(changed);
+        const feature::tracker::line::options& read_back = tracker.get_options();
+        REQUIRE(read_back.min_length == 40.0f);
+        REQUIRE(read_back.match_angle_tolerance == 2.5f);
+        REQUIRE(read_back.match_midpoint_distance == 12.0f);
+        REQUIRE(read_back.match_overlap == 0.75f);
+        REQUIRE(read_back.predicted_angle_tolerance == 1.5f);
+        REQUIRE(read_back.predicted_distance == 3.0f);
+        REQUIRE(read_back.max_missed == 2);
+        tracker.set_options(opts);
+        REQUIRE(tracker.get_options().max_missed == 5);
+    }
+
+    {
         std::vector<feature::detector::elsed::segment> segments;
         segments.push_back(make_segment(100.0f, 100.0f, 300.0f, 100.0f));
         segments.push_back(make_segment(200.0f, 50.0f, 200.0f, 250.0f));

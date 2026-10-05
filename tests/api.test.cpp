@@ -96,6 +96,10 @@ int main(int argc, char* argv[]) {
         REQUIRE(zeroslam_get_timestamp(system, nullptr) == zeroslam_return_failure_invalid_argument);
         REQUIRE(zeroslam_get_timestamp(system, &timestamp) == zeroslam_return_success);
         REQUIRE(timestamp == 0);
+        // Finalising asks the map to settle; a system with nothing in it settles at once, and a second time over too.
+        REQUIRE(zeroslam_finalise(nullptr) == zeroslam_return_failure_invalid_system);
+        REQUIRE(zeroslam_finalise(system) == zeroslam_return_success);
+        REQUIRE(zeroslam_finalise(system) == zeroslam_return_success);
         REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
         REQUIRE(system == nullptr);
     }
