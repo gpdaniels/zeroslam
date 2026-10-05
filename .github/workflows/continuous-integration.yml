@@ -199,14 +199,15 @@ jobs:
         if [ "$RUNNER_OS" == "Linux" ]; then
           gcovr --root . --filter 'source/' --gcov-ignore-parse-errors=suspicious_hits.warn_once_per_file --print-summary --markdown -o build/coverage/coverage.md --markdown-summary build/coverage/coverage-summary.md --fail-under-line "${COVERAGE_FAIL_UNDER_LINE}" --fail-under-function "${COVERAGE_FAIL_UNDER_FUNCTION}" --fail-under-branch "${COVERAGE_FAIL_UNDER_BRANCH}" 2> >(grep -v "Found 'mcdc_records' in exported JSON report" >&2) build/coverage
         else
-          # The tests compile the library objects into each test executable and never load the shared library, so export the
-          # coverage of every test executable too, otherwise the code only the tests instantiate is missing from the report.
+          # The tests link the library that exports the internals they use, and every test executable instantiates the header code
+          # it includes, so export that library and every test executable too, otherwise the code only the tests instantiate is
+          # missing from the report.
           LLVM_COV_ARGS=()
           if [ "$RUNNER_OS" == "Windows" ]; then
-            LLVM_COV_ARGS+=(--llvm-cov-binary "build/coverage/runtime/${{ matrix.config }}/zeroslam.dll")
+            LLVM_COV_ARGS+=(--llvm-cov-binary "build/coverage/runtime/${{ matrix.config }}/zeroslam_test.dll")
             TEST_BINARIES=(build/coverage/runtime/${{ matrix.config }}/test_*.exe)
           else
-            LLVM_COV_ARGS+=(--llvm-cov-binary "build/coverage/library/${{ matrix.config }}/libzeroslam.dylib")
+            LLVM_COV_ARGS+=(--llvm-cov-binary "build/coverage/library/${{ matrix.config }}/libzeroslam_test.dylib")
             TEST_BINARIES=(build/coverage/runtime/${{ matrix.config }}/test_*)
           fi
           for TEST_BINARY in "${TEST_BINARIES[@]}"; do
