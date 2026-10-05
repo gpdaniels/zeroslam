@@ -62,11 +62,11 @@ int main(int argc, char* argv[]) {
 
     // The cost does not depend on how far inside the threshold the inliers are.
     {
-        const float close[3] = { 0.9f, 0.9f, 5.0f };
-        const float far[3] = { 0.0f, 0.0f, 5.0f };
+        const float near_threshold[3] = { 0.9f, 0.9f, 5.0f };
+        const float far_threshold[3] = { 0.0f, 0.0f, 5.0f };
         size_t inliers[3] = {};
         size_t inliers_size = 0;
-        REQUIRE(support.evaluate(close, 3, inliers, inliers_size) == support.evaluate(far, 3, inliers, inliers_size));
+        REQUIRE(support.evaluate(near_threshold, 3, inliers, inliers_size) == support.evaluate(far_threshold, 3, inliers, inliers_size));
         REQUIRE(inliers_size == 2);
     }
 
