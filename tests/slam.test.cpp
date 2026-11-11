@@ -1022,6 +1022,113 @@ static void test_relocalisation_into_an_older_map(const int width, const int hei
     REQUIRE(of_back == 0);
 }
 
+// A loop can meet a submap that stands apart from either side. The camera maps a third of a circle, loses the scene, maps
+// another third as a submap, and loses the scene again. Either it then starts a second submap that runs round into the first
+// one, a loop between two submaps of which neither is in the map, and on into the map; or it relocalises in the map and runs
+// round into the submap, a loop from the map into a submap. Both loops used to be dropped: only the submap of the newest
+// keyframe could be joined, and only to the map, so the first submap was left where it started, far from where it is.
+static void test_loops_between_submaps(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& room, const bool return_to_the_map) {
+    constexpr static const int lost_frames = 60;
+    const auto circle = [](const int step) {
+        const double angle = 2.0 * 3.14159265358979323846 * static_cast<double>(step) / 72.0;
+        const math::so3<double> rotation = math::so3<double>::rotation(0, angle, 0);
+        const math::matrix<double, 3, 1> centre = { { 3.0 * std::sin(angle), 0.0, 6.0 - (3.0 * std::cos(angle)) } };
+        return math::se3<double>(rotation, -(rotation * centre));
+    };
+    const auto approach = [](const int step) {
+        const math::matrix<double, 3, 1> centre = { { (step - 8) * 0.25, 0.0, 3.0 } };
+        return math::se3<double>(math::so3<double>::identity(), -centre);
+    };
+    const std::vector<unsigned char> black(static_cast<size_t>(width) * static_cast<size_t>(height), 0);
+    slam system;
+    system.frontend.track_collision_distance = 0.0f;
+    std::unordered_map<int, math::matrix<double, 3, 1>> truth;
+    int next_id = 0;
+    const auto see = [&](const math::se3<double>& pose) {
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
+        room.render_frame(pose, intrinsics, frame);
+        system.process_frame(intrinsics, frame);
+        truth[next_id++] = -(math::transpose(pose.rotation().get_matrix()) * pose.translation());
+    };
+    const auto lose = [&]() {
+        for (int gap = 0; gap < lost_frames; ++gap) {
+            image::image frame(static_cast<size_t>(height), static_cast<size_t>(width), black.data());
+            system.process_frame(intrinsics, frame);
+            ++next_id;
+        }
+    };
+    for (int step = 0; step < 8; step++) {
+        see(approach(step));
+    }
+    for (int step = 0; step <= 18; step++) {
+        see(circle(step));
+    }
+    const int first_end = next_id;
+    lose();
+    const int second_begin = next_id;
+    for (int step = 36; step <= 58; step++) {
+        see(circle(step));
+    }
+    const int second_end = next_id;
+    REQUIRE(system.submaps().size() == 1);
+    REQUIRE(!system.submaps().front().joined);
+    lose();
+    if (return_to_the_map) {
+        for (int step = 0; step < 8; step++) {
+            see(approach(step));
+        }
+        for (int step = 0; step <= 62; step++) {
+            see(circle(step));
+        }
+    }
+    else {
+        for (int step = 12; step <= 90; step++) {
+            see(circle(step));
+        }
+    }
+    REQUIRE(system.state() == slam::tracking_state::tracking);
+
+    // Every submap has been joined to the map, by the loops that met them.
+    REQUIRE(system.submaps().size() == (return_to_the_map ? 1u : 2u));
+    for (const slam::submap& joined : system.submaps()) {
+        REQUIRE(joined.joined);
+        REQUIRE(joined.component == 0);
+    }
+    REQUIRE(system.verified_loops.size() >= (return_to_the_map ? 1u : 2u));
+    bool met_second = false;
+    for (const slam::verified_loop& closed : system.verified_loops) {
+        met_second = met_second || ((closed.loop.keyframe_id >= second_begin) && (closed.loop.keyframe_id < second_end));
+    }
+    REQUIRE(met_second);
+
+    // The keyframes of the first submap are where they were taken from, measured from the first frame in the scale that the
+    // first part of the map sets.
+    system.finalise();
+    const auto centre_of = [&system](const int frame_id) {
+        const mapping::frame& frame = system.reconstruction.frames.at(frame_id);
+        return math::matrix<double, 3, 1>(-(math::transpose(frame.rotation) * frame.translation));
+    };
+    int first_last_keyframe_id = 0;
+    for (const int keyframe_id : system.keyframe_ids()) {
+        if (keyframe_id < first_end) {
+            first_last_keyframe_id = std::max(first_last_keyframe_id, keyframe_id);
+        }
+    }
+    REQUIRE(first_last_keyframe_id > 8);
+    const double scale = std::sqrt((centre_of(first_last_keyframe_id) - centre_of(0)).get_length_squared()) / std::sqrt((truth.at(first_last_keyframe_id) - truth.at(0)).get_length_squared());
+    size_t placed = 0;
+    for (const int keyframe_id : system.keyframe_ids()) {
+        if ((keyframe_id < second_begin) || (keyframe_id >= second_end)) {
+            continue;
+        }
+        const double estimated = std::sqrt((centre_of(keyframe_id) - centre_of(0)).get_length_squared()) / scale;
+        const double actual = std::sqrt((truth.at(keyframe_id) - truth.at(0)).get_length_squared());
+        REQUIRE(std::abs(estimated - actual) < 0.3);
+        ++placed;
+    }
+    REQUIRE(placed >= 3);
+}
+
 static void test_rotation_only(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {
     std::vector<math::se3<double>> trajectory;
     for (int i = 0; i < 10; i++) {
@@ -1307,6 +1414,8 @@ int main(int argc, char* argv[]) {
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::both, mapping::frame::settings::adjustment_kind::absolute, mapping::frame::settings::local_map_kind::voxels);
     test_relocalisation(width, height, intrinsics, renderer);
     test_relocalisation_into_an_older_map(width, height, intrinsics, room);
+    test_loops_between_submaps(width, height, intrinsics, room, false);
+    test_loops_between_submaps(width, height, intrinsics, room, true);
     test_submap_join(width, height, intrinsics, renderer);
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::klt, mapping::frame::settings::adjustment_kind::relative);
     test_submap_join(width, height, intrinsics, renderer, mapping::frame::settings::adjustment_kind::relative);

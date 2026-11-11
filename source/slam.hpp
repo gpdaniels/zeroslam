@@ -129,7 +129,11 @@ public:
     struct submap final {
         int start_id;
         int second_id;
+        // Whether a loop has joined the submap to the first map.
         bool joined;
+        // The part of the map the submap belongs to: 0 once it is joined to the first map, otherwise the number of a submap that
+        // stands apart, its own until a loop joins it to another one.
+        size_t component;
     };
 
     const std::vector<submap>& submaps() const {
@@ -686,8 +690,14 @@ private:
             parameters[7] = similarity.scale();
         };
 
-        const size_t current_submap = this->submap_of(keyframe_id);
+        // A loop within one part of the map corrects it around the keyframe the loop returned to. A loop between two parts
+        // joins them, by moving one onto the other: the current keyframe's part onto the loop keyframe's, unless the current
+        // keyframe is in the first map, which holds the gauge and stays, and the loop keyframe's part comes to it.
         const bool joining = this->map_component(keyframe_id) != this->map_component(loop.keyframe_id);
+        const bool moving_recorded = joining && (this->map_component(keyframe_id) == 0);
+        const int moved_keyframe_id = moving_recorded ? loop.keyframe_id : keyframe_id;
+        const int held_keyframe_id = moving_recorded ? keyframe_id : loop.keyframe_id;
+        const size_t moved_component = this->map_component(moved_keyframe_id);
         optimisation::factor_graph graph;
         std::unordered_map<int, optimisation::vertex*> vertices;
         std::unordered_map<int, math::se3<double>> previous_poses;
@@ -701,8 +711,8 @@ private:
             double parameters[8];
             similarity_parameters(camera_to_world[id], parameters);
             vertex.set_parameters(&parameters[0], 8);
-            const bool foreign_anchor = (this->reconstruction.anchor_frame_ids.count(id) != 0) && (this->submap_of(id) != current_submap);
-            vertex.set_fixed((id == this->reconstruction.gauge_frame_id) || (id == loop.keyframe_id) || foreign_anchor);
+            const bool foreign_anchor = (this->reconstruction.anchor_frame_ids.count(id) != 0) && (this->map_component(id) != moved_component);
+            vertex.set_fixed((id == this->reconstruction.gauge_frame_id) || (id == held_keyframe_id) || foreign_anchor);
             vertices[id] = graph.add_vertex(static_cast<optimisation::vertex&&>(vertex));
         }
         const auto add_edge = [&graph, &vertices, &similarity_parameters](const int first_id, const int second_id, const math::sim3<double>& measurement) {
@@ -747,19 +757,13 @@ private:
             corrected[id] = math::sim3<double>(math::se3<double>(math::so3<double>(p[6], p[3], p[4], p[5]), { { p[0], p[1], p[2] } }), p[7]);
         }
         for (const auto& [id, similarity] : corrected) {
-            if (joining && (this->submap_of(id) == current_submap)) {
+            if (joining && (this->map_component(id) == moved_component)) {
                 continue;
             }
             if ((similarity.scale() > rescale_bound) || (similarity.scale() < 1.0 / rescale_bound)) {
                 core::logger::log(core::logger::level::warn, "Loop %d -> %d not closed, the pose graph rescales keyframe %d by %.3f.", keyframe_id, loop.keyframe_id, id, similarity.scale());
                 return false;
             }
-        }
-
-        const size_t fused = this->fuse_loop_landmarks(loop, records);
-        this->verified_loops.push_back({ keyframe_id, loop, fused });
-        if (joining) {
-            this->join_submap(keyframe_id);
         }
 
         for (const auto& [id, similarity] : corrected) {
@@ -816,6 +820,14 @@ private:
                 landmark->second.plucker_line = corrected_line;
             }
         }
+        // The landmarks are fused once each has moved with the keyframe that first saw it. Until they are fused every landmark
+        // is seen from one part of the map only, so that keyframe is in the part the landmark is in; a fused landmark is seen
+        // from both sides of the loop, and the older side is not always the one that stayed.
+        const size_t fused = this->fuse_loop_landmarks(loop, records);
+        this->verified_loops.push_back({ keyframe_id, loop, fused });
+        if (joining) {
+            this->join_components(moved_keyframe_id, held_keyframe_id);
+        }
         this->update_anchored_frames();
         this->reconstruction.optimise(0, false, 50, true);
         this->reanchor_corrected();
@@ -861,7 +873,8 @@ private:
         const size_t fused = this->fuse_loop_landmarks(loop, records);
         this->verified_loops.push_back({ keyframe_id, loop, fused });
         if (joining) {
-            this->join_submap(keyframe_id);
+            const bool moving_recorded = this->map_component(keyframe_id) == 0;
+            this->join_components(moving_recorded ? loop.keyframe_id : keyframe_id, moving_recorded ? keyframe_id : loop.keyframe_id);
         }
         this->adjust_relative(keyframe_id, { keyframe_id, loop.keyframe_id }, { link });
         this->update_anchored_frames();
@@ -1872,10 +1885,11 @@ private:
         return index;
     }
 
-    // A submap joined to the map by a loop belongs to it; any other submap stands apart with its own scale.
+    // A submap joined to the map by a loop belongs to it; any other submap stands apart with its own scale, alone or with the
+    // submaps that loops have joined to it.
     size_t map_component(const int frame_id) const {
         const size_t index = this->submap_of(frame_id);
-        return ((index == 0) || this->submaps_[index - 1].joined) ? 0 : index;
+        return (index == 0) ? 0 : this->submaps_[index - 1].component;
     }
 
     void begin_submap(mapping::frame& frame_current) {
@@ -1898,7 +1912,7 @@ private:
     }
 
     void start_submap(const mapping::frame& frame_current) {
-        this->submaps_.push_back({ this->init_anchor_frame_id_, frame_current.id, false });
+        this->submaps_.push_back({ this->init_anchor_frame_id_, frame_current.id, false, this->submaps_.size() + 1 });
         this->tracking_submap_ = this->submaps_.size();
         for (auto& [frame_id, frame_submap] : this->frame_submaps_) {
             if (frame_id >= this->init_anchor_frame_id_) {
@@ -1936,16 +1950,31 @@ private:
         core::logger::log(core::logger::level::note, "Submap %zu started at keyframes %d and %d.", this->submaps_.size(), this->init_anchor_frame_id_, frame_current.id);
     }
 
-    void join_submap(const int keyframe_id) {
-        const size_t index = this->submap_of(keyframe_id);
-        if ((index == 0) || this->submaps_[index - 1].joined) {
+    // Joins the part of the map that holds one keyframe to the part that holds another, which a loop between them has just
+    // moved it onto: every submap of the first becomes part of the second and gives up the anchors that held its own gauge,
+    // which the second's anchors, or the first map's, hold from here on.
+    void join_components(const int moved_keyframe_id, const int held_keyframe_id) {
+        const size_t moved = this->map_component(moved_keyframe_id);
+        const size_t held = this->map_component(held_keyframe_id);
+        if ((moved == 0) || (moved == held)) {
             return;
         }
-        submap& joined = this->submaps_[index - 1];
-        joined.joined = true;
-        this->reconstruction.anchor_frame_ids.erase(joined.start_id);
-        this->reconstruction.anchor_frame_ids.erase(joined.second_id);
-        core::logger::log(core::logger::level::note, "Submap %zu joined to the map through keyframe %d.", index, keyframe_id);
+        for (size_t index = 0; index < this->submaps_.size(); ++index) {
+            submap& member = this->submaps_[index];
+            if (member.component != moved) {
+                continue;
+            }
+            member.component = held;
+            member.joined = (held == 0);
+            this->reconstruction.anchor_frame_ids.erase(member.start_id);
+            this->reconstruction.anchor_frame_ids.erase(member.second_id);
+            if (held == 0) {
+                core::logger::log(core::logger::level::note, "Submap %zu joined to the map through keyframe %d.", index + 1, moved_keyframe_id);
+            }
+            else {
+                core::logger::log(core::logger::level::note, "Submap %zu joined to submap %zu through keyframe %d, both still apart from the map.", index + 1, held, moved_keyframe_id);
+            }
+        }
     }
 
     std::vector<feature::tracker::tracker::track*> active_point_tracks() {
@@ -4223,10 +4252,7 @@ public:
                 this->loop_closure_.refresh(pose_of, location_of);
             }
             const mapping::loop_closure::result loop = this->loop_closure_.detect(frame_current.id, pose, frame_current.camera, this->covisibility_, records.data(), records.size(), this->submap_of(frame_current.id), this->map_component(frame_current.id) != 0);
-            // A loop between two submaps that both stand apart cannot be recorded as a join to the map, so it waits until
-            // one of them meets the map.
-            const bool between_apart = loop.found && (this->map_component(loop.keyframe_id) != 0) && (this->map_component(loop.keyframe_id) != this->map_component(frame_current.id));
-            if (loop.found && !between_apart) {
+            if (loop.found) {
                 this->close_loop(frame_current.id, loop, records);
             }
             this->loop_closure_.add_keyframe(frame_current.id, pose, frame_current.camera, records.data(), records.size(), this->submap_of(frame_current.id));
