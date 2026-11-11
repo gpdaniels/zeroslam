@@ -27,6 +27,16 @@ namespace optimisation::edges {
         return -reprojection::behind_camera_slope * depth;
     }
 
+    bool reprojection::measurable(const edge& context) const {
+        const double* const pose_params = context.get_vertex(0)->get_parameters();
+        const math::se3<double> pose(math::so3<double>(pose_params[6], pose_params[3], pose_params[4], pose_params[5]), { { pose_params[0], pose_params[1], pose_params[2] } });
+        const double* const xyz_params = context.get_vertex(1)->get_parameters();
+        const math::matrix<double, 3, 1> landmark_world({ xyz_params[0], xyz_params[1], xyz_params[2] });
+        const math::matrix<double, 3, 1> landmark_camera = pose * landmark_world;
+        math::matrix<double, 2, 1> projected = { { 0.0, 0.0 } };
+        return this->camera.project(landmark_camera.data(), projected.data());
+    }
+
     void reprojection::compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const {
         const double* const pose_params = context.get_vertex(0)->get_parameters();
         const math::se3<double> pose(math::so3<double>(pose_params[6], pose_params[3], pose_params[4], pose_params[5]), { { pose_params[0], pose_params[1], pose_params[2] } });

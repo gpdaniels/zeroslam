@@ -881,6 +881,9 @@ namespace mapping {
                 static_cast<void>(ba.get_current_chi(true));
                 std::vector<point_edge> kept_edges;
                 kept_edges.reserve(point_edges.size());
+                // An observation whose point is behind its camera here has a small residual (see reprojection::behind_camera_slope)
+                // and so stays for the second pass, which is meant: the residual pulls the point back in front, and if it is
+                // still behind after the adjustment remove_outlier_observations takes the observation, as it does not project.
                 for (const point_edge& entry : point_edges) {
                     if (entry.factor->chi2() > map::inlier_bound_squared) {
                         ba.remove_edge(entry.factor);

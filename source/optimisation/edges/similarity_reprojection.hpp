@@ -53,6 +53,10 @@ namespace optimisation::edges {
     public:
         similarity_reprojection(const sensor::camera::model<double>& camera_model, const math::matrix<double, 3, 1>& point_location, const math::se3<double>& observer_pose, const bool apply_inverse);
 
+        // Whether the observer's camera projects the point where the similarity puts it, so that the residual is a distance in
+        // the image and not the behind camera residual.
+        bool measurable(const edge& context) const;
+
         void compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const;
 
         void compute_jacobians(const edge& context, std::vector<math::matrix<double, 0, 0>>& jacobians) const;

@@ -174,6 +174,7 @@ int main(int argc, char* argv[]) {
         edge.compute_residual();
         REQUIRE(std::abs(edge.get_residual()[0][0] - (observation[0] - projected[0])) < 1.0e-9);
         REQUIRE(std::abs(edge.get_residual()[1][0] - (observation[1] - projected[1])) < 1.0e-9);
+        REQUIRE(edge.is_measurable());
         edge.compute_jacobians();
         const math::matrix<double, 0, 0> jacobian_point = edge.get_jacobians()[1];
         const double step = 1.0e-6;
@@ -194,6 +195,42 @@ int main(int argc, char* argv[]) {
                 REQUIRE(std::abs(numeric - jacobian_point[row][column]) < 1.0e-4 * (1.0 + std::abs(numeric)));
             }
         }
+    }
+
+    {
+        // A point behind the observer does not project, and the residual that stands in for its reprojection is far within
+        // the inlier bound at every inverse depth, so the edge has to say that it measures nothing there. An observer facing
+        // the other way along the anchor's ray has the point behind it whatever the inverse depth.
+        const math::se3<double> facing_away(math::so3<double>::exp({ { 0.0, 3.14159265358979323846, 0.0 } }) * anchor_camera_from_world.rotation(), { { 0.0, 0.0, 0.0 } });
+        optimisation::vertex pose_vertex{ optimisation::vertices::pose() };
+        set_pose(pose_vertex, facing_away);
+        for (const double inverse_depth : { 1.0e-3, 0.05, 1.0 / 6.0, 0.5 }) {
+            const double parameters[3] = { 0.0, 0.0, inverse_depth };
+            optimisation::vertex point_vertex{ optimisation::vertices::point() };
+            REQUIRE(point_vertex.set_parameters(&parameters[0], 3));
+            optimisation::edge edge{ optimisation::edges::reprojection_inverse_depth(sensor::camera::model<double>(camera_model), anchor.rotation().get_matrix(), anchor.translation()) };
+            const double observation[2] = { 320.0, 240.0 };
+            edge.set_observation(math::matrix<double, 0, 0>(2, 1, &observation[0]));
+            edge.add_vertex(&pose_vertex);
+            edge.add_vertex(&point_vertex);
+            edge.compute_residual();
+            REQUIRE(edge.get_residual()[0][0] == edge.get_residual()[1][0]);
+            REQUIRE(edge.chi2() < 5.991);
+            REQUIRE(!edge.is_measurable());
+        }
+        // The observer at the anchor, facing the same way, measures the same points.
+        set_pose(pose_vertex, anchor_camera_from_world);
+        const double parameters[3] = { 0.0, 0.0, 0.05 };
+        optimisation::vertex point_vertex{ optimisation::vertices::point() };
+        REQUIRE(point_vertex.set_parameters(&parameters[0], 3));
+        optimisation::edge edge{ optimisation::edges::reprojection_inverse_depth(sensor::camera::model<double>(camera_model), anchor.rotation().get_matrix(), anchor.translation()) };
+        const double observation[2] = { 320.0, 240.0 };
+        edge.set_observation(math::matrix<double, 0, 0>(2, 1, &observation[0]));
+        edge.add_vertex(&pose_vertex);
+        edge.add_vertex(&point_vertex);
+        edge.compute_residual();
+        REQUIRE(edge.is_measurable());
+        REQUIRE(edge.chi2() < 1.0e-12);
     }
 
     return EXIT_SUCCESS;

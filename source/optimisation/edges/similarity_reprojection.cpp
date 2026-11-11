@@ -26,6 +26,15 @@ namespace optimisation::edges {
         , inverted(apply_inverse) {
     }
 
+    bool similarity_reprojection::measurable(const edge& context) const {
+        const double* const parameters = context.get_vertex(0)->get_parameters();
+        const math::sim3<double> similarity(math::se3<double>(math::so3<double>(parameters[6], parameters[3], parameters[4], parameters[5]), { { parameters[0], parameters[1], parameters[2] } }), parameters[7]);
+        const math::matrix<double, 3, 1> transferred = this->inverted ? (similarity.inverse() * this->location) : (similarity * this->location);
+        const math::matrix<double, 3, 1> in_camera = this->observer * transferred;
+        math::matrix<double, 2, 1> projected = { { 0.0, 0.0 } };
+        return this->camera.project(in_camera.data(), projected.data());
+    }
+
     void similarity_reprojection::compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const {
         const double* const parameters = context.get_vertex(0)->get_parameters();
         const math::sim3<double> similarity(math::se3<double>(math::so3<double>(parameters[6], parameters[3], parameters[4], parameters[5]), { { parameters[0], parameters[1], parameters[2] } }), parameters[7]);

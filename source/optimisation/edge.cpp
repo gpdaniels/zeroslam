@@ -238,6 +238,10 @@ namespace optimisation {
         }
     }
 
+    bool edge::is_measurable() const {
+        return (this->functions != nullptr) && ((this->functions->measurable == nullptr) || this->functions->measurable(this->storage, *this));
+    }
+
     bool edge::has_analytic_jacobians() const {
         return (this->functions == nullptr) || (this->functions->compute_jacobians != nullptr);
     }

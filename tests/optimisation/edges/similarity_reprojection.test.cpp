@@ -149,6 +149,9 @@ int main(int argc, char* argv[]) {
         factor.set_observation(math::matrix<double, 0, 0>(2, 1, &observed[0]));
         factor.compute_residual();
         REQUIRE(is_value_approx(factor.get_residual()[0][0], factor.get_residual()[1][0]));
+        // Just behind the observer the residual is all but zero, and the edge says that it is no reprojection error.
+        REQUIRE(factor.chi2() < 5.991);
+        REQUIRE(!factor.is_measurable());
         factor.compute_jacobians();
         const math::matrix<double, 0, 0> analytic = factor.get_jacobians()[0];
         for (size_t d = 0; d < 7; ++d) {
@@ -173,6 +176,14 @@ int main(int argc, char* argv[]) {
         REQUIRE(std::isfinite(factor.get_residual()[1][0]));
         REQUIRE(factor.get_residual()[0][0] > 0.0);
         REQUIRE(is_value_approx(factor.get_residual()[0][0], factor.get_residual()[1][0]));
+        REQUIRE(!factor.is_measurable());
+
+        // The same point in front of the observer is measurable.
+        optimisation::edge in_front{ optimisation::edges::similarity_reprojection(camera, math::matrix<double, 3, 1>({ 0.0, 0.0, 5.0 }), math::se3<double>::identity(), false) };
+        in_front.add_vertex(vertex.get());
+        in_front.set_observation(math::matrix<double, 0, 0>(2, 1, &observed[0]));
+        in_front.compute_residual();
+        REQUIRE(in_front.is_measurable());
     }
 
     {

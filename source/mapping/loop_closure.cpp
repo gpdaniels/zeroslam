@@ -511,7 +511,10 @@ namespace mapping {
             if ((factor.first == nullptr) || (factor.second == nullptr)) {
                 continue;
             }
-            if ((factor.first->chi2() > loop_closure::reprojection_inlier_bound_squared) || (factor.second->chi2() > loop_closure::reprojection_inlier_bound_squared)) {
+            // A pair whose point the similarity carries behind either camera is no inlier of it, however small the residual that
+            // stands in for its reprojection there is.
+            const bool measurable = factor.first->is_measurable() && factor.second->is_measurable();
+            if (!measurable || (factor.first->chi2() > loop_closure::reprojection_inlier_bound_squared) || (factor.second->chi2() > loop_closure::reprojection_inlier_bound_squared)) {
                 static_cast<void>(refinement.remove_edge(factor.first));
                 static_cast<void>(refinement.remove_edge(factor.second));
                 ++dropped;

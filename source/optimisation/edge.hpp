@@ -88,6 +88,19 @@ namespace optimisation {
             constexpr static const bool value = true;
         };
 
+        template <typename edge_type, typename = void>
+        struct has_measurable {
+            constexpr static const bool value = false;
+        };
+
+        template <typename edge_type>
+        struct has_measurable<
+            edge_type,
+            decltype(static_cast<void>(static_cast<bool>(edge::reference<const edge_type>().measurable(edge::reference<const edge>()))))
+        > {
+            constexpr static const bool value = true;
+        };
+
     private:
         struct table final {
             const char* name;
@@ -95,6 +108,7 @@ namespace optimisation {
             int vertex_count;
             void (*compute_residual)(const void* object, const edge& context, math::matrix<double, 0, 0>& residual);
             void (*compute_jacobians)(const void* object, const edge& context, std::vector<math::matrix<double, 0, 0>>& jacobians);
+            bool (*measurable)(const void* object, const edge& context);
             void (*copy)(const void* from, void* to);
             void (*move)(void* from, void* to);
             void (*destroy)(void* object);
@@ -113,6 +127,18 @@ namespace optimisation {
         }
 
         template <typename edge_type>
+        static bool (*measurable_for())(const void* object, const edge& context) {
+            if constexpr (edge::has_measurable<edge_type>::value) {
+                return [](const void* object, const edge& context) -> bool {
+                    return static_cast<const edge_type*>(object)->measurable(context);
+                };
+            }
+            else {
+                return nullptr;
+            }
+        }
+
+        template <typename edge_type>
         static const table* table_for() {
             static const table entries = {
                 edge_type::name,
@@ -122,6 +148,7 @@ namespace optimisation {
                     static_cast<const edge_type*>(object)->compute_residual(context, residual_values);
                 },
                 edge::jacobians_for<edge_type>(),
+                edge::measurable_for<edge_type>(),
                 [](const void* from, void* to) -> void {
                     new (to, static_cast<edge*>(nullptr)) edge_type(*static_cast<const edge_type*>(from));
                 },
@@ -204,6 +231,11 @@ namespace optimisation {
         void compute_residual();
         void compute_jacobians();
         bool has_analytic_jacobians() const;
+
+        // Whether the edge can measure the state its vertices hold now. An edge that cannot, such as a reprojection of a point
+        // behind its camera, gives a stand in residual that keeps the cost continuous and may be small, so a small chi2 says
+        // that the state agrees with the observation only when this is true. Edges that provide no measurable(edge) always can.
+        bool is_measurable() const;
 
         // Writes a jacobian block, reusing its storage when the shape is unchanged.
         static void set_jacobian(math::matrix<double, 0, 0>& jacobian, const size_t rows, const size_t cols, const double* values);

@@ -38,6 +38,16 @@ namespace optimisation::edges {
         q = (rotation_combined * bearing) + (rho_column * rho);
     }
 
+    bool reprojection_inverse_depth::measurable(const edge& context) const {
+        math::matrix<double, 3, 1> q;
+        math::matrix<double, 3, 3> rotation_combined;
+        math::matrix<double, 3, 1> rho_column;
+        double rho = 0.0;
+        this->compute_scaled_point(context, q, rotation_combined, rho_column, rho);
+        math::matrix<double, 2, 1> projected = { { 0.0, 0.0 } };
+        return this->camera.project(q.data(), projected.data());
+    }
+
     void reprojection_inverse_depth::compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const {
         math::matrix<double, 3, 1> q;
         math::matrix<double, 3, 3> rotation_combined;

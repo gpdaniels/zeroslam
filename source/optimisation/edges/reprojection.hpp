@@ -56,6 +56,10 @@ namespace optimisation::edges {
 
         static double behind_camera_residual(const double depth);
 
+        // Whether the camera projects the point where the vertices put it, so that the residual is a distance in the image and
+        // not the behind camera residual.
+        bool measurable(const edge& context) const;
+
         void compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const;
 
         void compute_jacobians(const edge& context, std::vector<math::matrix<double, 0, 0>>& jacobians) const;

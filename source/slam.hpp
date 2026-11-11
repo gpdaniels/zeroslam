@@ -1165,7 +1165,9 @@ private:
                 factor.compute_jacobians();
                 factor.set_information(math::matrix<double, 0, 0>(2, 2, match.landmark->observation_information(factor.get_jacobians()[1], frame_current.measurement_sigma * octave_scale(match)).data()));
                 factor.compute_residual();
-                if (factor.chi2() <= 5.991) {
+                // A landmark the refined pose puts behind the camera agrees with nothing, however small the residual that
+                // stands in for its reprojection is, as for the landmarks of the other kind below.
+                if (factor.is_measurable() && (factor.chi2() <= 5.991)) {
                     agreed[c] = static_cast<unsigned char>(1);
                     inliers += 1;
                 }

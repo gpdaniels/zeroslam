@@ -49,6 +49,11 @@ namespace optimisation::edges {
 
     public:
         reprojection_inverse_depth(const sensor::camera::model<double>& camera_model, const math::matrix<double, 3, 3>& anchor_rotation_value, const math::matrix<double, 3, 1>& anchor_translation_value);
+
+        // Whether the camera projects the point where the vertices put it, so that the residual is a distance in the image and
+        // not the behind camera residual. A negative inverse depth is no obstacle, as in compute_residual.
+        bool measurable(const edge& context) const;
+
         void compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const;
         void compute_jacobians(const edge& context, std::vector<math::matrix<double, 0, 0>>& jacobians) const;
     };

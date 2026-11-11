@@ -85,6 +85,9 @@ int main(int argc, char* argv[]) {
     REQUIRE(is_value_approx(edge.get_residual()[0][0], 1.0));
     REQUIRE(is_value_approx(edge.chi2(), 1.0));
     REQUIRE(is_value_approx(edge.robust_chi2(), 1.0));
+    // An edge type that does not say when it cannot measure always can, and an empty edge measures nothing.
+    REQUIRE(edge.is_measurable());
+    REQUIRE(!optimisation::edge().is_measurable());
     edge.set_information(4.0 * math::matrix<double, 0, 0>::identity(1, 1));
     REQUIRE(is_value_approx(edge.chi2(), 4.0));
 

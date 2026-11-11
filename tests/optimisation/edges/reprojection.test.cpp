@@ -168,12 +168,38 @@ int main(int argc, char* argv[]) {
             edge.compute_residual();
             REQUIRE(edge.get_residual()[0][0] == edge.get_residual()[1][0]);
             REQUIRE(is_value_approx(edge.get_residual()[0][0], -optimisation::edges::reprojection::behind_camera_slope * depth));
+            // The residual is no reprojection error, so however small it is the edge is not measurable and no inlier.
+            REQUIRE(!edge.is_measurable());
+            REQUIRE((depth < -1.0) || (edge.chi2() < 5.991));
             edge.compute_jacobians();
             REQUIRE(edge.get_jacobians()[1][0][2] == -optimisation::edges::reprojection::behind_camera_slope);
             REQUIRE(edge.get_jacobians()[1][1][2] == -optimisation::edges::reprojection::behind_camera_slope);
             REQUIRE(edge.get_jacobians()[1][0][0] == 0.0);
             REQUIRE(edge.get_jacobians()[1][0][1] == 0.0);
         }
+    }
+
+    {
+        // The same point in front of the camera is measurable, and stops being so when the pose moves the camera past it.
+        const sensor::camera::pinhole<double> camera_model(std::vector<double>{ 500.0, 500.0, 320.0, 240.0 }.data(), 4);
+        optimisation::vertex camera_vertex{ optimisation::vertices::pose() };
+        const double camera_parameters_pose[7] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 };
+        REQUIRE(camera_vertex.set_parameters(&camera_parameters_pose[0], 7));
+        optimisation::vertex landmark_vertex{ optimisation::vertices::point() };
+        const double landmark_location[3] = { 0.3, -0.2, 2.0 };
+        REQUIRE(landmark_vertex.set_parameters(&landmark_location[0], 3));
+        optimisation::edge edge{ optimisation::edges::reprojection(sensor::camera::model<double>(camera_model)) };
+        edge.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { 395.0, 190.0 } }.data()));
+        edge.add_vertex(&camera_vertex);
+        edge.add_vertex(&landmark_vertex);
+        edge.compute_residual();
+        REQUIRE(edge.is_measurable());
+        REQUIRE(edge.chi2() < 1.0e-12);
+        const double camera_parameters_past[7] = { 0.0, 0.0, -2.5, 0.0, 0.0, 0.0, 1.0 };
+        REQUIRE(camera_vertex.set_parameters(&camera_parameters_past[0], 7));
+        edge.compute_residual();
+        REQUIRE(!edge.is_measurable());
+        REQUIRE(edge.chi2() < 5.991);
     }
 
     return EXIT_SUCCESS;
