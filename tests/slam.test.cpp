@@ -1026,6 +1026,49 @@ static void test_lines(const int width, const int height, const math::matrix<dou
     }
 }
 
+// A slow pass along the scene keeps its landmarks in view for far longer than the recent window that keyframe culling leaves
+// alone, so every keyframe that leaves the window shares nearly all of its landmarks with the newer keyframes. Culling may thin
+// the keyframes behind the camera, and must leave the map there: judging a keyframe by the count of the others that see its
+// landmarks culled each one as it left the window, and with them the landmarks that only they had seen.
+static void test_keyframe_culling(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {
+    constexpr static const int frames = 200;
+    constexpr static const int recent_frames = 120;
+    slam system;
+    for (int i = 0; i < frames; i++) {
+        const math::se3<double> pose{ math::so3<double>::rotation(0, 0, 0), { { i * 0.03, 0, 0 } } };
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
+        renderer.render_frame(pose, intrinsics, frame);
+        system.process_frame(intrinsics, frame);
+    }
+    std::vector<int> keyframe_ids(system.keyframe_ids().begin(), system.keyframe_ids().end());
+    std::sort(keyframe_ids.begin(), keyframe_ids.end());
+
+    // Culling takes keyframes, and leaves keyframes behind the window, spread along the pass.
+    REQUIRE(system.culled_keyframes > 0);
+    size_t keyframes_behind = 0;
+    int previous_keyframe_id = -1;
+    for (const int keyframe_id : keyframe_ids) {
+        keyframes_behind += (keyframe_id < frames - recent_frames) ? 1 : 0;
+        REQUIRE((previous_keyframe_id < 0) || (keyframe_id - previous_keyframe_id <= 40));
+        previous_keyframe_id = keyframe_id;
+    }
+    REQUIRE(keyframes_behind >= 4);
+
+    // No landmark goes with a culled keyframe: each keeps the two views a landmark needs, and the keyframes behind the window
+    // still hold the landmarks they saw.
+    size_t landmarks_behind = 0;
+    for (const auto& [landmark_id, landmark_observations] : system.reconstruction.observations) {
+        REQUIRE(system.reconstruction.landmarks.count(landmark_id) != 0);
+        REQUIRE(landmark_observations.size() >= 2);
+        bool behind = false;
+        for (const mapping::map::observation& obs : landmark_observations) {
+            behind = behind || ((obs.frame_id > 0) && (obs.frame_id < frames - recent_frames));
+        }
+        landmarks_behind += behind ? 1 : 0;
+    }
+    REQUIRE(landmarks_behind >= 500);
+}
+
 static void test_map_reacquisition(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {
     std::vector<math::se3<double>> trajectory;
     for (int sweep = 0; sweep < 3; sweep++) {
@@ -1169,6 +1212,7 @@ int main(int argc, char* argv[]) {
     const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
     REQUIRE(distance > 0.05);
 
+    test_keyframe_culling(width, height, intrinsics, renderer);
     test_map_reacquisition(width, height, intrinsics, renderer);
     world room(width, height, true);
     test_loop_closure(width, height, intrinsics, room);

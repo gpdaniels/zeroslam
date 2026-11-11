@@ -2453,12 +2453,40 @@ private:
             }
         }
         std::sort(candidates.begin(), candidates.end());
+        // The landmarks of each candidate, gathered in one pass over the map, so that judging a candidate reads its own
+        // landmarks and not the whole map again: every keyframe behind the window that still shares landmarks with the newest
+        // one is a candidate at every keyframe.
+        std::unordered_map<int, std::vector<int>> candidate_landmark_ids;
         for (const int candidate_id : candidates) {
+            candidate_landmark_ids[candidate_id];
+        }
+        if (!candidates.empty()) {
+            for (const auto& [landmark_id, landmark_observations] : this->reconstruction.observations) {
+                for (const mapping::map::observation& obs : landmark_observations) {
+                    const std::unordered_map<int, std::vector<int>>::iterator candidate_it = candidate_landmark_ids.find(obs.frame_id);
+                    if ((candidate_it != candidate_landmark_ids.end()) && (candidate_it->second.empty() || (candidate_it->second.back() != landmark_id))) {
+                        candidate_it->second.push_back(landmark_id);
+                    }
+                }
+            }
+        }
+        for (const int candidate_id : candidates) {
+            // A landmark does not miss the candidate when enough other keyframes see it and they include one from before the
+            // candidate and one from after it, so that the span of views that holds its depth is what it was. Without the
+            // second condition every keyframe that leaves the recent window is redundant beside the newer ones that still
+            // see its landmarks, which are culled in their turn for the same reason, and the map keeps only the window.
             size_t total = 0;
             size_t redundant = 0;
-            for (const auto& [landmark_id, landmark_observations] : this->reconstruction.observations) {
-                static_cast<void>(landmark_id);
+            size_t erased = 0;
+            for (const int landmark_id : candidate_landmark_ids.at(candidate_id)) {
+                const std::unordered_map<int, std::vector<mapping::map::observation>>::const_iterator observations_it = this->reconstruction.observations.find(landmark_id);
+                if (observations_it == this->reconstruction.observations.end()) {
+                    continue;
+                }
+                const std::vector<mapping::map::observation>& landmark_observations = observations_it->second;
                 bool observed = false;
+                bool observed_before = false;
+                bool observed_after = false;
                 size_t other_keyframes = 0;
                 for (const mapping::map::observation& obs : landmark_observations) {
                     if (obs.frame_id == candidate_id) {
@@ -2466,14 +2494,22 @@ private:
                     }
                     else if ((this->keyframe_ids_.count(obs.frame_id) != 0) && (this->reconstruction.frames.count(obs.frame_id) != 0)) {
                         ++other_keyframes;
+                        observed_before = observed_before || (obs.frame_id < candidate_id);
+                        observed_after = observed_after || (obs.frame_id > candidate_id);
                     }
                 }
                 if (observed) {
                     ++total;
-                    redundant += (other_keyframes >= slam::keyframe_cull_other_observers);
+                    redundant += ((other_keyframes >= slam::keyframe_cull_other_observers) && observed_before && observed_after);
+                    erased += (landmark_observations.size() < 3);
                 }
             }
             if (static_cast<double>(redundant) < slam::keyframe_cull_redundant_fraction * static_cast<double>(total)) {
+                continue;
+            }
+            // The few landmarks that do miss the candidate lose a view, and none may lose its last but one: a keyframe is
+            // culled for being redundant, which it is not while a landmark of the map exists only because of it.
+            if (erased > 0) {
                 continue;
             }
             if (total == 0) {
@@ -2532,7 +2568,7 @@ private:
                 });
                 culled_anchor->second.observations = static_cast<std::vector<anchored_observation>&&>(kept_observations);
             }
-            core::logger::log(core::logger::level::info, "Culled keyframe %d: %zu of %zu landmarks observed by %zu other keyframes or more.", candidate_id, redundant, total, slam::keyframe_cull_other_observers);
+            core::logger::log(core::logger::level::info, "Culled keyframe %d: %zu of %zu landmarks observed by %zu other keyframes or more, before and after it.", candidate_id, redundant, total, slam::keyframe_cull_other_observers);
         }
 
         std::unordered_map<int, size_t> observation_counts;
