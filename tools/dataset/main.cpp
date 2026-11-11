@@ -26,12 +26,24 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <algorithm>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#include <process.h>
+#include <sys/stat.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
@@ -109,22 +121,124 @@ namespace {
         return &formatted[0];
     }
 
-    // The base curl command shared by every transfer.
-    std::string curl_command(const std::string& token) {
-        std::string command = "curl --fail --silent --show-error --location --connect-timeout 30 --retry 3 --user-agent " + platform::quote_for_shell("zeroslam-dataset");
-        if (!token.empty()) {
-            command += " --header " + platform::quote_for_shell("Authorization: Bearer " + token);
+    // Whether a token holds only the characters a bearer token can (RFC 6750: letters, digits and "-._~+/", then any "="), none
+    // of which needs escaping in a curl config file.
+    bool is_valid_token(const std::string& token) {
+        std::size_t length = token.size();
+        while ((length > 0) && (token[length - 1] == '=')) {
+            --length;
+        }
+        if (length == 0) {
+            return false;
+        }
+        for (std::size_t index = 0; index < length; ++index) {
+            const char character = token[index];
+            const bool valid = ((character >= 'a') && (character <= 'z')) || ((character >= 'A') && (character <= 'Z')) || ((character >= '0') && (character <= '9')) || (std::strchr("-._~+/", character) != nullptr);
+            if (!valid) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // The hub token reaches curl in a config file that only this user can read, never on curl's command line, which every user of
+    // the machine can read from the process list for as long as a download runs. The path is kept in static storage so that the
+    // file can be removed from a signal handler when a download is interrupted.
+    char token_file_path[1024] = {};
+
+    void remove_token_file() {
+        if (token_file_path[0] != '\0') {
+#if defined(_WIN32)
+            static_cast<void>(::_unlink(&token_file_path[0]));
+#else
+            static_cast<void>(::unlink(&token_file_path[0]));
+#endif
+            token_file_path[0] = '\0';
+        }
+    }
+
+    extern "C" void remove_token_file_on_signal(int signal_number) {
+        remove_token_file();
+        std::signal(signal_number, SIG_DFL);
+        std::raise(signal_number);
+    }
+
+    // Write the authorisation header for 'token' as a curl config file in the temporary directory, created for this user alone
+    // and removed when the tool ends, however it ends short of being killed outright.
+    bool create_token_file(const std::string& token, std::string& error) {
+        if (!is_valid_token(token)) {
+            error = "the hub token holds characters that no access token can";
+            return false;
+        }
+#if defined(_WIN32)
+        const char* directory = std::getenv("TEMP");
+        if ((directory == nullptr) || (*directory == '\0')) {
+            directory = std::getenv("TMP");
+        }
+        const long long process_id = static_cast<long long>(::_getpid());
+#else
+        const char* directory = std::getenv("TMPDIR");
+        const long long process_id = static_cast<long long>(::getpid());
+#endif
+        if ((directory == nullptr) || (*directory == '\0')) {
+#if defined(_WIN32)
+            directory = ".";
+#else
+            directory = "/tmp";
+#endif
+        }
+        const std::string contents = "header = \"Authorization: Bearer " + token + "\"\n";
+        const long long ticks = static_cast<long long>(std::chrono::steady_clock::now().time_since_epoch().count());
+        for (int attempt = 0; attempt < 16; ++attempt) {
+            const std::string path = std::string(directory) + "/zeroslam-dataset-" + std::to_string(process_id) + "-" + std::to_string(ticks + attempt) + ".curl";
+            if (path.size() >= sizeof(token_file_path)) {
+                break;
+            }
+            // Creation fails when anything already has the name, a link included, so the token is only ever written to a file
+            // that this call made, with these permissions.
+#if defined(_WIN32)
+            const int handle = ::_open(path.c_str(), _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, _S_IREAD | _S_IWRITE);
+#else
+            const int handle = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+#endif
+            if (handle < 0) {
+                continue;
+            }
+            std::memcpy(&token_file_path[0], path.c_str(), path.size() + 1);
+#if defined(_WIN32)
+            const bool written = (::_write(handle, contents.data(), static_cast<unsigned int>(contents.size())) == static_cast<int>(contents.size()));
+            const bool closed = (::_close(handle) == 0);
+#else
+            const bool written = (static_cast<long long>(::write(handle, contents.data(), contents.size())) == static_cast<long long>(contents.size()));
+            const bool closed = (::close(handle) == 0);
+#endif
+            if (!written || !closed) {
+                remove_token_file();
+                break;
+            }
+            return true;
+        }
+        error = "the hub token could not be written to a private file in '" + std::string(directory) + "'";
+        return false;
+    }
+
+    // The base curl command shared by every transfer, which keeps to https through any redirect.
+    std::string curl_command() {
+        std::string command = "curl --fail --silent --show-error --location --proto " + platform::quote_for_shell("=https") + " --proto-redir " + platform::quote_for_shell("=https");
+        command += " --connect-timeout 30 --retry 3 --user-agent " + platform::quote_for_shell("zeroslam-dataset");
+        if (token_file_path[0] != '\0') {
+            command += " --config " + platform::quote_for_shell(&token_file_path[0]);
         }
         return command;
     }
 
     // Fetch and parse the recursive file listing of the hub repository.
     // Note: the hub api paginates past ~1000 entries via a Link header, unhandled until needed.
-    bool fetch_listing(const std::string& repository, const std::string& token, std::vector<hub_entry>& entries, std::string& error) {
+    bool fetch_listing(const std::string& repository, std::vector<hub_entry>& entries, std::string& error) {
         const std::string url = "https://huggingface.co/api/datasets/" + repository + "/tree/main?recursive=true";
         std::string output;
         int exit_code = -1;
-        if (!platform::run_command(curl_command(token) + " " + platform::quote_for_shell(url) + " 2>&1", false, output, exit_code) || (exit_code != 0)) {
+        if (!platform::run_command(curl_command() + " " + platform::quote_for_shell(url) + " 2>&1", false, output, exit_code) || (exit_code != 0)) {
             error = platform::last_line(output);
             if (error.empty()) {
                 error = "curl failed (exit code " + std::to_string(exit_code) + ")";
@@ -1044,7 +1158,8 @@ namespace {
         std::printf("                           to this tool, otherwise './datasets').\n");
         std::printf("        --repo [id]    - The hub repository (default: gpdaniels/slam-datasets).\n");
         std::printf("        --token [t]    - Hub access token for private repositories (default: the HF_TOKEN\n");
-        std::printf("                         environment variable).\n");
+        std::printf("                         environment variable, which unlike this option keeps the token\n");
+        std::printf("                         out of the process list).\n");
         std::printf("        --force        - Redownload files even when the local copy matches.\n");
         std::printf("Downloads stream to a '.part' file renamed into place after a size check, so an\n");
         std::printf("interrupted download never leaves a plausible looking file, and rerunning a download\n");
@@ -1197,11 +1312,21 @@ int main(int argc, char* argv[]) {
         return EXIT_SUCCESS;
     }
 
+    std::string error;
+    if (!token.empty()) {
+        std::atexit(remove_token_file);
+        std::signal(SIGINT, remove_token_file_on_signal);
+        std::signal(SIGTERM, remove_token_file_on_signal);
+        if (!create_token_file(token, error)) {
+            std::fprintf(stderr, "Failed to pass the hub token to curl: %s.\n", error.c_str());
+            return EXIT_FAILURE;
+        }
+    }
+
     std::printf("Fetching the file listing of %s...\n", repository.c_str());
     std::fflush(stdout);
     std::vector<hub_entry> entries;
-    std::string error;
-    if (!fetch_listing(repository, token, entries, error)) {
+    if (!fetch_listing(repository, entries, error)) {
         std::fprintf(stderr, "Failed to list the hub repository: %s\n", error.c_str());
         return EXIT_FAILURE;
     }
@@ -1268,7 +1393,7 @@ int main(int argc, char* argv[]) {
     std::printf("Downloading '%s' into '%s'...\n", dataset_name.c_str(), datasets_directory.c_str());
     std::fflush(stdout);
 
-    const std::string base_command = curl_command(token);
+    const std::string base_command = curl_command();
     std::size_t downloaded = 0;
     std::size_t kept = 0;
     unsigned long long total_bytes = 0;

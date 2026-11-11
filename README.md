@@ -281,7 +281,8 @@ Configuring with the dataset tool enabled links `build/runtime/[config]/datasets
 The hub holds the `tum-rgbd`, `euroc-mav`, `eth3d-slam`, `kitti-odometry` and `lamaria` datasets.
 Scenes are stored as one mcap file each, `[dataset]/[scene].mcap`, and `get` accepts a whole dataset (`tum-rgbd`) or a single scene (`tum-rgbd/fr1_xyz`), validating every scene it fetches.
 Downloads stream to a `.part` file renamed into place after a size check, so interrupted downloads are detectable and rerunning a download completes or repairs the files (`--force` redownloads).
-Private repositories are reached with `--token` or the `HF_TOKEN` environment variable, and `--repo` selects another hub repository (huggingface only).
+Private repositories are reached with the `HF_TOKEN` environment variable or with `--token`, and `--repo` selects another hub repository (huggingface only).
+Prefer the variable: an option is on the tool's command line, which other users of the machine can read from the process list. Either way the token reaches `curl` in a private temporary file and not on its command line.
 `validate` checks a scene by name, every scene of a dataset, or a scene mcap by path: the raw frames, a pinhole calibration per frame, and the `root -> ego -> sensor` frame tree on `/tf`.
 
 Usage:
