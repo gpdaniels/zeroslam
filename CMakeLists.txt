@@ -332,18 +332,46 @@ ENABLE_TESTING()
 # The tests use the internals, which the shared library hides from its users, so they link a second library built from the same
 # sources that exports them. Linking it instead of embedding the objects in every test executable keeps each library function one
 # coverage entry rather than one per test executable.
-ADD_LIBRARY(${PROJECT_NAME}_test SHARED EXCLUDE_FROM_ALL ${SOURCE_FILES} ${INCLUDE_FILES})
+IF(WIN32 AND ZEROSLAM_COVERAGE_LLVM)
+    # Clang's profile instrumentation gives every inline and template function a counter that is a data symbol of its object
+    # file, named after the function. Exporting every symbol would export those too, and lld-link then fails to find them
+    # ("undefined symbol: __profc_??$..."). So here the list of exports is made as CMake makes it for WINDOWS_EXPORT_ALL_SYMBOLS,
+    # from the objects, and the symbols of the instrumentation are taken out of it before the library is linked with it.
+    ADD_LIBRARY(${PROJECT_NAME}_test_objects OBJECT EXCLUDE_FROM_ALL ${SOURCE_FILES} ${INCLUDE_FILES})
+    TARGET_INCLUDE_DIRECTORIES(${PROJECT_NAME}_test_objects PRIVATE "${CMAKE_SOURCE_DIR}/include/" "${CMAKE_SOURCE_DIR}/source/")
+    TARGET_COMPILE_DEFINITIONS(${PROJECT_NAME}_test_objects PRIVATE ZEROSLAM_API_EXPORT ${ZEROSLAM_SIMD_DEFINITIONS})
+    SET_TARGET_PROPERTIES(${PROJECT_NAME}_test_objects PROPERTIES FOLDER tests)
+    SET(ZEROSLAM_TEST_EXPORTS_DIR "${CMAKE_BINARY_DIR}/CMakeFiles/${PROJECT_NAME}_test_exports")
+    FILE(GENERATE OUTPUT "${ZEROSLAM_TEST_EXPORTS_DIR}/objects.txt" CONTENT "$<JOIN:$<TARGET_OBJECTS:${PROJECT_NAME}_test_objects>,\n>\n")
+    FILE(WRITE "${ZEROSLAM_TEST_EXPORTS_DIR}/filter.cmake" "FILE(READ \"\${INPUT}\" EXPORTS)\nSTRING(REGEX REPLACE \"\n[ \t]*__(prof|cov|llvm)[^\n]*\" \"\" EXPORTS \"\${EXPORTS}\")\nFILE(WRITE \"\${OUTPUT}\" \"\${EXPORTS}\")\n")
+    SET(ZEROSLAM_TEST_EXPORTS_NM "")
+    IF(CMAKE_NM)
+        SET(ZEROSLAM_TEST_EXPORTS_NM "--nm=${CMAKE_NM}")
+    ENDIF()
+    ADD_CUSTOM_COMMAND(
+        OUTPUT "${ZEROSLAM_TEST_EXPORTS_DIR}/exports.def"
+        COMMAND "${CMAKE_COMMAND}" "-E" "__create_def" "${ZEROSLAM_TEST_EXPORTS_DIR}/all.def" "${ZEROSLAM_TEST_EXPORTS_DIR}/objects.txt" ${ZEROSLAM_TEST_EXPORTS_NM}
+        COMMAND "${CMAKE_COMMAND}" "-DINPUT=${ZEROSLAM_TEST_EXPORTS_DIR}/all.def" "-DOUTPUT=${ZEROSLAM_TEST_EXPORTS_DIR}/exports.def" "-P" "${ZEROSLAM_TEST_EXPORTS_DIR}/filter.cmake"
+        DEPENDS $<TARGET_OBJECTS:${PROJECT_NAME}_test_objects>
+        COMMENT "Listing the exports of ${PROJECT_NAME}_test..."
+        VERBATIM
+    )
+    ADD_LIBRARY(${PROJECT_NAME}_test SHARED EXCLUDE_FROM_ALL $<TARGET_OBJECTS:${PROJECT_NAME}_test_objects> "${ZEROSLAM_TEST_EXPORTS_DIR}/exports.def")
+    SET_TARGET_PROPERTIES(${PROJECT_NAME}_test PROPERTIES FOLDER tests LINKER_LANGUAGE CXX)
+ELSE()
+    ADD_LIBRARY(${PROJECT_NAME}_test SHARED EXCLUDE_FROM_ALL ${SOURCE_FILES} ${INCLUDE_FILES})
+    TARGET_INCLUDE_DIRECTORIES(${PROJECT_NAME}_test PRIVATE "${CMAKE_SOURCE_DIR}/source/")
+    TARGET_COMPILE_DEFINITIONS(${PROJECT_NAME}_test PRIVATE ZEROSLAM_API_EXPORT)
+    SET_TARGET_PROPERTIES(${PROJECT_NAME}_test PROPERTIES FOLDER tests WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    # Exporting every symbol has CMake read the symbols of each object file, which it cannot do for the objects of an
+    # interprocedural optimisation: they hold the compiler's intermediate code (MSVC /GL), not object code, until the link.
+    IF(WIN32)
+        SET_TARGET_PROPERTIES(${PROJECT_NAME}_test PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+    ENDIF()
+ENDIF()
 TARGET_INCLUDE_DIRECTORIES(${PROJECT_NAME}_test PUBLIC "${CMAKE_SOURCE_DIR}/include/")
-TARGET_INCLUDE_DIRECTORIES(${PROJECT_NAME}_test PRIVATE "${CMAKE_SOURCE_DIR}/source/")
-TARGET_COMPILE_DEFINITIONS(${PROJECT_NAME}_test PRIVATE ZEROSLAM_API_EXPORT)
 TARGET_COMPILE_DEFINITIONS(${PROJECT_NAME}_test PUBLIC ${ZEROSLAM_SIMD_DEFINITIONS})
 TARGET_LINK_LIBRARIES(${PROJECT_NAME}_test PRIVATE Threads::Threads)
-SET_TARGET_PROPERTIES(${PROJECT_NAME}_test PROPERTIES FOLDER tests WINDOWS_EXPORT_ALL_SYMBOLS ON)
-# Exporting every symbol has CMake read the symbols of each object file, which it cannot do for the objects of an interprocedural
-# optimisation: they hold the compiler's intermediate code (MSVC /GL), not object code, until the link.
-IF(WIN32)
-    SET_TARGET_PROPERTIES(${PROJECT_NAME}_test PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
-ENDIF()
 
 SET(ZEROSLAM_TEST_TARGETS "")
 FILE(GLOB_RECURSE TEST_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/*")
