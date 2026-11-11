@@ -853,6 +853,17 @@ public:
         return message_index;
     }
 
+    // A message index record names the channel and the log time of each message it points at, and a reader may choose what to do
+    // with a message from the index alone, without reading it. The index of a file that is not our own can say anything, so a message
+    // that is not what its index entry says is refused rather than handed on under two identities.
+    bool matches_index(const message_index_type& entry, const message_type& message) {
+        if ((message.channel_id != entry.channel_id) || (message.log_time != entry.log_time)) {
+            this->read_error = "message index disagrees with its message";
+            return false;
+        }
+        return true;
+    }
+
     size_t get_message_count() const {
         return message_index.size();
     }
@@ -880,7 +891,7 @@ public:
                 this->read_error = "truncated message record";
                 return false;
             }
-            return parse_message_head(this->record_buffer.data(), record_length, message, this->read_error);
+            return parse_message_head(this->record_buffer.data(), record_length, message, this->read_error) && matches_index(entry, message);
         }
         const std::vector<unsigned char>* const chunk = cached_chunk(entry.chunk);
         if (chunk == nullptr) {
@@ -897,7 +908,7 @@ public:
             this->read_error = "truncated message record";
             return false;
         }
-        return parse_message_head(&records[entry.offset + 9], record_length, message, this->read_error);
+        return parse_message_head(&records[entry.offset + 9], record_length, message, this->read_error) && matches_index(entry, message);
     }
 
     const std::string& get_read_error() const {

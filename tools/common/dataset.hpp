@@ -419,7 +419,7 @@ namespace dataset {
                 return false;
             }
             if (image_channel) {
-                camera_information& camera = information.cameras[static_cast<std::size_t>(camera_of_image[message.channel_id])];
+                camera_information& camera = information.cameras[static_cast<std::size_t>(camera_of_image[entry.channel_id])];
                 cdr::image image;
                 if (!cdr::read_image(message.data, message.length, image)) {
                     error = "an image message does not decode";
@@ -457,8 +457,8 @@ namespace dataset {
                 camera.image_log_times.push_back(message.log_time);
                 ++camera.frames;
             }
-            else if (camera_of_info[message.channel_id] >= 0) {
-                camera_information& camera = information.cameras[static_cast<std::size_t>(camera_of_info[message.channel_id])];
+            else if (camera_of_info[entry.channel_id] >= 0) {
+                camera_information& camera = information.cameras[static_cast<std::size_t>(camera_of_info[entry.channel_id])];
                 cdr::camera_info camera_info;
                 if (!cdr::read_camera_info(message.data, message.length, camera_info)) {
                     error = "a camera info message does not decode";
@@ -479,8 +479,8 @@ namespace dataset {
                 ++camera.camera_infos;
                 camera.camera_infos_data.push_back(camera_info);
             }
-            else if (imu_of_channel[message.channel_id] >= 0) {
-                imu_information& imu = information.imus[static_cast<std::size_t>(imu_of_channel[message.channel_id])];
+            else if (imu_of_channel[entry.channel_id] >= 0) {
+                imu_information& imu = information.imus[static_cast<std::size_t>(imu_of_channel[entry.channel_id])];
                 cdr::imu sample;
                 if (!cdr::read_imu(message.data, message.length, sample)) {
                     error = "an imu message does not decode";
@@ -496,7 +496,7 @@ namespace dataset {
                 imu.imu_data.push_back(sample);
                 ++imu.samples;
             }
-            else if ((dynamic_channel != nullptr) && (message.channel_id == dynamic_channel->id)) {
+            else if ((dynamic_channel != nullptr) && (entry.channel_id == dynamic_channel->id)) {
                 const std::size_t before = information.dynamics.size();
                 if (!cdr::read_tf_message(message.data, message.length, information.dynamics)) {
                     error = "a transform message does not decode";
