@@ -936,6 +936,92 @@ static void test_submap_join(const int width, const int height, const math::matr
     REQUIRE(std::sqrt((last_centre - end_centre).get_length_squared()) < 0.15 * std::sqrt((end_centre - start_centre).get_length_squared()));
 }
 
+// Tracking can return to a part of the map that is older than the newest submap: here the front wall is mapped, the back wall
+// becomes a submap of its own after a loss, and after a second loss the camera is back in front of the front wall, where it
+// relocalises against the first map. The frames from there on are posed in the first map, whatever their ids say: taking a
+// frame's submap from its id put them in the back wall's submap, whose landmarks the voxel map then offered them instead of
+// the ones they see.
+static void test_relocalisation_into_an_older_map(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& room) {
+    constexpr static const int front_frames = 24;
+    constexpr static const int back_frames = 30;
+    constexpr static const int lost_frames = 60;
+    const std::vector<unsigned char> black(static_cast<size_t>(width) * static_cast<size_t>(height), 0);
+    slam system;
+    const auto see = [&](const math::se3<double>& pose) {
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
+        room.render_frame(pose, intrinsics, frame);
+        system.process_frame(intrinsics, frame);
+    };
+    const auto lose = [&]() {
+        for (int gap = 0; gap < lost_frames; ++gap) {
+            image::image frame(static_cast<size_t>(height), static_cast<size_t>(width), black.data());
+            system.process_frame(intrinsics, frame);
+        }
+    };
+    for (int i = 0; i < front_frames; i++) {
+        see({ math::so3<double>::rotation(0, 0, 0), { { i * 0.3, 0, 0 } } });
+    }
+    REQUIRE(system.state() == slam::tracking_state::tracking);
+    lose();
+    const math::so3<double> turned = math::so3<double>::rotation(0, 3.14159265358979323846, 0);
+    for (int i = 0; i < back_frames; i++) {
+        const math::matrix<double, 3, 1> centre = { { (i * 0.3) - 4.0, 0.0, 4.0 } };
+        see({ turned, -(turned * centre) });
+    }
+    REQUIRE(system.state() == slam::tracking_state::tracking);
+    REQUIRE(system.submaps().size() == 1);
+    lose();
+    const int returned_id = front_frames + lost_frames + back_frames + lost_frames;
+    for (int i = front_frames - 1; i >= -front_frames; i--) {
+        see({ math::so3<double>::rotation(0, 0, 0), { { i * 0.3, 0, 0 } } });
+    }
+    REQUIRE(system.state() == slam::tracking_state::tracking);
+
+    // No third submap was started and the second still stands apart, so the camera is tracked in the first map again.
+    REQUIRE(system.submaps().size() == 1);
+    REQUIRE(!system.submaps().front().joined);
+    const int submap_start = system.submaps().front().start_id;
+    REQUIRE((submap_start >= front_frames) && (submap_start < returned_id));
+    size_t returned_keyframes = 0;
+    int newest_keyframe_id = -1;
+    for (const int keyframe_id : system.keyframe_ids()) {
+        if (keyframe_id < front_frames) {
+            REQUIRE(system.submap_of_frame(keyframe_id) == 0);
+        }
+        else if (keyframe_id < returned_id) {
+            REQUIRE(system.submap_of_frame(keyframe_id) == 1);
+            REQUIRE(system.component_of_frame(keyframe_id) == 1);
+        }
+        else {
+            REQUIRE(system.submap_of_frame(keyframe_id) == 0);
+            REQUIRE(system.component_of_frame(keyframe_id) == 0);
+            ++returned_keyframes;
+        }
+        newest_keyframe_id = std::max(newest_keyframe_id, keyframe_id);
+    }
+    REQUIRE(returned_keyframes >= 3);
+    REQUIRE(newest_keyframe_id >= returned_id);
+
+    // The voxel map of the newest keyframe holds landmarks of the first map, those first seen before the first loss among
+    // them, and none of the submap that stands apart.
+    size_t of_front = 0;
+    size_t of_back = 0;
+    for (const auto& [key, voxel] : system.voxels().occupied()) {
+        static_cast<void>(key);
+        for (const int landmark_id : voxel.ids) {
+            const std::unordered_map<int, std::vector<mapping::map::observation>>::const_iterator observations = system.reconstruction.observations.find(landmark_id);
+            if ((observations == system.reconstruction.observations.end()) || observations->second.empty()) {
+                continue;
+            }
+            const int first_seen = observations->second.front().frame_id;
+            of_front += (first_seen < front_frames) ? 1 : 0;
+            of_back += ((first_seen >= front_frames) && (first_seen < returned_id)) ? 1 : 0;
+        }
+    }
+    REQUIRE(of_front >= 100);
+    REQUIRE(of_back == 0);
+}
+
 static void test_rotation_only(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {
     std::vector<math::se3<double>> trajectory;
     for (int i = 0; i < 10; i++) {
@@ -1220,6 +1306,7 @@ int main(int argc, char* argv[]) {
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::both);
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::both, mapping::frame::settings::adjustment_kind::absolute, mapping::frame::settings::local_map_kind::voxels);
     test_relocalisation(width, height, intrinsics, renderer);
+    test_relocalisation_into_an_older_map(width, height, intrinsics, room);
     test_submap_join(width, height, intrinsics, renderer);
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::klt, mapping::frame::settings::adjustment_kind::relative);
     test_submap_join(width, height, intrinsics, renderer, mapping::frame::settings::adjustment_kind::relative);

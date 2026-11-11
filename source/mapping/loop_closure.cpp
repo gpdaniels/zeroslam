@@ -76,7 +76,7 @@ namespace mapping {
         }
     }
 
-    loop_closure::result loop_closure::detect(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const covisibility& graph, const record* const keyframe_records, const size_t keyframe_records_size, const int submap_start_id, const bool seek_foreign) {
+    loop_closure::result loop_closure::detect(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const covisibility& graph, const record* const keyframe_records, const size_t keyframe_records_size, const size_t submap, const bool seek_foreign) {
         const auto unfound = []() {
             result empty;
             empty.found = false;
@@ -141,8 +141,13 @@ namespace mapping {
             query[i] = keyframe_records[i].descriptor;
         }
         const bool islands = this->recognition.get_engine() == place_recognition::engine::ibow;
-        const auto recent = [keyframe_id, submap_start_id](const int candidate_id) {
-            return (candidate_id >= submap_start_id) && (candidate_id > keyframe_id - loop_closure::min_keyframe_gap);
+        // Whether a held keyframe is in the submap of the query keyframe.
+        const auto same_submap = [this, submap](const int candidate_id) {
+            const std::unordered_map<int, keyframe>::const_iterator held = this->keyframes.find(candidate_id);
+            return (held != this->keyframes.end()) && (held->second.submap == submap);
+        };
+        const auto recent = [keyframe_id, &same_submap](const int candidate_id) {
+            return same_submap(candidate_id) && (candidate_id > keyframe_id - loop_closure::min_keyframe_gap);
         };
         const auto excluded = [&](const int candidate_id) {
             return recent(candidate_id) || (graph.weight(keyframe_id, candidate_id) >= loop_closure::max_covisible_landmarks) || (this->keyframes.count(candidate_id) == 0);
@@ -163,7 +168,7 @@ namespace mapping {
             std::string distant;
             size_t distant_count = 0;
             for (const place_recognition::candidate& candidate : this->recognition.get_candidates(query.data(), query.size(), keyframe_id, this->keyframes.size())) {
-                if (((candidate.keyframe_id >= submap_start_id) && (candidate.keyframe_id > keyframe_id - loop_closure::min_keyframe_gap)) || (graph.weight(keyframe_id, candidate.keyframe_id) >= loop_closure::max_covisible_landmarks)) {
+                if (recent(candidate.keyframe_id) || (graph.weight(keyframe_id, candidate.keyframe_id) >= loop_closure::max_covisible_landmarks)) {
                     continue;
                 }
                 distant += " " + std::to_string(candidate.keyframe_id) + ":" + std::to_string(candidate.votes);
@@ -190,8 +195,8 @@ namespace mapping {
                     continue;
                 }
                 result attempt = unfound();
-                if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found, attempt)) {
-                    return this->confirm_or_hold(keyframe_id, submap_start_id, graph, attempt);
+                if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap, candidate.keyframe_id, found, attempt)) {
+                    return this->confirm_or_hold(keyframe_id, submap, graph, attempt);
                 }
                 if (&candidate == &candidates.front()) {
                     outcome.correspondences = attempt.correspondences;
@@ -215,7 +220,7 @@ namespace mapping {
         else {
             size_t verified = 0;
             for (const place_recognition::candidate& candidate : candidates) {
-                if ((candidate.keyframe_id >= submap_start_id) && (candidate.keyframe_id > keyframe_id - loop_closure::min_keyframe_gap)) {
+                if (recent(candidate.keyframe_id)) {
                     continue;
                 }
                 const std::unordered_map<int, keyframe>::const_iterator found = this->keyframes.find(candidate.keyframe_id);
@@ -237,8 +242,8 @@ namespace mapping {
                     break;
                 }
                 result attempt = unfound();
-                if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found->second, attempt)) {
-                    return this->confirm_or_hold(keyframe_id, submap_start_id, graph, attempt);
+                if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap, candidate.keyframe_id, found->second, attempt)) {
+                    return this->confirm_or_hold(keyframe_id, submap, graph, attempt);
                 }
                 // When nothing verifies, the counts reported are those of the best ranked candidate.
                 if (verified == 0) {
@@ -248,15 +253,20 @@ namespace mapping {
                 ++verified;
             }
         }
-        if (seek_foreign && (submap_start_id > 0)) {
+        if (seek_foreign) {
             size_t foreign_verified = 0;
-            const std::vector<place_recognition::candidate> foreign = this->recognition.get_candidates(query.data(), query.size(), keyframe_id, loop_closure::max_candidates, submap_start_id);
+            std::vector<place_recognition::candidate> foreign;
+            for (const place_recognition::candidate& candidate : this->recognition.get_candidates(query.data(), query.size(), keyframe_id, this->keyframes.size())) {
+                if ((this->keyframes.count(candidate.keyframe_id) != 0) && !same_submap(candidate.keyframe_id) && (foreign.size() < loop_closure::max_candidates)) {
+                    foreign.push_back(candidate);
+                }
+            }
             if (core::logger::enabled(core::logger::level::debug)) {
                 std::string ranked;
                 for (const place_recognition::candidate& candidate : foreign) {
                     ranked += " " + std::to_string(candidate.keyframe_id) + ":" + std::to_string(candidate.votes);
                 }
-                core::logger::log(core::logger::level::debug, "Loop query keyframe %d before keyframe %d: candidates%s.", keyframe_id, submap_start_id, ranked.c_str());
+                core::logger::log(core::logger::level::debug, "Loop query keyframe %d outside submap %zu: candidates%s.", keyframe_id, submap, ranked.c_str());
             }
             for (const place_recognition::candidate& candidate : foreign) {
                 if (foreign_verified >= loop_closure::max_verified_candidates) {
@@ -267,8 +277,8 @@ namespace mapping {
                     continue;
                 }
                 result attempt = unfound();
-                if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap_start_id, candidate.keyframe_id, found->second, attempt)) {
-                    return this->confirm_or_hold(keyframe_id, submap_start_id, graph, attempt);
+                if (this->verify_candidate(keyframe_id, pose, camera, keyframe_records, keyframe_records_size, query, submap, candidate.keyframe_id, found->second, attempt)) {
+                    return this->confirm_or_hold(keyframe_id, submap, graph, attempt);
                 }
                 ++foreign_verified;
             }
@@ -559,9 +569,11 @@ namespace mapping {
         return matches.size();
     }
 
-    loop_closure::result loop_closure::confirm_or_hold(const int keyframe_id, const int submap_start_id, const covisibility& graph, const result& verified) {
+    loop_closure::result loop_closure::confirm_or_hold(const int keyframe_id, const size_t submap, const covisibility& graph, const result& verified) {
         const double scale = verified.correction.scale();
-        const bool rescaling = (verified.keyframe_id >= submap_start_id) && ((scale > loop_closure::max_scale_ratio) || (scale < 1.0 / loop_closure::max_scale_ratio));
+        const std::unordered_map<int, keyframe>::const_iterator verified_keyframe = this->keyframes.find(verified.keyframe_id);
+        const bool same_submap = (verified_keyframe != this->keyframes.end()) && (verified_keyframe->second.submap == submap);
+        const bool rescaling = same_submap && ((scale > loop_closure::max_scale_ratio) || (scale < 1.0 / loop_closure::max_scale_ratio));
         const size_t required = (rescaling || verified.provisional) ? math::max(this->loop_confirmations, loop_closure::rescaling_confirmations) : this->loop_confirmations;
         if (required <= 1) {
             return verified;
@@ -605,7 +617,7 @@ namespace mapping {
         return held;
     }
 
-    bool loop_closure::verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::stored>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const {
+    bool loop_closure::verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::stored>& query, const size_t submap, const int candidate_id, const keyframe& candidate, result& outcome) const {
         const keyframe* const candidate_keyframe = &candidate;
         const std::vector<record>& candidate_records = candidate_keyframe->records;
         core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d: %zu records against %zu.", keyframe_id, candidate_id, candidate_records.size(), keyframe_records_size);
@@ -725,7 +737,7 @@ namespace mapping {
                                                         { model.rotation[1][0], model.rotation[1][1], model.rotation[1][2] },
                                                         { model.rotation[2][0], model.rotation[2][1], model.rotation[2][2] } } };
         const math::matrix<double, 3, 1> translation = { { model.translation[0], model.translation[1], model.translation[2] } };
-        const bool foreign_submap = candidate_id < submap_start_id;
+        const bool foreign_submap = candidate.submap != submap;
         if (!foreign_submap && ((model.scale > loop_closure::max_rescaling_ratio) || (model.scale < 1.0 / loop_closure::max_rescaling_ratio))) {
             core::logger::log(core::logger::level::note, "Loop candidate keyframe %d -> %d rejected, scale %.4f is not plausible.", keyframe_id, candidate_id, model.scale);
             return false;
@@ -899,7 +911,7 @@ namespace mapping {
         return true;
     }
 
-    void loop_closure::add_keyframe(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size) {
+    void loop_closure::add_keyframe(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const size_t submap) {
         if (keyframe_records_size == 0) {
             return;
         }
@@ -912,6 +924,7 @@ namespace mapping {
         stored.pose = pose;
         stored.camera = camera;
         stored.records.assign(keyframe_records, keyframe_records + keyframe_records_size);
+        stored.submap = submap;
     }
 
     void loop_closure::set_hamming_scale(const float scale) {

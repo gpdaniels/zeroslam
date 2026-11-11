@@ -122,6 +122,9 @@ namespace mapping {
             math::se3<double> pose;
             sensor::model camera;
             std::vector<record> records;
+            // The submap the keyframe was posed in, as the caller numbers them: a loop within one submap and a loop between
+            // two are held to different bounds, and the keyframe's id does not say which it is.
+            size_t submap = 0;
         };
 
         // A loop verified by fewer keyframes than loop_confirmations, held until the next keyframes confirm or drop it: its
@@ -191,9 +194,9 @@ namespace mapping {
         // A verified loop as reported: at once when loop_confirmations is one or enough keyframes covisible with the keyframe
         // verify it as well, otherwise held as the pending loop and not found. A loop within one submap that rescales the map
         // beyond max_scale_ratio needs rescaling_confirmations whatever loop_confirmations is.
-        result confirm_or_hold(const int keyframe_id, const int submap_start_id, const covisibility& graph, const result& verified);
+        result confirm_or_hold(const int keyframe_id, const size_t submap, const covisibility& graph, const result& verified);
 
-        bool verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::stored>& query, const int submap_start_id, const int candidate_id, const keyframe& candidate, result& outcome) const;
+        bool verify_candidate(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const std::vector<feature::descriptor::stored>& query, const size_t submap, const int candidate_id, const keyframe& candidate, result& outcome) const;
 
     public:
         loop_closure();
@@ -204,9 +207,9 @@ namespace mapping {
         // With the ibow place recognition the islands' best keyframes, recent and covisible ones left out, are verified
         // first and the covisible keyframes it ranks are then tried as revisits; with hbst the ranked candidates are taken
         // in turn, covisible ones as revisits.
-        result detect(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const covisibility& graph, const record* const keyframe_records, const size_t keyframe_records_size, const int submap_start_id = 0, const bool seek_foreign = false);
+        result detect(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const covisibility& graph, const record* const keyframe_records, const size_t keyframe_records_size, const size_t submap = 0, const bool seek_foreign = false);
 
-        void add_keyframe(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size);
+        void add_keyframe(const int keyframe_id, const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const size_t submap = 0);
 
         void remove_keyframe(const int keyframe_id);
 

@@ -136,6 +136,16 @@ public:
         return this->submaps_;
     }
 
+    // The submap a frame was posed in: 0 for the first map, otherwise the place of its submap in submaps(), counted from one.
+    size_t submap_of_frame(const int frame_id) const {
+        return this->submap_of(frame_id);
+    }
+
+    // The part of the map a frame is in: 0 for the first map and every submap joined to it, the frame's submap otherwise.
+    size_t component_of_frame(const int frame_id) const {
+        return this->map_component(frame_id);
+    }
+
     // The voxel map of the current map component's landmarks, as of the newest keyframe.
     const mapping::voxel_map& voxels() const {
         return this->voxel_map_;
@@ -677,7 +687,7 @@ private:
         };
 
         const size_t current_submap = this->submap_of(keyframe_id);
-        const bool joining = current_submap != this->submap_of(loop.keyframe_id);
+        const bool joining = this->map_component(keyframe_id) != this->map_component(loop.keyframe_id);
         optimisation::factor_graph graph;
         std::unordered_map<int, optimisation::vertex*> vertices;
         std::unordered_map<int, math::se3<double>> previous_poses;
@@ -704,13 +714,16 @@ private:
             edge.add_vertex(vertices.at(second_id));
             graph.add_edge(static_cast<optimisation::edge&&>(edge));
         };
-        for (size_t i = 1; i < ordered_keyframe_ids.size(); ++i) {
-            const int previous_id = ordered_keyframe_ids[i - 1];
-            const int current_id = ordered_keyframe_ids[i];
-            if (this->submap_of(previous_id) != this->submap_of(current_id)) {
-                continue;
+        // Each keyframe is held to the one before it in its own submap, which is not always the one before it in time:
+        // tracking can leave a submap for another and relocalise into it again later.
+        std::unordered_map<size_t, int> previous_of_submap;
+        for (const int current_id : ordered_keyframe_ids) {
+            const size_t submap_index = this->submap_of(current_id);
+            const std::unordered_map<size_t, int>::const_iterator previous = previous_of_submap.find(submap_index);
+            if (previous != previous_of_submap.end()) {
+                add_edge(previous->second, current_id, camera_to_world.at(previous->second).inverse() * camera_to_world.at(current_id));
             }
-            add_edge(previous_id, current_id, camera_to_world.at(previous_id).inverse() * camera_to_world.at(current_id));
+            previous_of_submap[submap_index] = current_id;
         }
         add_edge(loop.keyframe_id, keyframe_id, loop.relative);
         for (const verified_loop& earlier : this->verified_loops) {
@@ -844,7 +857,7 @@ private:
             core::logger::log(core::logger::level::warn, "Loop %d -> %d not closed, a keyframe is not in the relative graph.", keyframe_id, loop.keyframe_id);
             return false;
         }
-        const bool joining = this->submap_of(keyframe_id) != this->submap_of(loop.keyframe_id);
+        const bool joining = this->map_component(keyframe_id) != this->map_component(loop.keyframe_id);
         const size_t fused = this->fuse_loop_landmarks(loop, records);
         this->verified_loops.push_back({ keyframe_id, loop, fused });
         if (joining) {
@@ -874,11 +887,11 @@ private:
             if ((t->landmark_id != -1) || (t->length < 2)) {
                 continue;
             }
-            // The reference keyframe must belong to the current submap, whose poses share its frame and scale.
-            const int submap_start = this->submap_start_of(frame_current.id);
+            // The reference keyframe must belong to the current frame's part of the map, whose poses share its frame and scale.
+            const size_t component = this->map_component(frame_current.id);
             const feature::tracker::line::observation* ref_obs = nullptr;
             for (const feature::tracker::line::observation& obs : t->history) {
-                if ((obs.frame_id != frame_current.id) && (obs.frame_id >= submap_start) && (this->keyframe_ids_.count(obs.frame_id) != 0) && (this->reconstruction.frames.count(obs.frame_id) != 0)) {
+                if ((obs.frame_id != frame_current.id) && (this->map_component(obs.frame_id) == component) && (this->keyframe_ids_.count(obs.frame_id) != 0) && (this->reconstruction.frames.count(obs.frame_id) != 0)) {
                     ref_obs = &obs;
                     break;
                 }
@@ -958,7 +971,7 @@ private:
             this->reconstruction.add_line_landmark(landmark);
             t->landmark_id = landmark.id;
             for (const feature::tracker::line::observation& obs : t->history) {
-                if ((obs.frame_id >= submap_start) && (this->keyframe_ids_.count(obs.frame_id) != 0) && (this->reconstruction.frames.count(obs.frame_id) != 0)) {
+                if ((this->map_component(obs.frame_id) == component) && (this->keyframe_ids_.count(obs.frame_id) != 0) && (this->reconstruction.frames.count(obs.frame_id) != 0)) {
                     double pixels[2][2];
                     if (slam::line_pixels(this->reconstruction.frames.at(obs.frame_id), obs.x1, obs.y1, obs.x2, obs.y2, pixels)) {
                         this->reconstruction.add_line_observation(obs.frame_id, landmark, pixels[0][0], pixels[0][1], pixels[1][0], pixels[1][1]);
@@ -1706,6 +1719,7 @@ private:
             }
             frame_current.rotation = rotation;
             frame_current.translation = translation;
+            this->recalled_keyframe_id_ = keyframe_id;
             std::unordered_set<int> linked;
             for (feature::tracker::tracker::track* const t : this->all_point_tracks()) {
                 if (t->landmark_id >= 0) {
@@ -1838,7 +1852,19 @@ private:
     static constexpr int reinitialise_after_frames = 5;
     static constexpr size_t reinitialise_tracks_minimum = 50;
 
+    // The submap each frame was posed in, 0 for the first map. A frame's id does not say: tracking continues in the submap of
+    // the frame before it, a new submap takes the frames from its anchor on, and relocalisation moves tracking to the submap
+    // of the keyframe it recalled, which can be an older one than the newest.
+    std::unordered_map<int, size_t> frame_submaps_;
+    size_t tracking_submap_ = 0;
+    size_t probation_origin_submap_ = 0;
+    int recalled_keyframe_id_ = -1;
+
     size_t submap_of(const int frame_id) const {
+        const std::unordered_map<int, size_t>::const_iterator recorded = this->frame_submaps_.find(frame_id);
+        if (recorded != this->frame_submaps_.end()) {
+            return recorded->second;
+        }
         size_t index = 0;
         while ((index < this->submaps_.size()) && (this->submaps_[index].start_id <= frame_id)) {
             ++index;
@@ -1850,11 +1876,6 @@ private:
     size_t map_component(const int frame_id) const {
         const size_t index = this->submap_of(frame_id);
         return ((index == 0) || this->submaps_[index - 1].joined) ? 0 : index;
-    }
-
-    int submap_start_of(const int frame_id) const {
-        const size_t index = this->submap_of(frame_id);
-        return (index == 0) ? 0 : this->submaps_[index - 1].start_id;
     }
 
     void begin_submap(mapping::frame& frame_current) {
@@ -1878,6 +1899,12 @@ private:
 
     void start_submap(const mapping::frame& frame_current) {
         this->submaps_.push_back({ this->init_anchor_frame_id_, frame_current.id, false });
+        this->tracking_submap_ = this->submaps_.size();
+        for (auto& [frame_id, frame_submap] : this->frame_submaps_) {
+            if (frame_id >= this->init_anchor_frame_id_) {
+                frame_submap = this->tracking_submap_;
+            }
+        }
         this->reconstruction.anchor_frame_ids.insert(this->init_anchor_frame_id_);
         this->reconstruction.anchor_frame_ids.insert(frame_current.id);
         for (feature::tracker::tracker::track* const t : this->all_point_tracks()) {
@@ -3379,6 +3406,7 @@ public:
         const int frame_id = frame.id;
         this->reconstruction.add_frame(static_cast<mapping::frame&&>(frame));
         mapping::frame& frame_added = this->reconstruction.frames.at(frame_id);
+        this->frame_submaps_[frame_id] = this->tracking_submap_;
 
         this->loop_closure_.set_hamming_scale(this->frontend.descriptor_distance_scale());
         this->loop_closure_.set_place_recognition((this->frontend.place_recognition == mapping::frame::settings::place_recognition_kind::ibow) ? mapping::place_recognition::engine::ibow : mapping::place_recognition::engine::hbst);
@@ -3534,6 +3562,12 @@ public:
             this->probation_frame_ids_.clear();
             this->probation_frame_ids_.push_back(frame_current.id);
             this->previous_tracked_frame_id_ = -1;
+            // The keyframe that relocalisation recalled can be in any submap, and the frame is posed in that one from here on.
+            this->probation_origin_submap_ = this->tracking_submap_;
+            if (relocalised) {
+                this->tracking_submap_ = this->submap_of(this->recalled_keyframe_id_);
+                this->frame_submaps_[frame_current.id] = this->tracking_submap_;
+            }
         }
         else if (initialise) {
             const mapping::frame& frame_anchor = this->reconstruction.frames.at(this->init_anchor_frame_id_);
@@ -3750,6 +3784,7 @@ public:
                     }
                     this->probation_track_links_.clear();
                     this->relocalisation_probation_ = 0;
+                    this->tracking_submap_ = this->probation_origin_submap_;
                     this->reconstruction.frames.erase(frame_current.id);
                     // The probation frames are gone, so the last tracked frame is the one before the relocalisation again.
                     if (this->reconstruction.frames.count(this->probation_origin_id_) != 0) {
@@ -3961,9 +3996,9 @@ public:
                 }
                 ++candidates;
                 const feature::tracker::tracker::observation* ref_obs = nullptr;
-                const int submap_start = this->submap_start_of(frame_current.id);
+                const size_t component = this->map_component(frame_current.id);
                 for (const feature::tracker::tracker::observation& obs : t->history) {
-                    if ((obs.frame_id != frame_current.id) && (obs.frame_id >= submap_start) && (this->keyframe_ids_.count(obs.frame_id) != 0)) {
+                    if ((obs.frame_id != frame_current.id) && (this->map_component(obs.frame_id) == component) && (this->keyframe_ids_.count(obs.frame_id) != 0)) {
                         ref_obs = &obs;
                         break;
                     }
@@ -4187,14 +4222,14 @@ public:
                 };
                 this->loop_closure_.refresh(pose_of, location_of);
             }
-            const mapping::loop_closure::result loop = this->loop_closure_.detect(frame_current.id, pose, frame_current.camera, this->covisibility_, records.data(), records.size(), this->submap_start_of(frame_current.id), this->map_component(frame_current.id) != 0);
+            const mapping::loop_closure::result loop = this->loop_closure_.detect(frame_current.id, pose, frame_current.camera, this->covisibility_, records.data(), records.size(), this->submap_of(frame_current.id), this->map_component(frame_current.id) != 0);
             // A loop between two submaps that both stand apart cannot be recorded as a join to the map, so it waits until
             // one of them meets the map.
             const bool between_apart = loop.found && (this->map_component(loop.keyframe_id) != 0) && (this->map_component(loop.keyframe_id) != this->map_component(frame_current.id));
             if (loop.found && !between_apart) {
                 this->close_loop(frame_current.id, loop, records);
             }
-            this->loop_closure_.add_keyframe(frame_current.id, pose, frame_current.camera, records.data(), records.size());
+            this->loop_closure_.add_keyframe(frame_current.id, pose, frame_current.camera, records.data(), records.size(), this->submap_of(frame_current.id));
         }
         // The voxel map is part of the map whichever local map the tracking draws on (the api exports it), and costs one
         // insert per landmark.
