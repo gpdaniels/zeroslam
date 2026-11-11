@@ -239,5 +239,78 @@ int main(int argc, char* argv[]) {
         REQUIRE(std::abs(error - 1.0) < 1.0e-9);
     }
 
+    {
+        // An adjustment takes no observation whose landmark does not project within a focal length of it. Here one landmark of
+        // sixty one has been left somewhere absurd, in front of every camera and 89 degrees off their axes, where the distorted
+        // camera puts it some 1e19 pixels from each of its observations. With that in the solve the first pass is spent on it
+        // and the adjustment is undone or takes good observations with it, so the rest of the map is never adjusted.
+        const double parameters[sensor::model::parameter_count] = { 517.3, 516.5, 318.6, 255.3, 0.2624, -0.9531, -0.0054, 0.0026, 1.1633, 0.0, 0.0, 0.0 };
+        const sensor::model camera(&parameters[0], sensor::model::parameter_count);
+        constexpr static const int frame_count = 6;
+        constexpr static const int landmark_count = 60;
+        constexpr static const int absurd_id = landmark_count;
+        mapping::map m;
+        for (int frame_id = 0; frame_id < frame_count; ++frame_id) {
+            mapping::frame f;
+            f.id = frame_id;
+            f.camera = camera;
+            f.translation = math::matrix<double, 3, 1>({ -0.2 * frame_id, 0.0, 0.0 });
+            m.add_frame(f);
+        }
+        const auto observe = [&](const mapping::point& landmark, const math::matrix<double, 3, 1>& truth) {
+            size_t observations = 0;
+            for (int frame_id = 0; frame_id < frame_count; ++frame_id) {
+                const mapping::frame& f = m.frames.at(frame_id);
+                const math::matrix<double, 3, 1> in_camera = (f.rotation * truth) + f.translation;
+                double pixel[2] = {};
+                if (camera.project(in_camera.data(), &pixel[0]) && (pixel[0] > 0.0) && (pixel[0] < 640.0) && (pixel[1] > 0.0) && (pixel[1] < 480.0)) {
+                    m.add_observation(frame_id, landmark, pixel[0], pixel[1]);
+                    ++observations;
+                }
+            }
+            return observations;
+        };
+        unsigned int state = 12345u;
+        const auto uniform = [&state]() {
+            state = (state * 1664525u) + 1013904223u;
+            return static_cast<double>(state >> 8) / static_cast<double>(1u << 24);
+        };
+        size_t good_observations = 0;
+        for (int landmark_id = 0; landmark_id < landmark_count; ++landmark_id) {
+            const math::matrix<double, 3, 1> truth({ -1.0 + (3.0 * uniform()), -0.8 + (1.6 * uniform()), 4.0 + (4.0 * uniform()) });
+            // The map holds each landmark a little off, by a pixel or two, which is what the adjustment is there to put right.
+            const mapping::point landmark(landmark_id, truth + math::matrix<double, 3, 1>({ 0.02 * (uniform() - 0.5), 0.02 * (uniform() - 0.5), 0.1 * (uniform() - 0.5) }), math::matrix<double, 3, 1>::zero());
+            m.add_landmark(landmark);
+            const size_t observations = observe(landmark, truth);
+            REQUIRE(observations >= 2);
+            good_observations += observations;
+        }
+        const mapping::point absurd(absurd_id, math::matrix<double, 3, 1>({ 60.0, -50.0, 0.3 }), math::matrix<double, 3, 1>::zero());
+        m.add_landmark(absurd);
+        REQUIRE(observe(absurd, math::matrix<double, 3, 1>({ 0.5, 0.2, 6.0 })) == static_cast<size_t>(frame_count));
+        {
+            math::matrix<double, 2, 1> projected;
+            REQUIRE(mapping::map::project_landmark(m.frames.at(0), m.landmarks.at(absurd_id), projected));
+            REQUIRE((projected - m.observations.at(absurd_id)[0].point).get_length_squared() > 1.0e20);
+        }
+
+        m.optimise(0, false, 20);
+
+        // The absurd landmark has lost its observations to the outlier removal and gone, and nothing else has: every other
+        // observation is still there and now fits to a hundredth of a pixel.
+        REQUIRE(m.landmarks.count(absurd_id) == 0);
+        REQUIRE(m.observations.count(absurd_id) == 0);
+        size_t remaining_observations = 0;
+        for (const auto& [landmark_id, landmark_observations] : m.observations) {
+            for (const mapping::map::observation& obs : landmark_observations) {
+                math::matrix<double, 2, 1> projected;
+                REQUIRE(mapping::map::project_landmark(m.frames.at(obs.frame_id), m.landmarks.at(landmark_id), projected));
+                REQUIRE((projected - obs.point).get_length_squared() < 1.0e-4);
+                ++remaining_observations;
+            }
+        }
+        REQUIRE(remaining_observations == good_observations);
+    }
+
     return EXIT_SUCCESS;
 }

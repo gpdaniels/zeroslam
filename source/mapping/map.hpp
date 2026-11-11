@@ -122,6 +122,8 @@ namespace mapping {
         constexpr static const int repose_recent_frames = 90;
 
         constexpr static const double gross_error_squared = 25.0;
+        // How far, in focal lengths, a landmark may project from where a frame saw it for the observation to enter an adjustment.
+        constexpr static const double usable_focal_lengths = 1.0;
         // A landmark without a depth can be far from its guess, so it is only gross when the guess lands beyond this many
         // pixels (at the measurement's level) from where it was seen.
         constexpr static const double gross_unbounded_pixels = 100.0;
@@ -577,6 +579,55 @@ namespace mapping {
             // Without the landmarks free there is no first pass to drop gross observations, which pull a pose all the further
             // for being gross (one projecting far outside the view has an enormous Jacobian), so they stay out from the start.
             size_t gross_excluded = 0;
+            // With the landmarks free an observation may start far from its landmark and be brought in, but not from anywhere:
+            // one whose landmark does not project in its frame, or projects further than a focal length from where it was
+            // seen, measures nothing the solve can use. Its residual is whatever the camera model makes of a ray it was never
+            // fitted to (1e19 pixels for a ray 89 degrees off the axis of a distorted camera), and one such observation among
+            // a million decides the first pass. It stays out, and the outlier removal after the solve judges it as any other.
+            // A frame most of whose observations are like that is itself what is out of place, and keeps them all.
+            std::vector<unsigned char> unusable_observations;
+            size_t unusable_excluded = 0;
+            if (!fix_landmarks) {
+                std::unordered_map<int, double> bound_squared_of_frame;
+                std::unordered_map<int, std::pair<size_t, size_t>> unusable_of_frame;
+                for (const int landmark_id : active_landmarks_ordered) {
+                    const mapping::point& landmark_record = this->landmarks.at(landmark_id);
+                    for (const auto& obs : this->observations.at(landmark_id)) {
+                        if (camera_vertexes.count(obs.frame_id) == 0) {
+                            continue;
+                        }
+                        const mapping::frame& observing_frame = this->frames.at(obs.frame_id);
+                        std::unordered_map<int, double>::const_iterator bound_it = bound_squared_of_frame.find(obs.frame_id);
+                        if (bound_it == bound_squared_of_frame.end()) {
+                            double parameters[sensor::model::parameter_count] = {};
+                            static_cast<void>(observing_frame.camera.get_parameters(&parameters[0], sensor::model::parameter_count));
+                            const double bound = map::usable_focal_lengths * math::max(parameters[0], parameters[1]);
+                            bound_it = bound_squared_of_frame.emplace(obs.frame_id, bound * bound).first;
+                        }
+                        math::matrix<double, 2, 1> projected;
+                        const bool unusable = !map::project_landmark(observing_frame, landmark_record, projected) || !((projected - obs.point).get_length_squared() <= bound_it->second);
+                        unusable_observations.push_back(unusable ? 1 : 0);
+                        std::pair<size_t, size_t>& counts = unusable_of_frame[obs.frame_id];
+                        counts.first += unusable ? 1 : 0;
+                        ++counts.second;
+                    }
+                }
+                size_t index = 0;
+                for (const int landmark_id : active_landmarks_ordered) {
+                    for (const auto& obs : this->observations.at(landmark_id)) {
+                        if (camera_vertexes.count(obs.frame_id) == 0) {
+                            continue;
+                        }
+                        const std::pair<size_t, size_t>& counts = unusable_of_frame.at(obs.frame_id);
+                        if (counts.first * 2 > counts.second) {
+                            unusable_observations[index] = 0;
+                        }
+                        unusable_excluded += unusable_observations[index];
+                        ++index;
+                    }
+                }
+            }
+            size_t observation_index = 0;
             for (const int landmark_id : active_landmarks_ordered) {
                 // Only add the landmark if it is in a frame. Initially assume it is not.
                 bool landmark_added = false;
@@ -586,6 +637,9 @@ namespace mapping {
                     // Only add the edge if it will do something.
                     if (camera_vertexes.count(frame_id) == 0)
                         continue;
+                    if (!fix_landmarks && (unusable_observations[observation_index++] != 0)) {
+                        continue;
+                    }
                     if (camera_vertexes.at(frame_id)->is_fixed() && fix_landmarks) {
                         continue;
                     }
@@ -619,6 +673,9 @@ namespace mapping {
 
             if (gross_excluded > 0) {
                 core::logger::log(core::logger::level::info, "Pose adjustment: %zu observations beyond the gross bound left out.", gross_excluded);
+            }
+            if (unusable_excluded > 0) {
+                core::logger::log(core::logger::level::info, "Adjustment: %zu observations whose landmark does not project within %.0f focal length of them left out.", unusable_excluded, map::usable_focal_lengths);
             }
 
             int non_fixed_lines = 0;
