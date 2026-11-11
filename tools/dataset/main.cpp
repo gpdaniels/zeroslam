@@ -157,7 +157,7 @@ namespace {
         }
     }
 
-    extern "C" void remove_token_file_on_signal(int signal_number) {
+    void remove_token_file_on_signal(int signal_number) {
         remove_token_file();
         std::signal(signal_number, SIG_DFL);
         std::raise(signal_number);
