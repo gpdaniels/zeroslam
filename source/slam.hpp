@@ -2031,6 +2031,39 @@ private:
         return this->tracker_.active_tracks();
     }
 
+    // Drops from the histories of the tracks seen in the frame what nothing reads back. Of a point track that is its
+    // observations in the keyframes, in the frame a map is being initialised from, and in the frames dead reckoning takes its
+    // turns from; of a line track its observations in the keyframes and its last two. A track gains an observation with
+    // every frame, and keyframes, the only other place its history is trimmed, stop coming while the camera holds still.
+    void trim_track_histories(const int frame_id) {
+        const auto read_back = [this, frame_id](const int observed_id) {
+            return (observed_id == frame_id) || (observed_id == this->init_anchor_frame_id_) || (observed_id == this->reckoning_.posed_frame_id) || (observed_id == this->reckoning_.frame_id) || (observed_id == this->probation_origin_reckoning_.posed_frame_id) || (observed_id == this->probation_origin_reckoning_.frame_id) || (this->keyframe_ids_.count(observed_id) != 0);
+        };
+        for (feature::tracker::tracker::track* const t : this->active_point_tracks()) {
+            size_t keep = 0;
+            for (size_t h = 0; h < t->history.size(); ++h) {
+                if (read_back(t->history[h].frame_id)) {
+                    t->history[keep] = t->history[h];
+                    ++keep;
+                }
+            }
+            t->history.resize(keep);
+        }
+        if (!this->frontend.lines) {
+            return;
+        }
+        for (feature::tracker::line::track* const t : this->line_tracker_.active_tracks()) {
+            size_t keep = 0;
+            for (size_t h = 0; h < t->history.size(); ++h) {
+                if (((h + 2) >= t->history.size()) || (this->keyframe_ids_.count(t->history[h].frame_id) != 0)) {
+                    t->history[keep] = t->history[h];
+                    ++keep;
+                }
+            }
+            t->history.resize(keep);
+        }
+    }
+
     std::vector<feature::tracker::tracker::track*> all_point_tracks() {
         if (this->frontend.tracker == mapping::frame::settings::tracker_kind::extrema) {
             return this->extrema_tracker_.all_tracks();
@@ -3643,6 +3676,8 @@ public:
             }
             core::logger::log(core::logger::level::info, "Detected Lines: %zu segments (%zu inside the rectified view), %zu of %zu line tracks predicted, %zu continued, %zu with a landmark.", segment_count, inside, predicted, predictions.size(), continued, linked);
         }
+
+        this->trim_track_histories(frame_id);
 
         // Nothing to do for the first frame.
         if (frame_id == 0) {
