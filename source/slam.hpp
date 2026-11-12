@@ -1872,6 +1872,8 @@ private:
     size_t tracking_submap_ = 0;
     size_t probation_origin_submap_ = 0;
     int recalled_keyframe_id_ = -1;
+    // The keyframe the frames are anchored to between a relocalisation and the next keyframe, -1 at any other time.
+    int relocalised_keyframe_id_ = -1;
 
     size_t submap_of(const int frame_id) const {
         const std::unordered_map<int, size_t>::const_iterator recorded = this->frame_submaps_.find(frame_id);
@@ -2070,13 +2072,18 @@ private:
     }
 
     void anchor_non_keyframe(mapping::frame& frame_current) {
-        const std::unordered_map<int, mapping::frame>::const_iterator keyframe_it = this->reconstruction.frames.find(this->last_keyframe_id_);
+        // A frame is carried by the newest keyframe, except after a relocalisation: until the next keyframe, the frames are
+        // posed against the keyframe that was recalled, and the newest keyframe is where tracking was lost, which can be in
+        // another part of the map altogether.
+        const bool relocalised = (this->relocalised_keyframe_id_ >= 0) && (this->keyframe_ids_.count(this->relocalised_keyframe_id_) != 0) && (this->reconstruction.frames.count(this->relocalised_keyframe_id_) != 0);
+        const int reference_keyframe_id = relocalised ? this->relocalised_keyframe_id_ : this->last_keyframe_id_;
+        const std::unordered_map<int, mapping::frame>::const_iterator keyframe_it = this->reconstruction.frames.find(reference_keyframe_id);
         if (keyframe_it == this->reconstruction.frames.end()) {
             return;
         }
         const math::se3<double> frame_pose(frame_current.rotation, frame_current.translation);
         const math::se3<double> keyframe_pose(keyframe_it->second.rotation, keyframe_it->second.translation);
-        pose_anchor anchor{ this->last_keyframe_id_, frame_pose * keyframe_pose.inverse(), {} };
+        pose_anchor anchor{ reference_keyframe_id, frame_pose * keyframe_pose.inverse(), {} };
         for (const feature::tracker::tracker::track* const t : this->active_point_tracks()) {
             if ((t->landmark_id >= 0) && (this->reconstruction.landmarks.count(t->landmark_id) != 0)) {
                 anchor.observations.push_back({ t->landmark_id, { static_cast<float>(t->x), static_cast<float>(t->y) } });
@@ -3596,6 +3603,7 @@ public:
             if (relocalised) {
                 this->tracking_submap_ = this->submap_of(this->recalled_keyframe_id_);
                 this->frame_submaps_[frame_current.id] = this->tracking_submap_;
+                this->relocalised_keyframe_id_ = this->recalled_keyframe_id_;
             }
         }
         else if (initialise) {
@@ -3650,6 +3658,7 @@ public:
                 if (this->keyframe_ids_.empty()) {
                     this->reconstruction.gauge_frame_id = frame_current.id;
                     this->last_keyframe_id_ = frame_current.id;
+                    this->relocalised_keyframe_id_ = -1;
                 }
                 this->last_tracked_frame_id_ = frame_current.id;
                 return;
@@ -3764,6 +3773,7 @@ public:
             this->keyframes_inserted_ += 2;
             this->keyframes_since_global_adjustment_ += 2;
             this->last_keyframe_id_ = frame_current.id;
+            this->relocalised_keyframe_id_ = -1;
             is_keyframe = true;
             if (this->reinitialising_) {
                 this->start_submap(frame_current);
@@ -3814,6 +3824,7 @@ public:
                     this->probation_track_links_.clear();
                     this->relocalisation_probation_ = 0;
                     this->tracking_submap_ = this->probation_origin_submap_;
+                    this->relocalised_keyframe_id_ = -1;
                     this->reconstruction.frames.erase(frame_current.id);
                     // The probation frames are gone, so the last tracked frame is the one before the relocalisation again.
                     if (this->reconstruction.frames.count(this->probation_origin_id_) != 0) {
@@ -3963,6 +3974,7 @@ public:
         ++this->keyframes_inserted_;
         ++this->keyframes_since_global_adjustment_;
         this->last_keyframe_id_ = frame_current.id;
+        this->relocalised_keyframe_id_ = -1;
 
         {
             const size_t strays = this->unlink_strays(frame_current);

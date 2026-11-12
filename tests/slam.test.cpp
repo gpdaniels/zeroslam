@@ -1080,6 +1080,7 @@ static void test_loops_between_submaps(const int width, const int height, const 
     REQUIRE(system.submaps().size() == 1);
     REQUIRE(!system.submaps().front().joined);
     lose();
+    const int third_begin = next_id;
     if (return_to_the_map) {
         for (int step = 0; step < 8; step++) {
             see(approach(step));
@@ -1123,17 +1124,39 @@ static void test_loops_between_submaps(const int width, const int height, const 
     }
     REQUIRE(first_last_keyframe_id > 8);
     const double scale = std::sqrt((centre_of(first_last_keyframe_id) - centre_of(0)).get_length_squared()) / std::sqrt((truth.at(first_last_keyframe_id) - truth.at(0)).get_length_squared());
+    const auto misplaced_by = [&](const int frame_id) {
+        const double estimated = std::sqrt((centre_of(frame_id) - centre_of(0)).get_length_squared()) / scale;
+        const double actual = std::sqrt((truth.at(frame_id) - truth.at(0)).get_length_squared());
+        return std::abs(estimated - actual);
+    };
     size_t placed = 0;
+    int third_first_keyframe_id = next_id;
     for (const int keyframe_id : system.keyframe_ids()) {
+        if (keyframe_id >= third_begin) {
+            third_first_keyframe_id = std::min(third_first_keyframe_id, keyframe_id);
+        }
         if ((keyframe_id < second_begin) || (keyframe_id >= second_end)) {
             continue;
         }
-        const double estimated = std::sqrt((centre_of(keyframe_id) - centre_of(0)).get_length_squared()) / scale;
-        const double actual = std::sqrt((truth.at(keyframe_id) - truth.at(0)).get_length_squared());
-        REQUIRE(std::abs(estimated - actual) < 0.3);
+        REQUIRE(misplaced_by(keyframe_id) < 0.3);
         ++placed;
     }
     REQUIRE(placed >= 3);
+
+    // The frames between a relocalisation and the next keyframe are posed against the keyframe that was recalled, in the
+    // map. The newest keyframe at the time is the one tracking was lost at, in the submap, which the loop has since moved
+    // by several times the size of the circle: a frame carried by that keyframe went with it.
+    if (return_to_the_map) {
+        size_t relocalised = 0;
+        for (int frame_id = third_begin; frame_id < third_first_keyframe_id; ++frame_id) {
+            if (system.reconstruction.frames.count(frame_id) == 0) {
+                continue;
+            }
+            REQUIRE(misplaced_by(frame_id) < 0.3);
+            ++relocalised;
+        }
+        REQUIRE(relocalised >= 3);
+    }
 }
 
 static void test_rotation_only(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {
