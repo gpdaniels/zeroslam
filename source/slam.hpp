@@ -1531,8 +1531,8 @@ private:
     // The frame was posed by its landmarks: reckoning starts again from it.
     void reckon_from(const mapping::frame& frame_current) {
         const int posed_before = this->reckoning_.posed_frame_id;
-        const bool near = (posed_before >= 0) && (frame_current.id > posed_before) && ((frame_current.id - posed_before) <= slam::blind_frames_tolerated);
-        this->reckoning_.speed_frame_id = near ? posed_before : -1;
+        const bool recent = (posed_before >= 0) && (frame_current.id > posed_before) && ((frame_current.id - posed_before) <= slam::blind_frames_tolerated);
+        this->reckoning_.speed_frame_id = recent ? posed_before : -1;
         this->reckoning_.posed_frame_id = frame_current.id;
         this->reckoning_.frame_id = frame_current.id;
     }
