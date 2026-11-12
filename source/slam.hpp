@@ -2956,17 +2956,23 @@ private:
             const feature::point& detection = frame_current.keypoints[best.index];
             size_t nearest_track = active.size();
             double nearest_distance_squared = slam::local_map_relink_distance * slam::local_map_relink_distance;
-            const std::unordered_map<long long, std::vector<size_t>>::const_iterator cell_it = track_grid.find(cell_key(static_cast<double>(detection.x), static_cast<double>(detection.y)));
-            if (cell_it != track_grid.end()) {
-                for (const size_t index : cell_it->second) {
-                    if ((claimed[index] != 0) || (active[index]->landmark_id >= 0)) {
+            // The track can sit across the border of the detection's cell, so the cells around it are searched as well.
+            for (int offset_y = -1; offset_y <= 1; ++offset_y) {
+                for (int offset_x = -1; offset_x <= 1; ++offset_x) {
+                    const std::unordered_map<long long, std::vector<size_t>>::const_iterator cell_it = track_grid.find(cell_key(static_cast<double>(detection.x) + (static_cast<double>(offset_x) * radius), static_cast<double>(detection.y) + (static_cast<double>(offset_y) * radius)));
+                    if (cell_it == track_grid.end()) {
                         continue;
                     }
-                    const double dx = static_cast<double>(active[index]->x) - static_cast<double>(detection.x);
-                    const double dy = static_cast<double>(active[index]->y) - static_cast<double>(detection.y);
-                    if (((dx * dx) + (dy * dy)) < nearest_distance_squared) {
-                        nearest_distance_squared = (dx * dx) + (dy * dy);
-                        nearest_track = index;
+                    for (const size_t index : cell_it->second) {
+                        if ((claimed[index] != 0) || (active[index]->landmark_id >= 0)) {
+                            continue;
+                        }
+                        const double dx = static_cast<double>(active[index]->x) - static_cast<double>(detection.x);
+                        const double dy = static_cast<double>(active[index]->y) - static_cast<double>(detection.y);
+                        if (((dx * dx) + (dy * dy)) < nearest_distance_squared) {
+                            nearest_distance_squared = (dx * dx) + (dy * dy);
+                            nearest_track = index;
+                        }
                     }
                 }
             }
