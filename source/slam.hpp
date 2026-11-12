@@ -1955,7 +1955,6 @@ private:
         this->init_anchor_frame_id_ = frame_current.id;
         this->reinitialising_ = true;
         this->last_tracked_frame_id_ = frame_current.id;
-        this->previous_tracked_frame_id_ = -1;
         core::logger::log(core::logger::level::note, "Lost for %d frames: frame %d anchors a new submap, initialising again.", this->lost_frames_, frame_current.id);
     }
 
@@ -3934,7 +3933,6 @@ public:
                     if (this->reconstruction.frames.count(this->probation_origin_id_) != 0) {
                         this->last_tracked_frame_id_ = this->probation_origin_id_;
                     }
-                    this->previous_tracked_frame_id_ = -1;
                     this->state_ = tracking_state::initialising;
                     return;
                 }
@@ -3961,7 +3959,6 @@ public:
                     if (this->reconstruction.frames.count(this->blind_run_origin_id_) != 0) {
                         this->last_tracked_frame_id_ = this->blind_run_origin_id_;
                     }
-                    this->previous_tracked_frame_id_ = -1;
                     return;
                 }
                 const int last_id = this->last_tracked_frame_id_;
