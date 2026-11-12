@@ -1470,65 +1470,106 @@ private:
     // The camera's pose from the frame last posed by its landmarks, carried on by the turns of its tracks and the speed it had
     // then, through the frames that nothing else poses. A submap started after tracking is lost begins there rather than at
     // the frame last posed, which can be a whole fast turn behind.
-    bool reckoned_ = false;
-    int reckoned_frame_id_ = -1;
-    math::matrix<double, 3, 3> reckoned_rotation_ = math::matrix<double, 3, 3>::identity();
-    math::matrix<double, 3, 1> reckoned_centre_ = math::matrix<double, 3, 1>::zero();
-    math::matrix<double, 3, 1> reckoned_velocity_ = math::matrix<double, 3, 1>::zero();
-    int posed_frame_id_ = -1;
-    math::matrix<double, 3, 3> posed_rotation_ = math::matrix<double, 3, 3>::identity();
-    math::matrix<double, 3, 1> posed_centre_ = math::matrix<double, 3, 1>::zero();
+    struct reckoning final {
+        // The frame last posed by its landmarks, and the frame posed before it when that is near enough to give a speed, -1
+        // for none. Only their ids are held and their poses are read from the map when they are wanted: a keyframe is posed
+        // before its adjustments and the loop it may close move it, across the map when that loop joins a submap, and a copy
+        // of the pose it was given would measure the next speed, and turn the next frame, from where it no longer is.
+        int posed_frame_id = -1;
+        int speed_frame_id = -1;
+        // The frame the pose has been carried on to, the posed frame itself until a frame after it is reckoned, and the pose
+        // it was carried to, which is not read while the frame is the posed one.
+        int frame_id = -1;
+        math::matrix<double, 3, 3> rotation = math::matrix<double, 3, 3>::identity();
+        math::matrix<double, 3, 1> centre = math::matrix<double, 3, 1>::zero();
+    };
+
+    reckoning reckoning_;
+    // The reckoning as it was before a relocalisation, which a revoked relocalisation goes back to: the frames it posed are
+    // dropped as wrongly posed, and what is reckoned from one of them is no better.
+    reckoning probation_origin_reckoning_;
+
+    // The pose of the frame last posed by its landmarks as the map has it now, false when there is no such frame.
+    bool posed_pose(math::matrix<double, 3, 3>& rotation, math::matrix<double, 3, 1>& centre) const {
+        const std::unordered_map<int, mapping::frame>::const_iterator posed = this->reconstruction.frames.find(this->reckoning_.posed_frame_id);
+        if (posed == this->reconstruction.frames.end()) {
+            return false;
+        }
+        rotation = posed->second.rotation;
+        centre = -(math::transpose(posed->second.rotation) * posed->second.translation);
+        return true;
+    }
+
+    // The pose reckoning has reached, false when nothing has been reckoned.
+    bool reckoned_pose(math::matrix<double, 3, 3>& rotation, math::matrix<double, 3, 1>& centre) const {
+        if (this->reckoning_.frame_id < 0) {
+            return false;
+        }
+        if (this->reckoning_.frame_id == this->reckoning_.posed_frame_id) {
+            return this->posed_pose(rotation, centre);
+        }
+        rotation = this->reckoning_.rotation;
+        centre = this->reckoning_.centre;
+        return true;
+    }
+
+    // The distance the camera moved per frame between the last two frames its landmarks posed, as the map has them now.
+    math::matrix<double, 3, 1> reckoned_velocity() const {
+        const std::unordered_map<int, mapping::frame>::const_iterator posed = this->reconstruction.frames.find(this->reckoning_.posed_frame_id);
+        const std::unordered_map<int, mapping::frame>::const_iterator before = this->reconstruction.frames.find(this->reckoning_.speed_frame_id);
+        if ((posed == this->reconstruction.frames.end()) || (before == this->reconstruction.frames.end()) || (posed->first <= before->first)) {
+            return math::matrix<double, 3, 1>::zero();
+        }
+        const math::matrix<double, 3, 1> posed_centre = -(math::transpose(posed->second.rotation) * posed->second.translation);
+        const math::matrix<double, 3, 1> before_centre = -(math::transpose(before->second.rotation) * before->second.translation);
+        return (posed_centre - before_centre) * (1.0 / static_cast<double>(posed->first - before->first));
+    }
 
     // The frame was posed by its landmarks: reckoning starts again from it.
     void reckon_from(const mapping::frame& frame_current) {
-        const math::matrix<double, 3, 1> centre = -(math::transpose(frame_current.rotation) * frame_current.translation);
-        if ((this->posed_frame_id_ >= 0) && (frame_current.id > this->posed_frame_id_) && ((frame_current.id - this->posed_frame_id_) <= slam::blind_frames_tolerated)) {
-            this->reckoned_velocity_ = (centre - this->posed_centre_) * (1.0 / static_cast<double>(frame_current.id - this->posed_frame_id_));
-        }
-        else {
-            this->reckoned_velocity_ = math::matrix<double, 3, 1>::zero();
-        }
-        this->posed_frame_id_ = frame_current.id;
-        this->posed_rotation_ = frame_current.rotation;
-        this->posed_centre_ = centre;
-        this->reckoned_ = true;
-        this->reckoned_frame_id_ = frame_current.id;
-        this->reckoned_rotation_ = frame_current.rotation;
-        this->reckoned_centre_ = centre;
+        const int posed_before = this->reckoning_.posed_frame_id;
+        const bool near = (posed_before >= 0) && (frame_current.id > posed_before) && ((frame_current.id - posed_before) <= slam::blind_frames_tolerated);
+        this->reckoning_.speed_frame_id = near ? posed_before : -1;
+        this->reckoning_.posed_frame_id = frame_current.id;
+        this->reckoning_.frame_id = frame_current.id;
     }
 
     // Carries the reckoned pose on to the frame by the turn of the tracks, true when the tracks gave the turn. The turn is
     // taken from the frame posed last while enough tracks reach back to it, so that its errors do not add up frame by frame,
     // and from the frame reckoned last after that.
     bool reckon_turn(const mapping::frame& frame_current) {
-        if (!this->reckoned_ || (frame_current.id <= this->reckoned_frame_id_)) {
+        math::matrix<double, 3, 3> reckoned_rotation;
+        math::matrix<double, 3, 1> reckoned_centre;
+        if (!this->reckoned_pose(reckoned_rotation, reckoned_centre) || (frame_current.id <= this->reckoning_.frame_id)) {
             return false;
         }
         math::matrix<double, 3, 3> turn;
         math::matrix<double, 3, 3> rotation;
-        if ((this->posed_frame_id_ >= 0) && (this->posed_frame_id_ < frame_current.id) && this->turn_from_tracks(frame_current, this->posed_frame_id_, turn)) {
-            rotation = turn * this->posed_rotation_;
+        math::matrix<double, 3, 3> posed_rotation;
+        math::matrix<double, 3, 1> posed_centre;
+        if ((this->reckoning_.posed_frame_id < frame_current.id) && this->posed_pose(posed_rotation, posed_centre) && this->turn_from_tracks(frame_current, this->reckoning_.posed_frame_id, turn)) {
+            rotation = turn * posed_rotation;
         }
-        else if (this->turn_from_tracks(frame_current, this->reckoned_frame_id_, turn)) {
-            rotation = turn * this->reckoned_rotation_;
+        else if (this->turn_from_tracks(frame_current, this->reckoning_.frame_id, turn)) {
+            rotation = turn * reckoned_rotation;
         }
         else {
             return false;
         }
-        this->reckoned_centre_ = this->reckoned_centre_ + (this->reckoned_velocity_ * static_cast<double>(frame_current.id - this->reckoned_frame_id_));
-        this->reckoned_rotation_ = rotation;
-        this->reckoned_frame_id_ = frame_current.id;
+        this->reckoning_.centre = reckoned_centre + (this->reckoned_velocity() * static_cast<double>(frame_current.id - this->reckoning_.frame_id));
+        this->reckoning_.rotation = rotation;
+        this->reckoning_.frame_id = frame_current.id;
         return true;
     }
 
     // The frame was posed by the motion model alone: reckoning goes on from that pose.
     void reckon_hold(const mapping::frame& frame_current) {
-        if (!this->reckoned_) {
+        if (this->reckoning_.frame_id < 0) {
             return;
         }
-        this->reckoned_frame_id_ = frame_current.id;
-        this->reckoned_rotation_ = frame_current.rotation;
-        this->reckoned_centre_ = -(math::transpose(frame_current.rotation) * frame_current.translation);
+        this->reckoning_.frame_id = frame_current.id;
+        this->reckoning_.rotation = frame_current.rotation;
+        this->reckoning_.centre = -(math::transpose(frame_current.rotation) * frame_current.translation);
     }
 
     static constexpr int reckoned_frames_stale = 2;
@@ -1897,10 +1938,12 @@ private:
     void begin_submap(mapping::frame& frame_current) {
         this->submap_speed_ = this->recent_keyframe_speed();
         const std::unordered_map<int, mapping::frame>::const_iterator last = this->reconstruction.frames.find(this->last_tracked_frame_id_);
-        if (this->reckoned_ && (frame_current.id >= this->reckoned_frame_id_) && ((frame_current.id - this->reckoned_frame_id_) <= slam::reckoned_frames_stale)) {
-            const math::matrix<double, 3, 1> centre = this->reckoned_centre_ + (this->reckoned_velocity_ * static_cast<double>(frame_current.id - this->reckoned_frame_id_));
-            frame_current.rotation = this->reckoned_rotation_;
-            frame_current.translation = -(this->reckoned_rotation_ * centre);
+        math::matrix<double, 3, 3> reckoned_rotation;
+        math::matrix<double, 3, 1> reckoned_centre;
+        if ((frame_current.id >= this->reckoning_.frame_id) && ((frame_current.id - this->reckoning_.frame_id) <= slam::reckoned_frames_stale) && this->reckoned_pose(reckoned_rotation, reckoned_centre)) {
+            const math::matrix<double, 3, 1> centre = reckoned_centre + (this->reckoned_velocity() * static_cast<double>(frame_current.id - this->reckoning_.frame_id));
+            frame_current.rotation = reckoned_rotation;
+            frame_current.translation = -(reckoned_rotation * centre);
         }
         else if (last != this->reconstruction.frames.end()) {
             frame_current.rotation = last->second.rotation;
@@ -3590,6 +3633,7 @@ public:
             }
             this->lost_frames_ = 0;
             core::logger::log(core::logger::level::note, "Tracking resumed at frame %d %s.", frame_current.id, posed_from_tracks ? "from its tracks" : "by relocalisation");
+            this->probation_origin_reckoning_ = this->reckoning_;
             this->reckon_from(frame_current);
             this->state_ = tracking_state::tracking;
             this->blind_frames_ = 0;
@@ -3647,9 +3691,11 @@ public:
                 const mapping::frame& anchor_previous = this->reconstruction.frames.at(this->init_anchor_frame_id_);
                 frame_current.rotation = anchor_previous.rotation;
                 frame_current.translation = anchor_previous.translation;
-                if (this->reinitialising_ && this->reckoned_ && (this->reckoned_frame_id_ == frame_current.id)) {
-                    frame_current.rotation = this->reckoned_rotation_;
-                    frame_current.translation = -(this->reckoned_rotation_ * this->reckoned_centre_);
+                math::matrix<double, 3, 3> reckoned_rotation;
+                math::matrix<double, 3, 1> reckoned_centre;
+                if (this->reinitialising_ && (this->reckoning_.frame_id == frame_current.id) && this->reckoned_pose(reckoned_rotation, reckoned_centre)) {
+                    frame_current.rotation = reckoned_rotation;
+                    frame_current.translation = -(reckoned_rotation * reckoned_centre);
                 }
                 if (this->keyframe_ids_.count(this->init_anchor_frame_id_) == 0) {
                     this->reconstruction.frames.erase(this->init_anchor_frame_id_);
@@ -3825,6 +3871,7 @@ public:
                     this->relocalisation_probation_ = 0;
                     this->tracking_submap_ = this->probation_origin_submap_;
                     this->relocalised_keyframe_id_ = -1;
+                    this->reckoning_ = this->probation_origin_reckoning_;
                     this->reconstruction.frames.erase(frame_current.id);
                     // The probation frames are gone, so the last tracked frame is the one before the relocalisation again.
                     if (this->reconstruction.frames.count(this->probation_origin_id_) != 0) {
@@ -3897,8 +3944,8 @@ public:
                         pnp_success = true;
                     }
                     else if (this->reckon_turn(frame_current)) {
-                        frame_current.rotation = this->reckoned_rotation_;
-                        frame_current.translation = -(this->reckoned_rotation_ * this->reckoned_centre_);
+                        frame_current.rotation = this->reckoning_.rotation;
+                        frame_current.translation = -(this->reckoning_.rotation * this->reckoning_.centre);
                         core::logger::log(core::logger::level::warn, "PnP FAILED (%zu correspondencies, %zu agree with the refined prior): turned as its tracks turn and moved at the speed before (frames %d and %d).", pnp_correspondencies_size, refined_inliers, previous_id, last_id);
                     }
                     else {

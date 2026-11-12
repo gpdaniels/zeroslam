@@ -1159,6 +1159,110 @@ static void test_loops_between_submaps(const int width, const int height, const 
     }
 }
 
+// A frame that its landmarks do not pose is reckoned: turned as its tracks turn, and moved as the camera moved between the two
+// frames posed before it. Here that frame comes two frames after the keyframe at which a loop joins a submap to the map, which
+// moves the keyframe across the room, and it shows only the corner of its view that neither the map nor the submap has
+// landmarks in: the camera is tilted down for the submap, so the foot of the view is below anything the map saw, and the left
+// of it has come into view since the keyframe before. Reckoning kept the pose the keyframe was given before the loop moved it
+// and measured the camera's speed from there to the next frame, so the reckoned frame went as far again as the join had
+// moved the keyframe. On the way a relocalisation is revoked, by a view that goes dark behind it: the frames it posed are
+// dropped and the camera is lost again.
+static void test_dead_reckoning(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& room) {
+    constexpr static const double pi = 3.14159265358979323846;
+    constexpr static const double radius = 3.0;
+    constexpr static const double above_the_cubes = -1.5;
+    constexpr static const double tilt = 20.0 * pi / 180.0;
+    constexpr static const int corner_rows = 160;
+    constexpr static const int corner_columns = 200;
+    const auto circle = [](const int step, const double tilted) {
+        const double angle = 2.0 * pi * static_cast<double>(step) / 72.0;
+        const math::so3<double> rotation = math::so3<double>::rotation(tilted, 0, 0) * math::so3<double>::rotation(0, angle + pi, 0);
+        const math::matrix<double, 3, 1> centre = { { radius * std::sin(angle), above_the_cubes, 6.0 - (radius * std::cos(angle)) } };
+        return math::se3<double>(rotation, -(rotation * centre));
+    };
+    const auto approach = [](const int step) {
+        const math::so3<double> rotation = math::so3<double>::rotation(0, pi, 0);
+        const math::matrix<double, 3, 1> centre = { { (step - 8) * 0.25, above_the_cubes, 6.0 - radius } };
+        return math::se3<double>(rotation, -(rotation * centre));
+    };
+    const std::vector<unsigned char> black(static_cast<size_t>(width) * static_cast<size_t>(height), 0);
+    slam system;
+    system.frontend.track_collision_distance = 0.0f;
+    int next_id = 0;
+    const auto see = [&](const math::se3<double>& pose, const bool corner_only = false) {
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
+        room.render_frame(pose, intrinsics, frame);
+        if (corner_only) {
+            for (int row = 0; row < height; ++row) {
+                for (int column = 0; column < width; ++column) {
+                    if ((row < (height - corner_rows)) || (column >= corner_columns)) {
+                        frame.get_data()[(row * width) + column] = 0;
+                    }
+                }
+            }
+        }
+        system.process_frame(intrinsics, frame);
+        return next_id++;
+    };
+    const auto lose = [&](const int frames) {
+        for (int gap = 0; gap < frames; ++gap) {
+            image::image frame(static_cast<size_t>(height), static_cast<size_t>(width), black.data());
+            system.process_frame(intrinsics, frame);
+            ++next_id;
+        }
+    };
+    for (int step = 0; step < 8; step++) {
+        see(approach(step));
+    }
+    for (int step = 0; step <= 12; step++) {
+        see(circle(step, 0.0));
+    }
+    lose(60);
+    REQUIRE(system.state() == slam::tracking_state::initialising);
+
+    // Back in the map for two frames, and dark again before the relocalisation is confirmed.
+    const int relocalised_id = see(circle(6, 0.0));
+    REQUIRE(system.state() == slam::tracking_state::tracking);
+    REQUIRE(system.reconstruction.frames.count(relocalised_id) != 0);
+    see(circle(7, 0.0));
+    lose(1);
+    REQUIRE(system.state() == slam::tracking_state::initialising);
+    REQUIRE(system.reconstruction.frames.count(relocalised_id) == 0);
+    REQUIRE(system.reconstruction.frames.count(relocalised_id + 1) == 0);
+    lose(9);
+
+    // Round to the map from the far side, as a submap, until a loop joins it, and a few frames on.
+    int joined_id = -1;
+    int reckoned_id = -1;
+    for (int step = 52; (step <= 84) && ((joined_id < 0) || (next_id < (joined_id + 8))); step++) {
+        const bool corner_only = (joined_id >= 0) && (next_id == (joined_id + 2));
+        const int frame_id = see(circle(step, tilt), corner_only);
+        if (corner_only) {
+            reckoned_id = frame_id;
+        }
+        if ((joined_id < 0) && !system.submaps().empty() && system.submaps().front().joined) {
+            joined_id = frame_id;
+        }
+    }
+    REQUIRE(system.state() == slam::tracking_state::tracking);
+    REQUIRE(system.submaps().size() == 1);
+    REQUIRE(joined_id >= 0);
+    REQUIRE(reckoned_id == (joined_id + 2));
+    REQUIRE(system.keyframe_ids().count(joined_id) != 0);
+    REQUIRE(system.reconstruction.frames.count(joined_id + 1) != 0);
+    REQUIRE(system.reconstruction.frames.count(reckoned_id) != 0);
+
+    // The camera moves the same distance every frame, and the reckoned frame is that far from the frame before it.
+    const auto centre_of = [&system](const int frame_id) {
+        const mapping::frame& frame = system.reconstruction.frames.at(frame_id);
+        return math::matrix<double, 3, 1>(-(math::transpose(frame.rotation) * frame.translation));
+    };
+    const double step_posed = std::sqrt((centre_of(joined_id + 1) - centre_of(joined_id)).get_length_squared());
+    const double step_reckoned = std::sqrt((centre_of(reckoned_id) - centre_of(joined_id + 1)).get_length_squared());
+    REQUIRE(step_posed > 0.0);
+    REQUIRE(step_reckoned < (3.0 * step_posed));
+}
+
 static void test_rotation_only(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {
     std::vector<math::se3<double>> trajectory;
     for (int i = 0; i < 10; i++) {
@@ -1446,6 +1550,7 @@ int main(int argc, char* argv[]) {
     test_relocalisation_into_an_older_map(width, height, intrinsics, room);
     test_loops_between_submaps(width, height, intrinsics, room, false);
     test_loops_between_submaps(width, height, intrinsics, room, true);
+    test_dead_reckoning(width, height, intrinsics, room);
     test_submap_join(width, height, intrinsics, renderer);
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::klt, mapping::frame::settings::adjustment_kind::relative);
     test_submap_join(width, height, intrinsics, renderer, mapping::frame::settings::adjustment_kind::relative);
