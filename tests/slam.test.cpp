@@ -1143,6 +1143,12 @@ static void test_loops_between_submaps(const int width, const int height, const 
     }
     REQUIRE(placed >= 3);
 
+    // So is the last frame before the first loss. A frame that is not a keyframe is posed again from what it saw when the map
+    // has been adjusted, and by then most of what this one saw is gone: landmarks made at the keyframe before it, which
+    // nothing saw again. The few that are left lie to one side of it, and fitting it to them slid it 0.4 away for nothing.
+    REQUIRE(system.reconstruction.frames.count(first_end - 1) != 0);
+    REQUIRE(misplaced_by(first_end - 1) < 0.2);
+
     // The frames between a relocalisation and the next keyframe are posed against the keyframe that was recalled, in the
     // map. The newest keyframe at the time is the one tracking was lost at, in the submap, which the loop has since moved
     // by several times the size of the circle: a frame carried by that keyframe went with it.

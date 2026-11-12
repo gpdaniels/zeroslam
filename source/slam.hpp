@@ -2156,6 +2156,24 @@ private:
     }
 
     static constexpr double refit_agreement_fraction = 0.9;
+    // A frame is fitted to the adjusted map while at least one in this many of the landmarks it was posed with is left.
+    static constexpr size_t refit_landmarks_left = 2;
+
+    // How many of the landmarks the frame's pose puts within the pixel bound of where the frame saw them.
+    static size_t agreeing_observations(const mapping::frame& frame, const std::vector<pose_correspondence>& correspondences) {
+        size_t agreeing = 0;
+        for (const pose_correspondence& match : correspondences) {
+            const math::matrix<double, 3, 1> mapped = (frame.rotation * match.location) + frame.translation;
+            double projected[2];
+            if ((mapped[2] <= 0.0) || !frame.camera.project(mapped.data(), &projected[0])) {
+                continue;
+            }
+            const double dx = projected[0] - match.pixel[0];
+            const double dy = projected[1] - match.pixel[1];
+            agreeing += (((dx * dx) + (dy * dy)) <= 5.991 * frame.measurement_sigma * frame.measurement_sigma) ? 1 : 0;
+        }
+        return agreeing;
+    }
 
     void refit_anchored_frames() {
         std::vector<int> frame_ids;
@@ -2167,6 +2185,7 @@ private:
         std::sort(frame_ids.begin(), frame_ids.end());
         size_t refitted = 0;
         size_t agreed_already = 0;
+        size_t depleted = 0;
         std::vector<pose_correspondence> correspondences;
         std::vector<unsigned char> agreed;
         for (const int frame_id : frame_ids) {
@@ -2190,17 +2209,15 @@ private:
             if (correspondences.size() < slam::pose_inliers_minimum) {
                 continue;
             }
-            size_t agreeing = 0;
-            for (const pose_correspondence& match : correspondences) {
-                const math::matrix<double, 3, 1> mapped = (frame.rotation * match.location) + frame.translation;
-                double projected[2];
-                if ((mapped[2] <= 0.0) || !frame.camera.project(mapped.data(), &projected[0])) {
-                    continue;
-                }
-                const double dx = projected[0] - match.pixel[0];
-                const double dy = projected[1] - match.pixel[1];
-                agreeing += (((dx * dx) + (dy * dy)) <= 5.991 * frame.measurement_sigma * frame.measurement_sigma) ? 1 : 0;
+            // A frame that has lost most of the landmarks it was posed with stays where its keyframe carries it. The last
+            // frame before tracking is lost is one: most of what it saw was made at the keyframe before it and culled when
+            // nothing saw it again, and what is left lies to one side of the view, where a fit slides the frame a long way
+            // for an observation more or less.
+            if ((slam::refit_landmarks_left * correspondences.size()) < anchor.observations.size()) {
+                ++depleted;
+                continue;
             }
+            const size_t agreeing = slam::agreeing_observations(frame, correspondences);
             if (static_cast<double>(agreeing) >= slam::refit_agreement_fraction * static_cast<double>(correspondences.size())) {
                 ++agreed_already;
                 continue;
@@ -2214,7 +2231,7 @@ private:
             anchor.frame_from_keyframe = frame_pose * keyframe_pose.inverse();
             ++refitted;
         }
-        core::logger::log(core::logger::level::info, "Refitted %zu of %zu anchored frames to the adjusted map, %zu already agreed with it.", refitted, frame_ids.size(), agreed_already);
+        core::logger::log(core::logger::level::info, "Refitted %zu of %zu anchored frames to the adjusted map, %zu already agreed with it, %zu have lost most of their landmarks.", refitted, frame_ids.size(), agreed_already, depleted);
     }
 
     void reanchor_corrected() {
