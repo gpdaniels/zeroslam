@@ -1022,22 +1022,29 @@ static void test_relocalisation_into_an_older_map(const int width, const int hei
     REQUIRE(of_back == 0);
 }
 
-// A loop can meet a submap that stands apart from either side. The camera maps a third of a circle, loses the scene, maps
-// another third as a submap, and loses the scene again. Either it then starts a second submap that runs round into the first
-// one, a loop between two submaps of which neither is in the map, and on into the map; or it relocalises in the map and runs
-// round into the submap, a loop from the map into a submap. Both loops used to be dropped: only the submap of the newest
-// keyframe could be joined, and only to the map, so the first submap was left where it started, far from where it is.
+// A loop can meet a submap that stands apart from either side. The camera maps an arc of a circle, loses the scene, maps
+// another arc as a submap, and loses the scene again. Either it then starts a second submap between the two that runs round
+// into the first one, a loop between two submaps of which neither is in the map, and on into the map; or it relocalises in
+// the map and runs round into the submap, a loop from the map into a submap. Both loops used to be dropped: only the submap
+// of the newest keyframe could be joined, and only to the map, so the first submap was left where it started, far from where
+// it is. The camera looks outward, at the walls, so that the arcs share no view and what happens after a loss does not hang
+// on whether a view half seen before is recognised, and it passes above the two cubes that stand on the circle: inside one
+// nothing is tracked, and where the keyframes after it land is a matter of the last bit of the arithmetic.
 static void test_loops_between_submaps(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& room, const bool return_to_the_map) {
     constexpr static const int lost_frames = 60;
+    constexpr static const double pi = 3.14159265358979323846;
+    constexpr static const double radius = 3.0;
+    constexpr static const double above_the_cubes = -1.5;
     const auto circle = [](const int step) {
-        const double angle = 2.0 * 3.14159265358979323846 * static_cast<double>(step) / 72.0;
-        const math::so3<double> rotation = math::so3<double>::rotation(0, angle, 0);
-        const math::matrix<double, 3, 1> centre = { { 3.0 * std::sin(angle), 0.0, 6.0 - (3.0 * std::cos(angle)) } };
+        const double angle = 2.0 * pi * static_cast<double>(step) / 72.0;
+        const math::so3<double> rotation = math::so3<double>::rotation(0, angle + pi, 0);
+        const math::matrix<double, 3, 1> centre = { { radius * std::sin(angle), above_the_cubes, 6.0 - (radius * std::cos(angle)) } };
         return math::se3<double>(rotation, -(rotation * centre));
     };
     const auto approach = [](const int step) {
-        const math::matrix<double, 3, 1> centre = { { (step - 8) * 0.25, 0.0, 3.0 } };
-        return math::se3<double>(math::so3<double>::identity(), -centre);
+        const math::so3<double> rotation = math::so3<double>::rotation(0, pi, 0);
+        const math::matrix<double, 3, 1> centre = { { (step - 8) * 0.25, above_the_cubes, 6.0 - radius } };
+        return math::se3<double>(rotation, -(rotation * centre));
     };
     const std::vector<unsigned char> black(static_cast<size_t>(width) * static_cast<size_t>(height), 0);
     slam system;
@@ -1060,13 +1067,13 @@ static void test_loops_between_submaps(const int width, const int height, const 
     for (int step = 0; step < 8; step++) {
         see(approach(step));
     }
-    for (int step = 0; step <= 18; step++) {
+    for (int step = 0; step <= 12; step++) {
         see(circle(step));
     }
     const int first_end = next_id;
     lose();
     const int second_begin = next_id;
-    for (int step = 36; step <= 58; step++) {
+    for (int step = 38; step <= 58; step++) {
         see(circle(step));
     }
     const int second_end = next_id;
@@ -1077,12 +1084,12 @@ static void test_loops_between_submaps(const int width, const int height, const 
         for (int step = 0; step < 8; step++) {
             see(approach(step));
         }
-        for (int step = 0; step <= 62; step++) {
+        for (int step = 0; step <= 60; step++) {
             see(circle(step));
         }
     }
     else {
-        for (int step = 12; step <= 90; step++) {
+        for (int step = 25; step <= 80; step++) {
             see(circle(step));
         }
     }
