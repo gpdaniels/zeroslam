@@ -4354,10 +4354,19 @@ public:
                 this->loop_closure_.refresh(pose_of, location_of);
             }
             const mapping::loop_closure::result loop = this->loop_closure_.detect(frame_current.id, pose, frame_current.camera, this->covisibility_, records.data(), records.size(), this->submap_of(frame_current.id), this->map_component(frame_current.id) != 0);
-            if (loop.found) {
-                this->close_loop(frame_current.id, loop, records);
+            if (loop.found && this->close_loop(frame_current.id, loop, records)) {
+                // The loop has moved the keyframe and the landmarks it sees, and the detector holds them as they are now: held
+                // as they were found, the next loop against this keyframe would measure the correction a second time. While
+                // the held keyframes are refreshed before each detection that is put right there, a keyframe late.
+                for (mapping::loop_closure::record& record : records) {
+                    const std::unordered_map<int, mapping::point>::const_iterator landmark = this->reconstruction.landmarks.find(record.landmark_id);
+                    if ((landmark != this->reconstruction.landmarks.end()) && !landmark->second.at_infinity()) {
+                        record.location = landmark->second.location;
+                    }
+                }
             }
-            this->loop_closure_.add_keyframe(frame_current.id, pose, frame_current.camera, records.data(), records.size(), this->submap_of(frame_current.id));
+            const math::se3<double> held_pose(frame_current.rotation, frame_current.translation);
+            this->loop_closure_.add_keyframe(frame_current.id, held_pose, frame_current.camera, records.data(), records.size(), this->submap_of(frame_current.id));
         }
         // The voxel map is part of the map whichever local map the tracking draws on (the api exports it), and costs one
         // insert per landmark.
