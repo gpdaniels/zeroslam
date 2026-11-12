@@ -312,5 +312,62 @@ int main(int argc, char* argv[]) {
         REQUIRE(remaining_observations == good_observations);
     }
 
+    {
+        // Each frame is adjusted with its own camera, as each is given one when it is processed. The adjustment took the camera
+        // of whichever frame came first in its table for every observation, so with two cameras in a map the observations of
+        // one of them were some eighty pixels from where its landmarks project.
+        const double narrow_parameters[sensor::model::parameter_count] = { 517.3, 516.5, 318.6, 255.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        const double wide_parameters[sensor::model::parameter_count] = { 380.0, 381.0, 322.0, 238.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        const sensor::model narrow(&narrow_parameters[0], sensor::model::parameter_count);
+        const sensor::model wide(&wide_parameters[0], sensor::model::parameter_count);
+        constexpr static const int frame_count = 6;
+        constexpr static const int landmark_count = 60;
+        mapping::map m;
+        for (int frame_id = 0; frame_id < frame_count; ++frame_id) {
+            mapping::frame f;
+            f.id = frame_id;
+            f.camera = ((frame_id % 2) == 0) ? narrow : wide;
+            f.translation = math::matrix<double, 3, 1>({ -0.2 * frame_id, 0.0, 0.0 });
+            m.add_frame(f);
+        }
+        unsigned int state = 54321u;
+        const auto uniform = [&state]() {
+            state = (state * 1664525u) + 1013904223u;
+            return static_cast<double>(state >> 8) / static_cast<double>(1u << 24);
+        };
+        size_t observations = 0;
+        for (int landmark_id = 0; landmark_id < landmark_count; ++landmark_id) {
+            const math::matrix<double, 3, 1> truth({ -1.0 + (3.0 * uniform()), -0.8 + (1.6 * uniform()), 4.0 + (4.0 * uniform()) });
+            const mapping::point landmark(landmark_id, truth + math::matrix<double, 3, 1>({ 0.02 * (uniform() - 0.5), 0.02 * (uniform() - 0.5), 0.1 * (uniform() - 0.5) }), math::matrix<double, 3, 1>::zero());
+            m.add_landmark(landmark);
+            size_t seen_by = 0;
+            for (int frame_id = 0; frame_id < frame_count; ++frame_id) {
+                const mapping::frame& f = m.frames.at(frame_id);
+                const math::matrix<double, 3, 1> in_camera = (f.rotation * truth) + f.translation;
+                double pixel[2] = {};
+                if (f.camera.project(in_camera.data(), &pixel[0]) && (pixel[0] > 0.0) && (pixel[0] < 640.0) && (pixel[1] > 0.0) && (pixel[1] < 480.0)) {
+                    m.add_observation(frame_id, landmark, pixel[0], pixel[1]);
+                    ++seen_by;
+                }
+            }
+            REQUIRE(seen_by >= 4);
+            observations += seen_by;
+        }
+
+        m.optimise(0, false, 20);
+
+        // Every observation is still there and fits to a hundredth of a pixel through the camera of its own frame.
+        size_t remaining_observations = 0;
+        for (const auto& [landmark_id, landmark_observations] : m.observations) {
+            for (const mapping::map::observation& obs : landmark_observations) {
+                math::matrix<double, 2, 1> projected;
+                REQUIRE(mapping::map::project_landmark(m.frames.at(obs.frame_id), m.landmarks.at(landmark_id), projected));
+                REQUIRE((projected - obs.point).get_length_squared() < 1.0e-4);
+                ++remaining_observations;
+            }
+        }
+        REQUIRE(remaining_observations == observations);
+    }
+
     return EXIT_SUCCESS;
 }

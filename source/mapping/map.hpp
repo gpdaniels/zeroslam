@@ -393,10 +393,6 @@ namespace mapping {
             std::unordered_map<int, optimisation::vertex*> camera_vertexes;
             std::unordered_map<int, optimisation::vertex*> landmark_vertexes;
             std::unordered_map<int, optimisation::vertex*> line_vertexes;
-            // Get camera parameters.
-            double camera_parameters[sensor::model::parameter_count];
-            this->frames.begin()->second.camera.get_parameters(camera_parameters, sensor::model::parameter_count);
-            const sensor::model camera_model(camera_parameters, sensor::model::parameter_count);
             // Setup ba.
             const optimisation::loss lossfunction(optimisation::losses::huber(math::sqrt(5.991)));
             optimisation::factor_graph ba;
@@ -548,7 +544,7 @@ namespace mapping {
                     if ((local_window == 0) && (frame_id < (this->next_frame_id - 1 - (2 * map::repose_recent_frames)))) {
                         continue;
                     }
-                    this->repose_frame(frame_id, observations_by_frame.at(frame_id), camera_model);
+                    this->repose_frame(frame_id, observations_by_frame.at(frame_id), this->frames.at(frame_id).camera);
                 }
             }
 
@@ -659,7 +655,7 @@ namespace mapping {
                         non_fixed_landmarks += (fix_landmarks == false);
                     }
                     const double sigma = map::observation_sigma(this->frames.at(frame_id), obs);
-                    optimisation::edge m = map::make_point_edge(camera_model, landmark_record, obs, lossfunction, sigma);
+                    optimisation::edge m = map::make_point_edge(this->frames.at(frame_id).camera, landmark_record, obs, lossfunction, sigma);
                     m.add_vertex(camera_vertexes[frame_id]);
                     m.add_vertex(landmark_vertexes[landmark_id]);
                     if (fix_landmarks && (landmark_record.uncertainty == mapping::point::uncertainty_kind::unbounded)) {
@@ -714,7 +710,7 @@ namespace mapping {
                     if (!map::line_observation_usable(landmark_record.plucker_line.transformed(observing_frame.rotation, observing_frame.translation), (observing_frame.rotation * landmark_record.locations[0]) + observing_frame.translation, (observing_frame.rotation * landmark_record.locations[1]) + observing_frame.translation, this->line_ray_angle_degrees)) {
                         continue;
                     }
-                    optimisation::edges::line_reprojection factor{ sensor::camera::model<double>(camera_model) };
+                    optimisation::edges::line_reprojection factor{ sensor::camera::model<double>(observing_frame.camera) };
                     if (!factor.set_measured_segment(obs.x1, obs.y1, obs.x2, obs.y2)) {
                         continue;
                     }
