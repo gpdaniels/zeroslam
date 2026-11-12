@@ -742,7 +742,10 @@ private:
             }
         }
 
-        if (graph.solve(50, true) == 0) {
+        // The solve reports the steps it took: none when it fails, and none when there is nothing to correct, the two keyframes
+        // being where the loop puts them already. The error the graph starts from tells the one from the other.
+        const double error_before = graph.get_current_chi();
+        if ((graph.solve(50, true) == 0) && !(error_before <= slam::loop_consistent_error)) {
             core::logger::log(core::logger::level::warn, "Loop %d -> %d not closed, the pose graph did not converge.", keyframe_id, loop.keyframe_id);
             return false;
         }
@@ -2315,6 +2318,8 @@ private:
     static constexpr bool refresh_loop_records = true;
     // How far beyond a loop's own scale the pose graph may rescale a keyframe before the loop is refused.
     static constexpr double loop_rescale_margin = 1.5;
+    // The error of a loop's pose graph below which the loop has nothing to correct.
+    static constexpr double loop_consistent_error = 1.0e-12;
 
     // The active point tracks that own a landmark still in the map.
     size_t landmark_track_count() {
