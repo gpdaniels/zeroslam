@@ -1604,7 +1604,7 @@ private:
                 }
                 const double lhs_point[2] = { static_cast<double>(t->x), static_cast<double>(t->y) };
                 double lhs_ray[3];
-                if (!frame_current.camera.unproject(&lhs_point[0], &lhs_ray[0])) {
+                if (!frame_current.camera.unproject(&lhs_point[0], &lhs_ray[0]) || !(lhs_ray[2] > 0.0)) {
                     continue;
                 }
                 estimation::correspondence_2d_3d<double> corr;
@@ -3726,12 +3726,12 @@ public:
                     }
                     const double lhs_point[2] = { static_cast<double>(t->x), static_cast<double>(t->y) };
                     double lhs_ray[3];
-                    if (!frame_current.camera.unproject(&lhs_point[0], &lhs_ray[0])) {
+                    if (!frame_current.camera.unproject(&lhs_point[0], &lhs_ray[0]) || !(lhs_ray[2] > 0.0)) {
                         continue;
                     }
                     const double rhs_point[2] = { static_cast<double>(anchor_observation->x), static_cast<double>(anchor_observation->y) };
                     double rhs_ray[3];
-                    if (!frame_anchor.camera.unproject(&rhs_point[0], &rhs_ray[0])) {
+                    if (!frame_anchor.camera.unproject(&rhs_point[0], &rhs_ray[0]) || !(rhs_ray[2] > 0.0)) {
                         continue;
                     }
                     init_correspondences.push_back({ { { lhs_ray[0] / lhs_ray[2], lhs_ray[1] / lhs_ray[2] } }, { { rhs_ray[0] / rhs_ray[2], rhs_ray[1] / rhs_ray[2] } } });
