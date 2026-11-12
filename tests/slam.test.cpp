@@ -1396,6 +1396,79 @@ static void test_keyframe_culling(const int width, const int height, const math:
     REQUIRE(landmarks_behind >= 500);
 }
 
+// The final adjustment moves landmarks and takes observations and landmarks out of the map, and what is derived from the map
+// follows it: the voxel map and the covisibility, which are read through the api as the map is. The adjustment of a rendered
+// scene finds nothing to take out, so some of the newest keyframe's observations are put 60 pixels out for it first.
+static void test_state_after_finalise(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {
+    slam system;
+    for (int i = 0; i < 16; i++) {
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
+        renderer.render_frame({ math::so3<double>::rotation(0, 0, 0), { { i * 0.3, 0, 0 } } }, intrinsics, frame);
+        system.process_frame(intrinsics, frame);
+    }
+    REQUIRE(system.state() == slam::tracking_state::tracking);
+    int newest_keyframe_id = -1;
+    for (const int keyframe_id : system.keyframe_ids()) {
+        newest_keyframe_id = std::max(newest_keyframe_id, keyframe_id);
+    }
+    size_t spoiled = 0;
+    for (auto& [landmark_id, landmark_observations] : system.reconstruction.observations) {
+        if ((landmark_id % 10) != 0) {
+            continue;
+        }
+        for (mapping::map::observation& observation : landmark_observations) {
+            if (observation.frame_id == newest_keyframe_id) {
+                observation.point[0] += 60.0;
+                ++spoiled;
+            }
+        }
+    }
+    REQUIRE(spoiled >= 20);
+    const size_t landmarks_before = system.reconstruction.landmarks.size();
+    system.finalise();
+    REQUIRE(system.reconstruction.landmarks.size() < landmarks_before);
+
+    // Every landmark the voxel map holds is in the map, and in the voxel that holds it.
+    size_t held = 0;
+    for (const auto& [key, voxel] : system.voxels().occupied()) {
+        for (const int landmark_id : voxel.ids) {
+            const std::unordered_map<int, mapping::point>::const_iterator landmark = system.reconstruction.landmarks.find(landmark_id);
+            REQUIRE(landmark != system.reconstruction.landmarks.end());
+            long long key_now = 0;
+            int x = 0;
+            int y = 0;
+            int z = 0;
+            REQUIRE(system.voxels().key_of(landmark->second.location, key_now, x, y, z));
+            REQUIRE(key_now == key);
+            ++held;
+        }
+    }
+    REQUIRE(held >= 100);
+
+    // The covisibility is what the observations left in the map give.
+    mapping::covisibility counted;
+    counted.begin_update();
+    std::vector<int> observing_frames;
+    for (const auto& [landmark_id, landmark_observations] : system.reconstruction.observations) {
+        observing_frames.clear();
+        for (const mapping::map::observation& observation : landmark_observations) {
+            observing_frames.push_back(observation.frame_id);
+        }
+        counted.update(landmark_id, observing_frames.data(), observing_frames.size());
+    }
+    counted.end_update();
+    const auto sorted_edges = [](const mapping::covisibility& graph) {
+        std::vector<std::pair<std::pair<int, int>, int>> edges;
+        for (const mapping::covisibility::edge& edge : graph.edges()) {
+            edges.push_back({ { std::min(edge.frame_a, edge.frame_b), std::max(edge.frame_a, edge.frame_b) }, edge.weight });
+        }
+        std::sort(edges.begin(), edges.end());
+        return edges;
+    };
+    REQUIRE(!sorted_edges(counted).empty());
+    REQUIRE(sorted_edges(system.covisibility()) == sorted_edges(counted));
+}
+
 static void test_map_reacquisition(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {
     std::vector<math::se3<double>> trajectory;
     for (int sweep = 0; sweep < 3; sweep++) {
@@ -1541,6 +1614,7 @@ int main(int argc, char* argv[]) {
 
     test_keyframe_culling(width, height, intrinsics, renderer);
     test_map_reacquisition(width, height, intrinsics, renderer);
+    test_state_after_finalise(width, height, intrinsics, renderer);
     world room(width, height, true);
     test_loop_closure(width, height, intrinsics, room);
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::match);

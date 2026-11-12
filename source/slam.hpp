@@ -2283,6 +2283,9 @@ private:
     static constexpr double local_map_relink_distance = 2.0;
     static constexpr double local_map_recovery_radius = 20.0;
     std::vector<int> local_landmark_ids_;
+    // The keyframe the local map was last built around, and the voxel map with it: the newest, or the one a relocalisation
+    // recalled.
+    int local_map_keyframe_id_ = -1;
 
     // The voxel map of the current map component's landmarks, rebuilt at the end of each keyframe (the only time landmarks
     // are added, moved or removed), with voxels a fraction of the newest keyframe's median scene depth so they keep their
@@ -2292,6 +2295,7 @@ private:
     std::vector<int> voxel_far_ids_;
     double voxel_max_distance_ = 0.0;
     bool voxel_map_valid_ = false;
+    int voxel_keyframe_id_ = -1;
     std::vector<math::matrix<double, 3, 1>> voxel_rays_;
     double voxel_ray_parameters_[sensor::model::parameter_count] = {};
     size_t voxel_ray_columns_ = 0;
@@ -2355,7 +2359,9 @@ private:
     }
 
     // Rebuilds the voxel map from the landmarks of the keyframe's map component, its scale set by the depths of the landmarks
-    // the keyframe observes.
+    // the keyframe observes. With too few of those to set a scale it keeps the scale it had, if what it held was of the same
+    // component, and is left empty if not: another part of the map has a scale of its own, and its landmarks are not this
+    // keyframe's to be offered.
     void rebuild_voxel_map(const mapping::frame& keyframe) {
         const size_t component = this->map_component(keyframe.id);
         std::vector<const std::pair<const int, mapping::point>*> members;
@@ -2383,14 +2389,21 @@ private:
                 break;
             }
         }
-        if (depths.size() < slam::voxel_depth_minimum) {
-            // Too few depths to set the scale: keep the voxel map as it is, positions and all, until the next keyframe.
+        if (depths.size() >= slam::voxel_depth_minimum) {
+            std::nth_element(depths.begin(), depths.begin() + static_cast<std::ptrdiff_t>(depths.size() / 2), depths.end());
+            const double median_depth = depths[depths.size() / 2];
+            this->voxel_map_.clear(slam::voxel_depth_fraction * median_depth);
+            this->voxel_max_distance_ = slam::voxel_range_depths * median_depth;
+        }
+        else if (this->voxel_map_valid_ && (this->map_component(this->voxel_keyframe_id_) == component)) {
+            this->voxel_map_.clear(this->voxel_map_.voxel_size());
+        }
+        else {
+            this->voxel_map_.clear(this->voxel_map_.voxel_size());
+            this->voxel_far_ids_.clear();
+            this->voxel_map_valid_ = false;
             return;
         }
-        std::nth_element(depths.begin(), depths.begin() + static_cast<std::ptrdiff_t>(depths.size() / 2), depths.end());
-        const double median_depth = depths[depths.size() / 2];
-        this->voxel_map_.clear(slam::voxel_depth_fraction * median_depth);
-        this->voxel_max_distance_ = slam::voxel_range_depths * median_depth;
         this->voxel_far_ids_.clear();
         const math::matrix<double, 3, 1> centre = -(math::transpose(keyframe.rotation) * keyframe.translation);
         for (const std::pair<const int, mapping::point>* const member : members) {
@@ -2401,6 +2414,7 @@ private:
         }
         std::sort(this->voxel_far_ids_.begin(), this->voxel_far_ids_.end());
         this->voxel_map_valid_ = true;
+        this->voxel_keyframe_id_ = keyframe.id;
         core::logger::log(core::logger::level::info, "Voxel map (keyframe %d): %zu landmarks in %zu voxels of %.4f map units, %zu far, rays to %.4f.", keyframe.id, this->voxel_map_.point_count(), this->voxel_map_.voxel_count(), this->voxel_map_.voxel_size(), this->voxel_far_ids_.size(), this->voxel_max_distance_);
     }
 
@@ -2437,6 +2451,16 @@ private:
         merged.reserve(this->local_landmark_ids_.size() + voxels.size());
         std::set_union(this->local_landmark_ids_.begin(), this->local_landmark_ids_.end(), voxels.begin(), voxels.end(), std::back_inserter(merged));
         return merged;
+    }
+
+    // Builds the local map and the voxel map again around a keyframe, if it is still one.
+    void rebuild_maps_around(const int keyframe_id) {
+        const std::unordered_map<int, mapping::frame>::const_iterator keyframe = this->reconstruction.frames.find(keyframe_id);
+        if ((keyframe == this->reconstruction.frames.end()) || (this->keyframe_ids_.count(keyframe_id) == 0)) {
+            return;
+        }
+        this->rebuild_local_map(keyframe_id);
+        this->rebuild_voxel_map(keyframe->second);
     }
 
     static constexpr size_t keyframe_cull_other_observers = 3;
@@ -2697,7 +2721,22 @@ private:
         }
     }
 
+    // Counts again, from the observations in the map, the landmarks each pair of keyframes shares.
+    void rebuild_covisibility() {
+        this->covisibility_.begin_update();
+        std::vector<int> observing_frames;
+        for (const auto& [landmark_id, landmark_observations] : this->reconstruction.observations) {
+            observing_frames.clear();
+            for (const mapping::map::observation& observation : landmark_observations) {
+                observing_frames.push_back(observation.frame_id);
+            }
+            this->covisibility_.update(landmark_id, observing_frames.data(), observing_frames.size());
+        }
+        this->covisibility_.end_update();
+    }
+
     void rebuild_local_map(const int keyframe_id) {
+        this->local_map_keyframe_id_ = keyframe_id;
         std::unordered_set<int> local_keyframe_ids;
         local_keyframe_ids.insert(keyframe_id);
         for (const int neighbour_id : this->covisibility_.neighbours(keyframe_id, slam::local_map_covisibility_minimum)) {
@@ -3435,6 +3474,11 @@ public:
         this->reanchor_corrected();
         this->update_anchored_frames();
         this->refit_anchored_frames();
+        // The adjustment has moved the landmarks and taken observations and landmarks out of the map: what is derived from
+        // them follows, the covisibility and the voxel map being read through the api as the map itself is.
+        this->rebuild_covisibility();
+        const bool held = (this->keyframe_ids_.count(this->local_map_keyframe_id_) != 0) && (this->reconstruction.frames.count(this->local_map_keyframe_id_) != 0);
+        this->rebuild_maps_around(held ? this->local_map_keyframe_id_ : this->last_keyframe_id_);
     }
 
     void process_frame(const math::matrix<double, 3, 3>& intrinsics, const image::image& image_grey) {
@@ -3872,6 +3916,8 @@ public:
                     this->tracking_submap_ = this->probation_origin_submap_;
                     this->relocalised_keyframe_id_ = -1;
                     this->reckoning_ = this->probation_origin_reckoning_;
+                    // The local map and the voxel map were built around the keyframe that was recalled.
+                    this->rebuild_maps_around(this->last_keyframe_id_);
                     this->reconstruction.frames.erase(frame_current.id);
                     // The probation frames are gone, so the last tracked frame is the one before the relocalisation again.
                     if (this->reconstruction.frames.count(this->probation_origin_id_) != 0) {
@@ -4277,16 +4323,7 @@ public:
                 record.pixel_y = t->y;
                 records.push_back(record);
             }
-            this->covisibility_.begin_update();
-            std::vector<int> observing_frames;
-            for (const auto& [landmark_id, landmark_observations] : this->reconstruction.observations) {
-                observing_frames.clear();
-                for (const mapping::map::observation& observation : landmark_observations) {
-                    observing_frames.push_back(observation.frame_id);
-                }
-                this->covisibility_.update(landmark_id, observing_frames.data(), observing_frames.size());
-            }
-            this->covisibility_.end_update();
+            this->rebuild_covisibility();
             this->rebuild_local_map(frame_current.id);
             const math::se3<double> pose(frame_current.rotation, frame_current.translation);
             if (slam::refresh_loop_records) {
