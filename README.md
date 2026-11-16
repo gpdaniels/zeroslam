@@ -80,6 +80,7 @@ The examples below use the launcher, `./runtime/Release/zeroslam-process ...` wo
 | `capture-oakd` | Record a Luxonis OAK-D camera (stereo, depth and imu) into a scene. | git and network access at configure time: it fetches depthai-core and builds its vcpkg dependencies |
 | `capture-kinect`, `capture-webcam` | Placeholders, not implemented yet. | |
 | `api-c`, `api-cpp`, `api-python` | Demonstrations of the C, C++ and python APIs on a rendered scene, registered as `tool_api_*` tests. | python3 for `api-python` |
+| `android` | Run the SLAM system live on an android phone's main camera, see "Running on Android". On a desktop it builds the test of the app's camera model and session on a rendered scene, registered as the `tool_android` test. | the android ndk to build, and the sdk's build tools and platform and a jdk to package |
 
 `tools/common` is a static library of code shared by the tools (mcap, lz4, cdr, json, trajectory metrics, files and paths) and is always built.
 
@@ -339,6 +340,46 @@ cd build
 cmake .. -DBUILD_ZEROSLAM_ZEROSLAM=ON -DBUILD_ZEROSLAM_GUI=ON
 cmake --build . --parallel 4
 ./runtime/Release/zeroslam gui ../datasets/tum-rgbd/fr1_xyz.mcap --play
+```
+
+## Running on Android ##
+
+The `android` tool is an app that runs the SLAM system on a phone's main camera and draws what it makes of it: the frame it processed last with the landmarks in front of it projected through its pose, coloured from near (warm) to far (cool), a view of the map and the keyframes' path that a drag turns and a pinch zooms, and the tracking state, the time a frame takes and the size of the map.
+It is a native activity with no java, running the camera through the ndk's camera2 api and drawing with OpenGL ES 2, and it is packaged with the sdk's build tools rather than gradle, so the tree holds no files but its C++ and its CMakeLists.txt (the manifest is written at configure time).
+It needs android 7 (api level 24) or later and a camera the ndk's camera2 api reaches (not the `LEGACY` ones).
+
+The camera's geometry is held still for the system: distortion correction, optical and video stabilisation are off, the crop is the whole sensor, the focus is fixed (one dioptre, about half a metre to a few metres sharp) and the frame rate range is the one that reaches 30 frames a second with the highest floor, which keeps the exposures short.
+The intrinsics are the device's calibration (`LENS_INTRINSIC_CALIBRATION` and `LENS_DISTORTION`) scaled and cropped from the sensor to the stream, from the camera's characteristics or else its first capture result, or estimated from the lens's focal length and the sensor's size when it reports neither; the panel shows which, with the intrinsics.
+The system takes the newest frame each time it is ready, so it falls behind the camera by a frame at most however long a frame takes, and the frames it skips are counted.
+The library runs on the phone's big cores (those within 70% of the fastest core's top frequency), as its parallel loops split their work evenly.
+
+The app starts the library from `flow=intensity` and `refiner=none` on a 320x240 stream, as a phone falls far behind the camera with the library's defaults at 640x480.
+On TUM RGB-D fr1_desk, on one core of an Intel Core Ultra 9 285K, the defaults at 640x480 took 498 ms a frame (2.3 cm of absolute trajectory error), the intensity flow 126 ms (4.0 cm), the intensity flow at 320x240 62 ms (2.9 cm), and the app's settings 38 ms (3.8 cm, 31 ms on four threads).
+
+`RESET` starts a new map, `SAVE` writes the trajectory of every posed frame (`trajectory.txt`, TUM format) and the landmarks (`map.ply`), and `RECORD` writes every frame the camera gives, with its calibration, as a scene in the directory form until it is pressed again.
+Each goes into a directory named by the time, in the app's files directory, `/sdcard/Android/data/com.gpdaniels.zeroslam/files/`.
+A recording collapses into a scene file to process, evaluate and view on a desktop like any other (it has no ground truth).
+That directory may also hold a `configuration.txt`, read when the app starts, of `key=value` lines: the library's settings (see "Configuration") on top of the app's, and the app's own `app_camera_width` (the stream closest to it in width with the sensor's aspect ratio, `320`), `app_camera_focus` (dioptres, or `auto` for continuous autofocus) and `app_threads` (the library's threads, `0` for the big cores).
+The library logs to the system log with the tag `zeroslam`.
+
+Install the sdk's command line tools (https://developer.android.com/studio#command-tools, unpacked as `cmdline-tools/latest` in the sdk's directory) and a jdk, then the ndk, build tools, platform and adb.
+Configure with the ndk's toolchain file, which finds the sdk from `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `ZEROSLAM_ANDROID_SDK` or the directory the ndk is in.
+The package `runtime/Release/zeroslam-android.apk` is signed with `~/.android/debug.keystore` when there is one (`ZEROSLAM_ANDROID_KEYSTORE` names another) and otherwise with a key made in the build directory, it targets api level 34 (`ZEROSLAM_ANDROID_TARGET_SDK`), and one build makes one abi (`ANDROID_ABI`, `arm64-v8a` for a phone, `x86_64` for an emulator).
+```
+export ANDROID_HOME=~/android-sdk
+$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.1.0" "ndk;30.0.16248370"
+cmake -S . -B build/android -G Ninja -DCMAKE_TOOLCHAIN_FILE=$ANDROID_HOME/ndk/30.0.16248370/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 -DZEROSLAM_CHECKS=OFF -DBUILD_ZEROSLAM_ANDROID=ON
+cmake --build build/android --parallel 4
+
+# Install and start the app on the phone connected over adb.
+cmake --build build/android --target zeroslam-android-run
+
+# Fetch the saved runs and recordings into a new directory, and collapse a recording into a scene with the desktop's tools.
+$ANDROID_HOME/platform-tools/adb pull /sdcard/Android/data/com.gpdaniels.zeroslam/files phone
+cmake -S . -B build/desktop -DBUILD_ZEROSLAM_ZEROSLAM=ON -DBUILD_ZEROSLAM_DATASET=ON -DBUILD_ZEROSLAM_PROCESS=ON
+cmake --build build/desktop --parallel 4
+./build/desktop/runtime/Release/zeroslam dataset collapse phone/[time]/scene phone.mcap
+./build/desktop/runtime/Release/zeroslam process phone.mcap
 ```
 
 ## Tracking accuracy over time ##

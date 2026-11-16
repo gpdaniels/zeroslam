@@ -88,6 +88,26 @@ jobs:
         cmake --build build/tools-${{ matrix.config }} --config ${{ matrix.config }} --parallel 4
         rm -rf build/tools-${{ matrix.config }}
 
+  android:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ['ubuntu-latest']
+        config: ['Debug', 'Release']
+    name: Build the android app on ${{ matrix.os }} in ${{ matrix.config }}
+    runs-on: ${{ matrix.os }}
+    steps:
+    - name: Checkout repository.
+      uses: actions/checkout@v7
+    - name: Build and package the android app in ${{ matrix.config }}.
+      shell: bash
+      run: |
+        # The runner has the android sdk (ANDROID_HOME) with its build tools and platforms, an ndk, and a jdk.
+        cmake -S. -Bbuild/android-${{ matrix.config }} -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DZEROSLAM_WERROR=ON -DZEROSLAM_CHECKS=OFF -DBUILD_ZEROSLAM_ANDROID=ON
+        cmake --build build/android-${{ matrix.config }} --config ${{ matrix.config }} --parallel 4
+        test -f build/android-${{ matrix.config }}/runtime/${{ matrix.config }}/zeroslam-android.apk
+        rm -rf build/android-${{ matrix.config }}
+
   sanitize:
     strategy:
       fail-fast: false
