@@ -30,6 +30,14 @@ SET(CMAKE_C_EXTENSIONS OFF)
 SET(CMAKE_POSITION_INDEPENDENT_CODE ON)
 SET(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 SET(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+IF(ANDROID)
+    # CMake links an interprocedural optimisation with gold when it cannot tell the ndk's version, as with the ndk's legacy
+    # toolchain file, but the ndk has had no gold since r22 and its own lld takes the thin lto objects as they are.
+    UNSET(CMAKE_C_LINK_OPTIONS_IPO)
+    UNSET(CMAKE_CXX_LINK_OPTIONS_IPO)
+    # Devices with 16 KiB pages load only libraries aligned to them, which the ndk makes by default from r28.
+    SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384")
+ENDIF()
 IF(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     SET(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build." FORCE)
     SET_PROPERTY(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "" "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
@@ -46,6 +54,12 @@ FOREACH(BUILD_TYPE ${CMAKE_CONFIGURATION_TYPES})
     SET(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${UPPER_BUILD_TYPE} "${CMAKE_BINARY_DIR}/archive/${BUILD_TYPE}")
     SET(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${UPPER_BUILD_TYPE} "${CMAKE_BINARY_DIR}/library/${BUILD_TYPE}")
 ENDFOREACH()
+
+# LIBRARIES
+# Found before the flags below are set, as its probes compile with them: the warnings fail them under ZEROSLAM_WERROR, and
+# android's libc has the threads but not the pthread_cancel the first probe looks for, so there the probe of -pthread decides.
+SET(THREADS_PREFER_PTHREAD_FLAG ON)
+FIND_PACKAGE(Threads REQUIRED)
 
 # FLAGS
 IF(
@@ -94,12 +108,17 @@ IF(
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-float-equal")
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unsafe-buffer-usage")
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-switch-default")
-        IF(("${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang") OR (NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 21.0.0))
+        # These two warnings came with clang 21, but the android ndk's clang 21.0.0 is a snapshot from before them, so the
+        # compiler is asked rather than its version.
+        INCLUDE(CheckCXXCompilerFlag)
+        CHECK_CXX_COMPILER_FLAG("-Wnrvo" ZEROSLAM_COMPILER_HAS_WNRVO)
+        IF(ZEROSLAM_COMPILER_HAS_WNRVO)
             SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-nrvo")
         ENDIF()
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-poison-system-directories")
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-thread-safety-negative")
-        IF(("${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang") OR (NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 21.0.0))
+        CHECK_CXX_COMPILER_FLAG("-Wms-bitfield-padding" ZEROSLAM_COMPILER_HAS_WMS_BITFIELD_PADDING)
+        IF(ZEROSLAM_COMPILER_HAS_WMS_BITFIELD_PADDING)
             SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-ms-bitfield-padding")
         ENDIF()
     ENDIF()
@@ -276,10 +295,6 @@ IF(ZEROSLAM_COVERAGE)
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ZEROSLAM_COVERAGE_FLAGS}")
     SET(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
 ENDIF()
-
-# LIBRARIES
-SET(THREADS_PREFER_PTHREAD_FLAG ON)
-FIND_PACKAGE(Threads REQUIRED)
 
 # MAIN LIBRARY
 FILE(GLOB_RECURSE SOURCE_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/source/*")

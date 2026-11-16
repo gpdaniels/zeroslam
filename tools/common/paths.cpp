@@ -330,7 +330,12 @@ namespace gtl {
         if (!user_information) {
             return false;
         }
-        home_directory = std::string(user_information->pw_dir);
+        // Android's libc declares the directory nullable, and it may be.
+        const char* const directory = user_information->pw_dir;
+        if (!directory) {
+            return false;
+        }
+        home_directory = std::string(directory);
         return true;
 
 #elif defined(_WIN32)
@@ -352,7 +357,12 @@ namespace gtl {
         if (!user_information) {
             return false;
         }
-        home_directory = std::string(user_information->pw_dir);
+        // Android's libc declares the directory nullable, and it may be.
+        const char* const directory = user_information->pw_dir;
+        if (!directory) {
+            return false;
+        }
+        home_directory = std::string(directory);
         return true;
 
 #else
