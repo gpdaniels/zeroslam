@@ -26,6 +26,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -356,14 +357,10 @@ namespace {
         p[10] = 1.0;
         bool calibrated = (information.k[0] > 0.0) && (information.k[4] > 0.0);
         calibrated = calibrated && (information.width == width) && (information.height == height);
-        if (information.distortion_model == "plumb_bob") {
-            calibrated = calibrated && (information.d.empty() || (information.d.size() == 4) || (information.d.size() == 5));
-        }
-        else if (information.distortion_model == "rational_polynomial") {
-            calibrated = calibrated && (information.d.size() == 8);
-        }
-        else {
-            calibrated = false;
+        // A camera model the library takes, named, with its coefficients (see dataset::camera_models).
+        calibrated = calibrated && !information.distortion_model.empty() && (dataset::find_camera_model(information.distortion_model, information.d.size()) != nullptr);
+        for (const double coefficient : information.d) {
+            calibrated = calibrated && std::isfinite(coefficient);
         }
         for (int i = 0; i < 9; ++i) {
             calibrated = calibrated && (information.k[i] == k[i]) && (information.r[i] == r[i]);

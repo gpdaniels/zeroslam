@@ -46,6 +46,11 @@ namespace {
         double width = 0.0;
         double height = 0.0;
         double intrinsics[4] = {};
+        // The scene's model, plumb_bob with no coefficients for the pinhole calibration, fisheye_624 with its twelve
+        // [k0 k1 k2 k3 k4 k5 p0 p1 s0 s1 s2 s3] for the aria (RAD_TAN_THIN_PRISM_FISHEYE) one.
+        const char* model = "plumb_bob";
+        double distortion[12] = {};
+        std::size_t distortion_count = 0;
         double translation[3] = {};
         double quaternion_xyzw[4] = { 0.0, 0.0, 0.0, 1.0 };
     };
@@ -79,6 +84,23 @@ namespace {
         camera.intrinsics[2] = camera.height - cy;
         camera.intrinsics[3] = cx;
         std::swap(camera.width, camera.height);
+        // The Fisheye624 distortion turns with the image: its radial terms do not change, and the tangential (p0, p1), the
+        // thin prism's r^2 terms (s0, s2) and its r^4 terms (s1, s3) each turn as a vector does, (a, b) to (-b, a).
+        if (camera.distortion_count == 12) {
+            double* const d = &camera.distortion[0];
+            const double p0 = d[6];
+            const double p1 = d[7];
+            const double s0 = d[8];
+            const double s1 = d[9];
+            const double s2 = d[10];
+            const double s3 = d[11];
+            d[6] = -p1;
+            d[7] = p0;
+            d[8] = -s2;
+            d[10] = s0;
+            d[9] = -s3;
+            d[11] = s1;
+        }
     }
 
     const gtl::json::value* find_member(const gtl::json::value& object, const char* key) {
@@ -134,13 +156,31 @@ namespace {
                 return false;
             }
             const gtl::json::value* model = find_member(*camera, "model");
-            if ((model == nullptr) || !model->is<gtl::json::value::string_type>() || (model->as<gtl::json::value::string_type>() != "PINHOLE")) {
-                error = "'" + path + "' " + camera_names[index] + " is not a 'PINHOLE' camera (use the pinhole calibration, not the aria one)";
+            const bool pinhole = (model != nullptr) && model->is<gtl::json::value::string_type>() && (model->as<gtl::json::value::string_type>() == "PINHOLE");
+            const bool fisheye = (model != nullptr) && model->is<gtl::json::value::string_type>() && (model->as<gtl::json::value::string_type>() == "RAD_TAN_THIN_PRISM_FISHEYE");
+            if (!pinhole && !fisheye) {
+                error = "'" + path + "' " + camera_names[index] + " is neither a 'PINHOLE' nor a 'RAD_TAN_THIN_PRISM_FISHEYE' camera";
                 return false;
             }
-            if (!read_numbers(find_member(*camera, "params"), &cameras[index]->intrinsics[0], 4)) {
+            if (pinhole && !read_numbers(find_member(*camera, "params"), &cameras[index]->intrinsics[0], 4)) {
                 error = "'" + path + "' " + camera_names[index] + " has no 4 element 'params'";
                 return false;
+            }
+            if (fisheye) {
+                // COLMAP's order, [fx fy cx cy k0 k1 k2 k3 k4 k5 p0 p1 s0 s1 s2 s3], the scene's fisheye_624.
+                double parameters[16] = {};
+                if (!read_numbers(find_member(*camera, "params"), &parameters[0], 16)) {
+                    error = "'" + path + "' " + camera_names[index] + " has no 16 element 'params'";
+                    return false;
+                }
+                for (std::size_t parameter = 0; parameter < 4; ++parameter) {
+                    cameras[index]->intrinsics[parameter] = parameters[parameter];
+                }
+                for (std::size_t parameter = 0; parameter < 12; ++parameter) {
+                    cameras[index]->distortion[parameter] = parameters[4 + parameter];
+                }
+                cameras[index]->model = "fisheye_624";
+                cameras[index]->distortion_count = 12;
             }
             const gtl::json::value* resolution = find_member(*camera, "resolution");
             const gtl::json::value* width = (resolution == nullptr) ? nullptr : find_member(*resolution, "width");
@@ -155,8 +195,9 @@ namespace {
                 error = "'" + path + "' " + camera_names[index] + " has no 'T_b_s' qvec and tvec";
                 return false;
             }
-            // No pixel_centre_principal_point shift: these intrinsics come out of colmap's image_undistorter, and colmap
-            // already puts the centre of pixel (0, 0) at (0.5, 0.5), which is this project's pixel-centre frame.
+            // No pixel_centre_principal_point shift: these intrinsics are colmap's (the pinhole ones out of its
+            // image_undistorter), and colmap already puts the centre of pixel (0, 0) at (0.5, 0.5), which is this
+            // project's pixel-centre frame.
         }
         const gtl::json::value* imu = find_member(root, "imu0");
         if ((imu == nullptr) || !read_body_from_sensor(*imu, imu_translation, imu_quaternion_xyzw)) {
@@ -233,12 +274,14 @@ namespace {
     }
 
     void print_usage(const char* argv0) {
-        std::printf("Usage %s [asl-dir] [pinhole.json] [output.mcap] [options...]\n", argv0);
+        std::printf("Usage %s [asl-dir] [calibration.json] [output.mcap] [options...]\n", argv0);
         std::printf("    asl-dir        - An already extracted LaMAria ASL folder (the 'aria/' directory holding\n");
         std::printf("                     cam0/, cam1/, and imu0/, or the directory containing it; unzip the\n");
         std::printf("                     'ASL (Pinhole)' download first; this tool does not read zips).\n");
-        std::printf("    pinhole.json   - The sequence's 'Pinhole calibration' download (not the aria one: the\n");
-        std::printf("                     ASL images are already undistorted to it).\n");
+        std::printf("    calibration.json - The calibration of the ASL images: the sequence's 'Pinhole calibration'\n");
+        std::printf("                     download for the 'ASL (Pinhole)' images, which are undistorted to it, or\n");
+        std::printf("                     the aria calibration (RAD_TAN_THIN_PRISM_FISHEYE, written as fisheye_624)\n");
+        std::printf("                     for an ASL folder of the cameras' own fisheye images.\n");
         std::printf("    output.mcap    - Where to write the packed scene; the directory form is written\n");
         std::printf("                     alongside it (output.mcap's path with the extension dropped),\n");
         std::printf("                     and left in place for inspection, exactly as 'dataset expand' does.\n");
@@ -314,7 +357,7 @@ int main(int argc, char* argv[]) {
 
     std::string error;
 
-    std::printf("Reading the pinhole calibration...\n");
+    std::printf("Reading the calibration...\n");
     camera_calibration cam0;
     camera_calibration cam1;
     double imu_translation[3] = {};
@@ -466,7 +509,7 @@ int main(int argc, char* argv[]) {
                 return EXIT_FAILURE;
             }
         }
-        if (!import::write_calibration_line(calibration_01, timestamp, translation_01, quaternion_01, "plumb_bob", cam0.intrinsics, nullptr, 0) || !import::write_calibration_line(calibration_02, timestamp, translation_02, quaternion_02, "plumb_bob", cam1.intrinsics, nullptr, 0)) {
+        if (!import::write_calibration_line(calibration_01, timestamp, translation_01, quaternion_01, cam0.model, cam0.intrinsics, &cam0.distortion[0], cam0.distortion_count) || !import::write_calibration_line(calibration_02, timestamp, translation_02, quaternion_02, cam1.model, cam1.intrinsics, &cam1.distortion[0], cam1.distortion_count)) {
             std::fprintf(stderr, "Failed to write the calibration.\n");
             return EXIT_FAILURE;
         }

@@ -87,6 +87,10 @@ namespace scene {
         double cy = 0.0;
         double camera_parameters[camera_parameter_count] = {};
         bool distortion_model_recognised = true;
+        // The library's camera model of the channel (a zeroslam_camera_model_enum value) and its parameters.
+        int camera_model = 0;
+        double camera_model_parameters[32] = {};
+        std::size_t camera_model_parameter_count = 0;
         double depth_scale = 1.0;
         bool selected_for_slam = false;
         extrinsic mounting;
@@ -393,12 +397,17 @@ namespace scene {
                 channel.cx = camera.cx;
                 channel.cy = camera.cy;
                 if (!camera.camera_infos_data.empty()) {
-                    channel.has_intrinsics = dataset::camera_info_to_parameters(
+                    // The focal lengths and principal point (with the radial tangential coefficients when it has them) draw
+                    // the camera, and its own model runs the system.
+                    dataset::camera_info_to_parameters(
                         camera.camera_infos_data.front(),
                         &channel.camera_parameters[0],
                         camera_parameter_count,
                         channel.distortion_model_recognised
                     );
+                    std::string model_error;
+                    channel.has_intrinsics = dataset::camera_info_to_model(camera.camera_infos_data.front(), channel.camera_model, &channel.camera_model_parameters[0], channel.camera_model_parameter_count, model_error);
+                    channel.distortion_model_recognised = channel.has_intrinsics;
                 }
                 const bool named_depth = dataset::is_valid_sensor_name(camera.camera_name, "depth");
                 const bool encoded_depth = (camera.encoding == "mono16") || (camera.encoding == "32FC1");

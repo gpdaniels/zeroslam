@@ -56,6 +56,79 @@ static void render_corridor(unsigned char* pixels, int width, int height, const 
     }
 }
 
+// The square root by Newton's method, so the demonstration needs no maths library.
+static double square_root(double value) {
+    if (value <= 0.0) {
+        return 0.0;
+    }
+    double root = (value > 1.0) ? value : 1.0;
+    for (int iteration = 0; iteration < 64; ++iteration) {
+        const double next = 0.5 * (root + (value / root));
+        if (next >= root) {
+            break;
+        }
+        root = next;
+    }
+    return root;
+}
+
+static double absolute(double value) {
+    return (value < 0.0) ? -value : value;
+}
+
+// The ray of a pixel through a double sphere camera [fx fy cx cy xi alpha] (Usenko, Demmel and Cremers), 0 outside its image.
+static int double_sphere_ray(const double* parameters, double u, double v, double* ray) {
+    const double mx = (u - parameters[2]) / parameters[0];
+    const double my = (v - parameters[3]) / parameters[1];
+    const double r2 = (mx * mx) + (my * my);
+    const double xi = parameters[4];
+    const double alpha = parameters[5];
+    const double discriminant = 1.0 - (((2.0 * alpha) - 1.0) * r2);
+    if (discriminant <= 0.0) {
+        return 0;
+    }
+    const double mz = (1.0 - (alpha * alpha * r2)) / ((alpha * square_root(discriminant)) + 1.0 - alpha);
+    const double sphere = (mz * mz) + ((1.0 - (xi * xi)) * r2);
+    if (sphere <= 0.0) {
+        return 0;
+    }
+    const double k = ((mz * xi) + square_root(sphere)) / ((mz * mz) + r2);
+    ray[0] = k * mx;
+    ray[1] = k * my;
+    ray[2] = (k * mz) - xi;
+    return 1;
+}
+
+// The corridor seen along any ray: the floor and the ceiling a unit below and above the camera, the end walls six units
+// ahead and behind, so a camera that sees past ninety degrees from its axis sees something there too.
+static void render_corridor_wide(unsigned char* pixels, int width, int height, const double* parameters, double camera_x) {
+    const double wall_depth = 6.0;
+    for (int row = 0; row < height; ++row) {
+        for (int column = 0; column < width; ++column) {
+            double ray[3];
+            unsigned char* pixel = &pixels[(row * width) + column];
+            if (!double_sphere_ray(parameters, (double)column + 0.5, (double)row + 0.5, ray)) {
+                *pixel = 0;
+                continue;
+            }
+            const double ray_y_magnitude = (ray[1] < 0.0) ? -ray[1] : ray[1];
+            const double ray_z_magnitude = (ray[2] < 0.0) ? -ray[2] : ray[2];
+            const double to_plane = (ray_y_magnitude > 0.0) ? (1.0 / ray_y_magnitude) : 1.0e9;
+            const double to_wall = (ray_z_magnitude > 0.0) ? (wall_depth / ray_z_magnitude) : 1.0e9;
+            const int wall = to_wall <= to_plane;
+            const double distance = wall ? to_wall : to_plane;
+            const unsigned long long int surface = wall ? ((ray[2] > 0.0) ? 1ull : 4ull) : ((ray[1] > 0.0) ? 2ull : 3ull);
+            const long long int cell_u = floor_to_integer(4.0 * (camera_x + (ray[0] * distance)));
+            const long long int cell_v = floor_to_integer(4.0 * (wall ? (ray[1] * distance) : (ray[2] * distance)));
+            unsigned long long int hash = ((unsigned long long int)cell_u * 73856093ull) ^ ((unsigned long long int)cell_v * 19349663ull) ^ (surface * 83492791ull);
+            hash ^= hash >> 13;
+            hash *= 0x5bd1e995ull;
+            hash ^= hash >> 15;
+            *pixel = (unsigned char)(40ull + (hash % 176ull));
+        }
+    }
+}
+
 static void print_pose(const char* label, const zeroslam_pose_struct* pose) {
     printf("%s: timestamp %lld, centre (%.3f, %.3f, %.3f), rotation (%.3f, %.3f, %.3f, %.3f)\n", label, pose->timestamp, (double)pose->pose[0], (double)pose->pose[1], (double)pose->pose[2], (double)pose->pose[3], (double)pose->pose[4], (double)pose->pose[5], (double)pose->pose[6]);
 }
@@ -223,6 +296,63 @@ int main(int argc, char* argv[]) {
     printf("destroy: %s\n", zeroslam_return_enum_to_string(result));
     REQUIRE(result == zeroslam_return_success);
     REQUIRE(system == NULL);
+
+    {
+        // Any camera model through zeroslam_sensor_parameters_camera_model_struct: a double sphere lens seeing past 90 degrees
+        // from its axis, moving along the same corridor.
+        result = zeroslam_create(&system);
+        REQUIRE(result == zeroslam_return_success);
+        zeroslam_sensor_parameters_camera_model_struct wide_camera;
+        memset(&wide_camera, 0, sizeof(wide_camera));
+        wide_camera.width = width;
+        wide_camera.height = height;
+        wide_camera.model = zeroslam_camera_model_double_sphere;
+        wide_camera.parameters_length = zeroslam_camera_model_parameter_count(zeroslam_camera_model_double_sphere);
+        const double wide_parameters[6] = { 110.0, 110.0, 160.0, 120.0, -0.2, 0.6 };
+        memcpy(wide_camera.parameters, wide_parameters, sizeof(wide_parameters));
+        zeroslam_sensor_rig_struct wide_rig;
+        memset(&wide_rig, 0, sizeof(wide_rig));
+        wide_rig.type = zeroslam_sensor_camera;
+        wide_rig.sensor_id = sensor_id;
+        wide_rig.parameters_length = (int)sizeof(wide_camera);
+        wide_rig.parameters_data = &wide_camera;
+        wide_camera.parameters_length = 5;
+        REQUIRE(zeroslam_set_sensor_rig(system, &wide_rig, 1) == zeroslam_return_failure_invalid_rig_sensor);
+        wide_camera.parameters_length = 6;
+        wide_camera.parameters[5] = 1.5;
+        REQUIRE(zeroslam_set_sensor_rig(system, &wide_rig, 1) == zeroslam_return_failure_invalid_rig_sensor);
+        wide_camera.parameters[5] = wide_parameters[5];
+        result = zeroslam_set_sensor_rig(system, &wide_rig, 1);
+        printf("set_sensor_rig: %s (%s camera, %d parameters)\n", zeroslam_return_enum_to_string(result), zeroslam_camera_model_enum_to_string(wide_camera.model), wide_camera.parameters_length);
+        REQUIRE(result == zeroslam_return_success);
+        unsigned char* wide_pixels = (unsigned char*)malloc((size_t)(width * height));
+        REQUIRE(wide_pixels != NULL);
+        for (int frame_index = 0; frame_index < frame_count; ++frame_index) {
+            render_corridor_wide(wide_pixels, width, height, wide_parameters, 0.05 * frame_index);
+            zeroslam_sensor_data_struct data;
+            memset(&data, 0, sizeof(data));
+            data.timestamp = 1000000000ll + (frame_interval * frame_index);
+            data.sensor_id = sensor_id;
+            data.measurement_length = width * height;
+            data.measurement_data = wide_pixels;
+            REQUIRE(zeroslam_set_sensor_data(system, &data, 1) == zeroslam_return_success);
+        }
+        free(wide_pixels);
+        zeroslam_pose_struct first;
+        zeroslam_pose_struct newest;
+        memset(&first, 0, sizeof(first));
+        memset(&newest, 0, sizeof(newest));
+        REQUIRE(zeroslam_get_pose_at_timestamp(system, &first, 1000000000ll) == zeroslam_return_success);
+        REQUIRE(zeroslam_get_pose(system, &newest) == zeroslam_return_success);
+        print_pose("double sphere newest pose", &newest);
+        // The camera slid along x without turning: the map's unit is unknown, but the motion is along its x axis.
+        const double moved = square_root((newest.pose[0] * newest.pose[0]) + (newest.pose[1] * newest.pose[1]) + (newest.pose[2] * newest.pose[2]));
+        REQUIRE(moved > 0.0);
+        REQUIRE(absolute(newest.pose[0]) > 0.95 * moved);
+        REQUIRE(absolute(newest.pose[6]) > 0.999);
+        result = zeroslam_destroy(&system);
+        REQUIRE(result == zeroslam_return_success);
+    }
 
     return EXIT_SUCCESS;
 }

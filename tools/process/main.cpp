@@ -141,7 +141,7 @@ inline bool save_trajectory_as_txt(const char* path, const std::vector<camera_po
 
 inline bool save_trajectory_and_map_as_ply(
     const char* path,
-    const zeroslam_sensor_parameters_camera_struct& camera,
+    const zeroslam_sensor_parameters_camera_model_struct& camera,
     const std::vector<zeroslam_point_struct>& landmarks,
     const std::vector<camera_pose>& poses
 ) {
@@ -244,11 +244,11 @@ inline bool save_trajectory_and_map_as_ply(
         // Write camera centre.
         write_vertex(output, static_cast<float>(pose.centre[0]), static_cast<float>(pose.centre[1]), static_cast<float>(pose.centre[2]), cam_r, shade, cam_b);
 
-        // Write frustum corners.
+        // Write frustum corners, through the focal lengths and principal point that start every camera model's parameters.
         for (int i = 0; i < 4; ++i) {
             const double corner[3] = {
-                frustum_scale * (image_corners[i][0] - camera.centre_x) / camera.focal_x,
-                frustum_scale * (image_corners[i][1] - camera.centre_y) / camera.focal_y,
+                frustum_scale * (image_corners[i][0] - camera.parameters[2]) / camera.parameters[0],
+                frustum_scale * (image_corners[i][1] - camera.parameters[3]) / camera.parameters[1],
                 frustum_scale
             };
             double world_corner[3];
@@ -423,7 +423,7 @@ int main(int argc, char* argv[]) {
     size_t frames = 0;
     std::vector<long long> timestamps;
     constexpr static const int sensor_id = 1;
-    zeroslam_sensor_parameters_camera_struct camera{};
+    zeroslam_sensor_parameters_camera_model_struct camera{};
     bool rig_set = false;
 
     std::vector<size_t> image_messages;
@@ -448,7 +448,7 @@ int main(int argc, char* argv[]) {
                 --skip_count;
                 continue;
             }
-            if ((camera.focal_x <= 0.0) || (camera.focal_y <= 0.0)) {
+            if (camera.parameters_length == 0) {
                 std::fprintf(stderr, "Image message %zu arrived before valid camera intrinsics.\n", frames);
                 return false;
             }
@@ -554,30 +554,32 @@ int main(int argc, char* argv[]) {
             mcap::message_type message;
             cdr::camera_info information;
             if (reader.read_message(message_number, message) && cdr::read_camera_info(message.data, message.length, information)) {
-                double parameters[12] = {};
-                bool distortion_model_recognised = true;
-                dataset::camera_info_to_parameters(information, &parameters[0], 12, distortion_model_recognised);
-                if (!distortion_model_recognised) {
-                    std::fprintf(stderr, "Unsupported distortion model '%s': proceeding as an undistorted pinhole.\n", information.distortion_model.c_str());
+                int model = 0;
+                double parameters[32] = {};
+                size_t parameters_length = 0;
+                std::string model_error;
+                if (!dataset::camera_info_to_model(information, model, &parameters[0], parameters_length, model_error)) {
+                    std::fprintf(stderr, "Unsupported camera info (%s).\n", model_error.c_str());
+                    return EXIT_FAILURE;
+                }
+                if (zeroslam_camera_model_parameter_count(static_cast<zeroslam_camera_model_enum>(model)) != static_cast<int>(parameters_length)) {
+                    std::fprintf(stderr, "The camera model '%s' does not match the library's.\n", information.distortion_model.c_str());
+                    return EXIT_FAILURE;
                 }
                 if (rig_set) {
-                    bool changed = false;
-                    changed |= (parameters[0] != camera.focal_x) || (parameters[1] != camera.focal_y);
-                    changed |= (parameters[2] != camera.centre_x) || (parameters[3] != camera.centre_y);
-                    for (size_t index = 0; index < 8; ++index) {
-                        changed |= (parameters[4 + index] != camera.distortion[index]);
+                    bool changed = (model != static_cast<int>(camera.model)) || (static_cast<int>(parameters_length) != camera.parameters_length);
+                    for (size_t index = 0; (index < parameters_length) && !changed; ++index) {
+                        changed |= (parameters[index] != camera.parameters[index]);
                     }
                     if (changed) {
                         log(2, "Camera intrinsics changed after frame %zu, the first intrinsics are kept.", frames);
                     }
                 }
                 else {
-                    camera.focal_x = parameters[0];
-                    camera.focal_y = parameters[1];
-                    camera.centre_x = parameters[2];
-                    camera.centre_y = parameters[3];
-                    for (size_t index = 0; index < 8; ++index) {
-                        camera.distortion[index] = parameters[4 + index];
+                    camera.model = static_cast<zeroslam_camera_model_enum>(model);
+                    camera.parameters_length = static_cast<int>(parameters_length);
+                    for (size_t index = 0; index < parameters_length; ++index) {
+                        camera.parameters[index] = parameters[index];
                     }
                 }
             }

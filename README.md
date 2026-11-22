@@ -90,7 +90,7 @@ The interface is the C API in `include/zeroslam/zeroslam.h`, wrapped for C++ by 
 The `tools/api-c`, `tools/api-cpp` and `tools/api-python` demonstrations walk through every call.
 
 1. `zeroslam_create` a system, and optionally `zeroslam_set_configuration` it (see "Configuration").
-2. `zeroslam_set_sensor_rig`, before any data, with exactly one `zeroslam_sensor_camera` entry (the system is monocular, and the other sensor types are rejected): a non-zero id and a `zeroslam_sensor_parameters_camera_struct` of the image size, the focal lengths, the principal point in the pixel-centre frame (see "Pixel coordinates"), and the distortion `[k1 k2 p1 p2 k3 k4 k5 k6]` (zeros for an undistorted pinhole).
+2. `zeroslam_set_sensor_rig`, before any data, with exactly one `zeroslam_sensor_camera` entry (the system is monocular, and the other sensor types are rejected): a non-zero id and either a `zeroslam_sensor_parameters_camera_struct` of the image size, the focal lengths, the principal point in the pixel-centre frame (see "Pixel coordinates"), and the distortion `[k1 k2 p1 p2 k3 k4 k5 k6]` (zeros for an undistorted pinhole), or a `zeroslam_sensor_parameters_camera_model_struct` of the image size, a `zeroslam_camera_model_enum` and that model's parameters (see "Camera models"). The entry's `parameters_length` is the size of the struct it points to, which tells the two apart.
 3. `zeroslam_set_sensor_data` with each frame: the camera's id, a nanosecond timestamp that increases strictly from frame to frame, and `width * height` bytes of row major 8 bit greyscale pixels. A batch is validated whole before any of it is processed.
 4. `zeroslam_get_pose` (the newest posed frame) or `zeroslam_get_pose_at_timestamp` (the frame with exactly that timestamp) at any time, and `zeroslam_finalise` at the end of a run for a last global adjustment. Poses follow "Coordinate conventions": frames before initialisation completes, and frames dropped while tracking was lost, have no pose, and the covariance is not estimated yet (it is zero).
 5. `zeroslam_get_map_chunk` (every landmark, the position arguments are not used yet), `zeroslam_get_map_lines`, `zeroslam_get_map_keyframes`, `zeroslam_get_map_edges` (the covisibility and loop edges between keyframes, by timestamp) and `zeroslam_get_map_voxels` (the voxel map of the current map's landmarks as of the newest keyframe: the voxel size, and each occupied voxel's lowest corner and landmark count) export the map.
@@ -98,6 +98,31 @@ The `tools/api-c`, `tools/api-cpp` and `tools/api-python` demonstrations walk th
 
 Every call returns a `zeroslam_return_enum`.
 The getters fill caller owned buffers: a null or short buffer fails with `zeroslam_return_failure_insufficient_data_length` and reports the length needed, so a first call sizes the buffer and a second fills it.
+
+### Camera models ###
+
+Every model's parameters start with the focal lengths and the principal point `[fx fy cx cy]`, in pixels in the pixel-centre frame, and go on with the model's own; all of them are refined together as one state vector, and each model has the jacobians of its projection with respect to the point and to every parameter.
+A scene names the model in its camera info's `distortion_model`, with the model's own parameters in `d` (see "Scene format").
+
+| Model | `zeroslam_camera_model_` | Scene `distortion_model` (`d`) | Parameters | Valid region |
+|---|---|---|---|---|
+| Pinhole | `pinhole` | `plumb_bob` with no `d` | `fx fy cx cy` | in front of the camera |
+| OpenCV's radial tangential (plumb bob and rational) | `radial_tangential` | `plumb_bob` (`k1 k2 p1 p2 [k3]`), `rational_polynomial` (`k1 k2 p1 p2 k3 k4 k5 k6`) | `fx fy cx cy k1 k2 p1 p2 k3 k4 k5 k6` | in front, inside the radius where the radial distortion folds back or reaches a pole |
+| OpenCV's whole pinhole model, with the thin prism and the tilted sensor | `opencv` | `rational_polynomial` with 12 or 14 coefficients | `fx fy cx cy k1 k2 p1 p2 k3 k4 k5 k6 s1 s2 s3 s4 tau_x tau_y` | as the radial tangential, and in front of the tilted sensor |
+| Kannala-Brandt equidistant fisheye (OpenCV's fisheye, Kalibr's `pinhole-equi`) | `kannala_brandt` | `equidistant` or `kannala_brandt` (`k1 k2 k3 k4`) | `fx fy cx cy k1 k2 k3 k4` | out to where `theta_d` stops growing, up to a half turn |
+| Field of view (Devernay and Faugeras), PTAM's `ATANCamera` | `field_of_view` | `fov` (`w`) | `fx fy cx cy w` | in front of the camera, `w` in `[0, pi)` |
+| Unified (Geyer, Barreto, Mei without his distortion) | `unified` | `unified` (`xi`) | `fx fy cx cy xi` | `z > -min(xi, 1 / xi) * |p|`, past 90 degrees for `xi > 0` |
+| Extended unified (Khomenko et al.) | `extended_unified` | `extended_unified` (`alpha beta`) | `fx fy cx cy alpha beta` | `z > -w * sqrt(beta (x^2 + y^2) + z^2)`, `w` from `alpha` |
+| Double sphere (Usenko, Demmel and Cremers) | `double_sphere` | `double_sphere` (`xi alpha`) | `fx fy cx cy xi alpha` | `z > -w2 * |p|`, `w2` from `xi` and `alpha` |
+| Project Aria's Fisheye624 (COLMAP's `RAD_TAN_THIN_PRISM_FISHEYE`) | `fisheye_624` | `fisheye_624` (`k0 .. k5 p0 p1 s0 .. s3`) | `fx fy cx cy k0 k1 k2 k3 k4 k5 p0 p1 s0 s1 s2 s3` | out to where `theta_d` stops growing, and where the tangential and thin prism terms keep the image from folding |
+
+The equidistant projection is the Kannala-Brandt model with its `k` zero, and the stereographic one the unified model with `xi = 1` (and focal lengths of twice the lens's).
+PTAM's calibration gives its parameters as fractions of the image size: `fx = width * p0`, `fy = height * p1`, `cx = width * p2`, `cy = height * p3` in the pixel-centre frame, and `w = p4`.
+Points and pixels outside a model's valid region project and unproject to nothing, and are treated as not seen; unprojection is closed form for the pinhole, field of view, unified, extended unified and double sphere models and an iteration bounded to the valid region for the others.
+
+Inside the library the camera is the type erased `sensor::camera::model<double>` (`source/sensor/camera/model.hpp`), which also gives the pinhole `[fx fy cx cy]` that agrees with the model to first order at its principal point, for the parts that need a pinhole: the resampling the line detector runs on, the image the epipolar re-acquisition matches on, and the scale of the pixel noise.
+The two-view initialisation, the turn between frames, the perspective and essential solvers, the line measurements, the epipolar re-acquisition and the inverse depth landmarks (`depth=inverse`, the default) work on the image plane `(x / z, y / z)`, and take rays within 80 degrees of the optical axis; a wide angle camera's rays further out are tracked, triangulated, matched by projection and adjusted through its model, and with `depth=xyz` landmarks past 90 degrees from a keyframe's axis are mapped too.
+A camera seeing past 180 degrees runs (the tests run a double sphere lens of 194 degrees across), but its outer ring adds to the map only through those.
 
 ### Configuration ###
 
@@ -147,7 +172,7 @@ The `process` and `regression` tools pass any setting through with `--config key
 
 A scene is one mcap file, `datasets/[dataset]/[scene].mcap`, holding:
 - Raw image messages (`sensor_msgs/msg/Image`: `mono8` or `rgb8` for the cameras the system runs on, `mono16` or `32FC1` for depth) in uncompressed or lz4 compressed chunks (zstd chunks are rejected).
-- Camera intrinsics as one camera info message per frame on `/sensor/[name]/camera_info`, a `plumb_bob` (`k1 k2 p1 p2 [k3]`) or `rational_polynomial` (`k1 k2 p1 p2 k3 k4 k5 k6`) pinhole with no rectification, with the principal point in the pixel-centre frame (see "Coordinate conventions" below). A distortion that folds back on itself, where the radial factor stops growing or reaches a pole of the rational model, limits the model to the radius inside that point; rays and pixels beyond it are treated as not visible.
+- Camera intrinsics as one camera info message per frame on `/sensor/[name]/camera_info`, with no rectification (`R` the identity, `P` = `[K | 0]`) and the principal point in the pixel-centre frame (see "Coordinate conventions" below): `K` holds `fx fy cx cy`, `distortion_model` names one of the camera models and `d` holds its own parameters (see "Camera models"): `plumb_bob` (`k1 k2 p1 p2 [k3]`), `rational_polynomial` (`k1 k2 p1 p2 k3 k4 k5 k6`, or with the thin prism `s1 s2 s3 s4` and the tilt `tau_x tau_y` after them), `equidistant` (`k1 k2 k3 k4`), `fov` (`w`), `unified` (`xi`), `extended_unified` (`alpha beta`), `double_sphere` (`xi alpha`) or `fisheye_624` (`k0 .. k5 p0 p1 s0 .. s3`). A distortion that folds back on itself, where the radial factor stops growing or reaches a pole of the rational model, limits the model to the radius inside that point; rays and pixels beyond it are treated as not visible.
 - IMU messages.
 - A ground truth trajectory on `/tf` as `root -> ego`, when the dataset has one.
 
@@ -284,7 +309,7 @@ Scenes are stored as one mcap file each, `[dataset]/[scene].mcap`, and `get` acc
 Downloads stream to a `.part` file renamed into place after a size check, so interrupted downloads are detectable and rerunning a download completes or repairs the files (`--force` redownloads).
 Private repositories are reached with the `HF_TOKEN` environment variable or with `--token`, and `--repo` selects another hub repository (huggingface only).
 Prefer the variable: an option is on the tool's command line, which other users of the machine can read from the process list. Either way the token reaches `curl` in a private temporary file and not on its command line.
-`validate` checks a scene by name, every scene of a dataset, or a scene mcap by path: the raw frames, a pinhole calibration per frame, and the `root -> ego -> sensor` frame tree on `/tf`.
+`validate` checks a scene by name, every scene of a dataset, or a scene mcap by path: the raw frames, a calibration of one of the camera models per frame, and the `root -> ego -> sensor` frame tree on `/tf`.
 
 Usage:
 ```
@@ -317,7 +342,7 @@ They read already extracted directories, not zips.
 | `import-tumrgbd` | `[tumrgbd-dir] [output.mcap]` | TUM RGB-D, with the rgb, depth and accelerometer streams. `--freiburg [1-3]` sets the camera calibration, by default read from `rgb.txt`'s header or the directory name. |
 | `import-eth3d` | `[eth3d-dir] [output.mcap]` | ETH3D SLAM, the monocular part plus the stereo, depth and imu parts found inside it or given with `--stereo`, `--rgbd` and `--imu`. |
 | `import-kitti` | `[sequence-dir] ([poses.txt]) [output.mcap]` | KITTI odometry, `--cameras` selects which of the four cameras to import. The poses are optional, only sequences 00 to 10 publish them. |
-| `import-lamaria` | `[asl-dir] [pinhole.json] [output.mcap]` | LaMAria's undistorted ASL (pinhole) release, `--ground-truth` adds the pseudo ground truth where a sequence has one. |
+| `import-lamaria` | `[asl-dir] [calibration.json] [output.mcap]` | LaMAria's undistorted ASL (pinhole) release with its pinhole calibration, or an ASL folder of the cameras' own fisheye images with the aria calibration (`RAD_TAN_THIN_PRISM_FISHEYE`, written as `fisheye_624` and turned upright with the images; not yet tried on the real data), `--ground-truth` adds the pseudo ground truth where a sequence has one. |
 
 ```
 # Build the importers, and the dataset tool they pack scenes with.

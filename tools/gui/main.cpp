@@ -755,15 +755,13 @@ namespace {
         }
 
         bool describe_rig(const scene::image_channel& channel_fed) {
-            zeroslam_sensor_parameters_camera_struct camera{};
+            zeroslam_sensor_parameters_camera_model_struct camera{};
             camera.width = static_cast<int>(channel_fed.width);
             camera.height = static_cast<int>(channel_fed.height);
-            camera.focal_x = channel_fed.camera_parameters[0];
-            camera.focal_y = channel_fed.camera_parameters[1];
-            camera.centre_x = channel_fed.camera_parameters[2];
-            camera.centre_y = channel_fed.camera_parameters[3];
-            for (std::size_t i = 0; i < 8; ++i) {
-                camera.distortion[i] = channel_fed.camera_parameters[4 + i];
+            camera.model = static_cast<zeroslam_camera_model_enum>(channel_fed.camera_model);
+            camera.parameters_length = static_cast<int>(channel_fed.camera_model_parameter_count);
+            for (std::size_t i = 0; i < channel_fed.camera_model_parameter_count; ++i) {
+                camera.parameters[i] = channel_fed.camera_model_parameters[i];
             }
             zeroslam_sensor_rig_struct rig{};
             rig.type = zeroslam_sensor_camera;

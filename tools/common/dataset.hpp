@@ -279,6 +279,69 @@ namespace dataset {
         return (parameters[0] > 0.0) && (parameters[1] > 0.0);
     }
 
+    // The camera models a scene's camera info names in distortion_model, with the coefficients each takes in d, and the
+    // library's camera model (the value of its zeroslam_camera_model_enum) and parameters, [fx fy cx cy] from k and the
+    // coefficients after them. plumb_bob and rational_polynomial are the radial tangential model with the missing
+    // coefficients zero, rational_polynomial with twelve or fourteen coefficients (OpenCV's thin prism and tilted sensor)
+    // the opencv model, and an empty name is plumb_bob.
+    struct camera_model_description {
+        const char* distortion_model;
+        int library_model;
+        std::size_t coefficients[3];
+        std::size_t library_coefficients;
+    };
+
+    constexpr static const camera_model_description camera_models[] = {
+        { "plumb_bob", 1, { 0, 4, 5 }, 8 },
+        { "rational_polynomial", 1, { 8, 8, 8 }, 8 },
+        { "rational_polynomial", 2, { 12, 14, 14 }, 14 },
+        { "equidistant", 3, { 4, 4, 4 }, 4 },
+        { "kannala_brandt", 3, { 4, 4, 4 }, 4 },
+        { "fov", 4, { 1, 1, 1 }, 1 },
+        { "unified", 5, { 1, 1, 1 }, 1 },
+        { "extended_unified", 6, { 2, 2, 2 }, 2 },
+        { "double_sphere", 7, { 2, 2, 2 }, 2 },
+        { "fisheye_624", 8, { 12, 12, 12 }, 12 }
+    };
+
+    // The model a camera info's distortion model and coefficient count name, null when they name none.
+    inline const camera_model_description* find_camera_model(const std::string& distortion_model, const std::size_t coefficients) {
+        const std::string name = distortion_model.empty() ? std::string("plumb_bob") : distortion_model;
+        for (const camera_model_description& description : camera_models) {
+            if ((name == description.distortion_model) && ((coefficients == description.coefficients[0]) || (coefficients == description.coefficients[1]) || (coefficients == description.coefficients[2]))) {
+                return &description;
+            }
+        }
+        return nullptr;
+    }
+
+    // The library's camera model and its parameters for a camera info, at most 32 of them, false (and an explanation) when
+    // its distortion model is not one of the camera models above or its focal lengths are not positive.
+    inline bool camera_info_to_model(const cdr::camera_info& information, int& library_model, double* const parameters, std::size_t& parameters_length, std::string& error) {
+        const camera_model_description* const description = dataset::find_camera_model(information.distortion_model, information.d.size());
+        if (description == nullptr) {
+            error = "the distortion model '" + information.distortion_model + "' with " + std::to_string(information.d.size()) + " coefficients is not a camera model";
+            return false;
+        }
+        if (!(information.k[0] > 0.0) || !(information.k[4] > 0.0)) {
+            error = "the focal lengths are not positive";
+            return false;
+        }
+        library_model = description->library_model;
+        parameters_length = 4 + description->library_coefficients;
+        for (std::size_t index = 0; index < parameters_length; ++index) {
+            parameters[index] = 0.0;
+        }
+        parameters[0] = information.k[0];
+        parameters[1] = information.k[4];
+        parameters[2] = information.k[2];
+        parameters[3] = information.k[5];
+        for (std::size_t index = 0; index < information.d.size(); ++index) {
+            parameters[4 + index] = information.d[index];
+        }
+        return true;
+    }
+
     enum class pnm_format {
         pgm8,
         pgm16,
