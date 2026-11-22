@@ -1076,12 +1076,13 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_sensor_extrinsics(zeroslam_s
     // The system holds a rig of several cameras once their data has come, refined as it goes; the api holds the rest.
     const mapping::rig& held = system->slam_instance.reconstruction.sensor_rig;
     const mapping::rig rig = (held.camera_count() == sensor_ids.size()) ? held : system->rig.make_rig(sensor_ids);
-    const int required = static_cast<int>(rig.camera_count());
+    const int required = static_cast<int>(rig.camera_count()) + (system->imu.declared() ? 1 : 0);
     if ((required > 0) && ((extrinsics == nullptr) || (*length < required))) {
         *length = required;
         return zeroslam_return_failure_insufficient_data_length;
     }
     api_rig::fill_extrinsics(rig, extrinsics);
+    system->imu.fill_extrinsic(held, extrinsics, static_cast<int>(rig.camera_count()));
     *length = required;
     return zeroslam_return_success;
 }

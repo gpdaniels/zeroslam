@@ -169,8 +169,18 @@ int main(int argc, char* argv[]) {
         extrinsics[0].sensor_id = 1;
         extrinsics[0].pose[6] = 1.0;
         extrinsics[1].sensor_id = 2;
+        extrinsics[1].pose[0] = 0.1;
         extrinsics[1].pose[6] = 1.0;
         REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[0], 2) == zeroslam_return_success);
+        // The extrinsics come back the camera's first, then the imu's.
+        int held_length = 0;
+        REQUIRE(zeroslam_get_sensor_extrinsics(system, nullptr, &held_length) == zeroslam_return_failure_insufficient_data_length);
+        REQUIRE(held_length == 2);
+        zeroslam_sensor_extrinsics_struct held[2] = {};
+        REQUIRE(zeroslam_get_sensor_extrinsics(system, &held[0], &held_length) == zeroslam_return_success);
+        REQUIRE((held[0].sensor_id == 1) && (held[1].sensor_id == 2));
+        REQUIRE(held[1].pose[0] == 0.1);
+        REQUIRE(held[1].refinement == zeroslam_extrinsic_fixed);
 
         zeroslam_sensor_measurement_imu_struct still{};
         still.linear_acceleration[1] = -9.81;

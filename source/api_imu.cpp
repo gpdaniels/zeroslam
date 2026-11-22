@@ -89,6 +89,25 @@ bool api_imu::take_extrinsic(const zeroslam_sensor_extrinsics_struct* const extr
     return true;
 }
 
+void api_imu::fill_extrinsic(const mapping::rig& held, zeroslam_sensor_extrinsics_struct* const extrinsics, const int index) const {
+    if (!this->declared_ || (extrinsics == nullptr)) {
+        return;
+    }
+    size_t held_index = 0;
+    const math::se3<double> body_from_imu = held.find(this->sensor_id_, held_index) ? held.at(held_index).body_from_sensor : this->body_from_imu();
+    const math::matrix<double, 4, 1> quaternion = body_from_imu.rotation().get_quaternion();
+    zeroslam_sensor_extrinsics_struct& value = extrinsics[index];
+    value.sensor_id = this->sensor_id_;
+    value.refinement = this->refined() ? zeroslam_extrinsic_refine : zeroslam_extrinsic_fixed;
+    for (size_t axis = 0; axis < 3; ++axis) {
+        value.pose[axis] = body_from_imu.translation()[axis];
+    }
+    value.pose[3] = quaternion[1];
+    value.pose[4] = quaternion[2];
+    value.pose[5] = quaternion[3];
+    value.pose[6] = quaternion[0];
+}
+
 sensor::imu::parameters api_imu::noise() const {
     sensor::imu::parameters noise;
     noise.gyroscope_noise_density = this->parameters_.gyroscope_noise_density;

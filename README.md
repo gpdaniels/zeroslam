@@ -207,7 +207,7 @@ Each keyframe preintegrates the samples since the keyframe before it (on the man
 Once ten keyframes over two seconds or more have been taken, the system estimates the direction of gravity, the scale where the map has none (a monocular map's), the imu's velocities and its biases from them (ORB-SLAM3's inertial only optimisation, started from a closed form solution), and initialises when their uncertainty shows the motion held them: a monocular map is then scaled into metres and keeps the world of its first camera, with gravity known in it (`metric_scale` becomes true), and a stereo rig's map, metric already, only takes gravity, the velocities and the biases.
 From then on every adjustment holds consecutive keyframes with preintegrated inertial edges and bias random walk edges, a held keyframe holding its velocity and bias too, so the scale, the roll and the pitch are held by the imu; the estimate is refined over the longer window five and fifteen seconds later with the accelerometer bias freed, and a loop closes as a four degree of freedom pose graph, every keyframe's roll and pitch held.
 The imu predicts a frame's pose where its tracks cannot give it, and carries up to 40 frames the tracks lose before tracking is lost (10 without it); a new submap started after a loss starts a new chain of keyframes, initialised on its own with the scale held.
-The imu's extrinsic is refined with the keyframes' poses when its entry asks for it. `adjustment=relative` takes no imu.
+The imu's extrinsic is refined with the keyframes' poses when its entry asks for it, and `zeroslam_get_sensor_extrinsics` reports it after the cameras'. `adjustment=relative` takes no imu.
 
 ## Scene format ##
 

@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ZEROSLAM_API_IMU_HPP
 
 #include "api.hpp"
+#include "mapping/rig.hpp"
 #include "math/lie.hpp"
 #include "sensor/imu/measurement.hpp"
 
@@ -61,6 +62,10 @@ public:
 
     // Takes the imu's entry out of a set of extrinsics, leaving the cameras' in the rest, false when the imu's is not valid.
     bool take_extrinsic(const zeroslam_sensor_extrinsics_struct* const extrinsics, const int length, std::vector<zeroslam_sensor_extrinsics_struct>& rest);
+
+    // Writes the imu's extrinsic after the cameras' at an index, as the system holds it once its data has come (refined where asked
+    // for) and as declared before; nothing when there is no imu.
+    void fill_extrinsic(const mapping::rig& held, zeroslam_sensor_extrinsics_struct* const extrinsics, const int index) const;
 
     // The noise model, the imu's pose on the body, and whether it is refined.
     sensor::imu::parameters noise() const;
