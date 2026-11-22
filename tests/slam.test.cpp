@@ -312,10 +312,16 @@ public:
         }
     }
 
-    void render_frame(const math::se3<double>& pose, const math::matrix<double, 3, 3>& intrinsics, image::image& img) {
+    // Renders the grey image, and with depth the depth of each pixel's surface along the optical axis in metres (zero where
+    // no surface is seen), exact at the pixel centre rather than interpolated across the triangle, as a registered depth
+    // camera would measure it. The grey image is the same with or without the depth.
+    void render_frame(const math::se3<double>& pose, const math::matrix<double, 3, 3>& intrinsics, image::image& img, float* const depth = nullptr) {
         const math::se3<double> camera_to_world = pose.inverse();
         unsigned char* data = img.get_data();
         std::fill(data, data + image_width * image_height, static_cast<unsigned char>(0));
+        if (depth != nullptr) {
+            std::fill(depth, depth + image_width * image_height, 0.0f);
+        }
         std::vector<double> depth_buffer(static_cast<size_t>(image_width * image_height), std::numeric_limits<double>::max());
         for (const triangle& face : scene) {
             const math::matrix<double, 3, 1> v0_cam = pose * face.v0;
@@ -356,9 +362,16 @@ public:
                     const math::matrix<double, 3, 1> ray = { { (static_cast<double>(x) + 0.5 - intrinsics[0][2]) / intrinsics[0][0], (static_cast<double>(y) + 0.5 - intrinsics[1][2]) / intrinsics[1][1], 1.0 } };
                     const double facing = (normal[0] * ray[0]) + (normal[1] * ray[1]) + (normal[2] * ray[2]);
                     if (std::abs(facing) < 1.0e-12) {
+                        if (depth != nullptr) {
+                            depth[(y * image_width) + x] = 0.0f;
+                        }
                         return face.intensity;
                     }
                     const double distance = plane_offset / facing;
+                    // The ray has unit z, so the distance along it to the plane is the surface's depth along the axis.
+                    if (depth != nullptr) {
+                        depth[(y * image_width) + x] = (distance > 0.0) ? static_cast<float>(distance) : 0.0f;
+                    }
                     const math::matrix<double, 3, 1> surface = camera_to_world * math::matrix<double, 3, 1>{ { distance * ray[0], distance * ray[1], distance * ray[2] } };
                     unsigned int hash = 2166136261u;
                     for (size_t axis = 0; axis < 3; ++axis) {
@@ -883,6 +896,102 @@ static void test_loop_closure(const int width, const int height, const math::mat
     const math::matrix<double, 3, 1> start_centre = -math::transpose(circle_start.rotation) * circle_start.translation;
     const math::matrix<double, 3, 1> end_centre = -math::transpose(circle_end.rotation) * circle_end.translation;
     REQUIRE(std::sqrt((end_centre - start_centre).get_length_squared()) < 0.15 * furthest);
+}
+
+// A depth camera's rendered depth with each frame gives a metric map from the first frame: the trajectory comes out at the
+// scale of the world with no alignment of scale, a loop around the room closes as a rigid motion, and the map ends where
+// the camera went, in metres.
+static void test_rgbd(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer, const mapping::frame::settings::adjustment_kind adjustment = mapping::frame::settings::adjustment_kind::absolute) {
+    constexpr static const int approach_frames = 8;
+    constexpr static const int circle_frames = 72;
+    constexpr static const int overlap_frames = 18;
+    constexpr static const double radius = 3.0;
+    std::vector<math::se3<double>> trajectory;
+    for (int i = 0; i < approach_frames; i++) {
+        const math::matrix<double, 3, 1> centre = { { (i - approach_frames) * 0.25, 0.0, 6.0 - radius } };
+        trajectory.push_back({ math::so3<double>::identity(), -centre });
+    }
+    for (int i = 0; i <= circle_frames + overlap_frames; i++) {
+        const double angle = 2.0 * 3.14159265358979323846 * static_cast<double>(i) / static_cast<double>(circle_frames);
+        const math::so3<double> rotation = math::so3<double>::rotation(0, angle, 0);
+        const math::matrix<double, 3, 1> centre = { { radius * std::sin(angle), 0.0, 6.0 - (radius * std::cos(angle)) } };
+        trajectory.push_back({ rotation, -(rotation * centre) });
+    }
+
+    slam system;
+    system.frontend.track_collision_distance = 0.0f;
+    system.frontend.adjustment = adjustment;
+    system.frontend.local_map = mapping::frame::settings::local_map_kind::covisible;
+    system.reconstruction.metric_scale = true;
+    sensor::depth::settings depth_settings;
+    depth_settings.minimum = 0.1;
+    depth_settings.maximum = 30.0;
+    depth_settings.noise.quadratic = 1.0e-3;
+    const double parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = { intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    const sensor::model camera(sensor::camera::pinhole_radial_tangential<double>(&parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
+    std::vector<float> metres(static_cast<size_t>(width) * static_cast<size_t>(height));
+    for (const math::se3<double>& pose : trajectory) {
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
+        renderer.render_frame(pose, intrinsics, frame, metres.data());
+        system.process_frame(camera, frame, sensor::depth(static_cast<size_t>(height), static_cast<size_t>(width), metres.data(), depth_settings));
+    }
+
+    REQUIRE(system.state() == slam::tracking_state::tracking);
+    REQUIRE(system.reconstruction.metric_scale);
+    REQUIRE(system.landmarks_from_depth > 0);
+    // The map starts at the first frame, from its depth alone.
+    REQUIRE(system.reconstruction.frames.count(0) != 0);
+    REQUIRE(system.keyframe_ids().count(0) != 0);
+    if (adjustment == mapping::frame::settings::adjustment_kind::absolute) {
+        REQUIRE(!system.verified_loops.empty());
+        for (const slam::verified_loop& loop : system.verified_loops) {
+            REQUIRE(loop.loop.correction.scale() == 1.0);
+            REQUIRE(loop.loop.relative.scale() == 1.0);
+        }
+    }
+    system.finalise();
+
+    // The map's world is the first frame's camera: each frame's centre is where the first pose puts the true centre, with no
+    // alignment and no scale fitted. A monocular map would be off by its arbitrary scale.
+    double worst = 0.0;
+    double squared_sum = 0.0;
+    double travelled = 0.0;
+    double travelled_estimated = 0.0;
+    size_t posed = 0;
+    math::matrix<double, 3, 1> previous_truth = math::matrix<double, 3, 1>::zero();
+    math::matrix<double, 3, 1> previous_estimated = math::matrix<double, 3, 1>::zero();
+    for (size_t index = 0; index < trajectory.size(); ++index) {
+        const std::unordered_map<int, mapping::frame>::const_iterator found = system.reconstruction.frames.find(static_cast<int>(index));
+        if (found == system.reconstruction.frames.end()) {
+            continue;
+        }
+        const math::matrix<double, 3, 1> estimated = -(math::transpose(found->second.rotation) * found->second.translation);
+        const math::matrix<double, 3, 1> truth = trajectory.front() * (trajectory[index].inverse() * math::matrix<double, 3, 1>::zero());
+        const double error = std::sqrt((estimated - truth).get_length_squared());
+        worst = std::max(worst, error);
+        squared_sum += error * error;
+        if (posed > 0) {
+            travelled += std::sqrt((truth - previous_truth).get_length_squared());
+            travelled_estimated += std::sqrt((estimated - previous_estimated).get_length_squared());
+        }
+        previous_truth = truth;
+        previous_estimated = estimated;
+        ++posed;
+    }
+    const double rms = std::sqrt(squared_sum / static_cast<double>(std::max<size_t>(posed, 1)));
+    std::fprintf(stdout, "RGB-D room (%s): %zu of %zu frames posed, error rms %.4f m and worst %.4f m over %.2f m travelled (%.4f of it estimated), %zu landmarks from depth, %zu loops.\n", (adjustment == mapping::frame::settings::adjustment_kind::relative) ? "relative" : "absolute", posed, trajectory.size(), rms, worst, travelled, travelled_estimated / travelled, system.landmarks_from_depth, system.verified_loops.size());
+    std::fflush(stdout);
+    REQUIRE(posed == trajectory.size());
+    if (adjustment == mapping::frame::settings::adjustment_kind::absolute) {
+        REQUIRE(rms < 0.04);
+        REQUIRE(worst < 0.2);
+        REQUIRE(std::abs((travelled_estimated / travelled) - 1.0) < 0.02);
+    }
+    else {
+        // The relative adjustment takes no depth factors (see README "Depth cameras"), so only the depths that start the map,
+        // make its landmarks and refine its poses hold the scale between the loop and the final adjustment.
+        REQUIRE(std::abs((travelled_estimated / travelled) - 1.0) < 0.2);
+    }
 }
 
 static void test_relocalisation(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {
@@ -2010,6 +2119,8 @@ int main(int argc, char* argv[]) {
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::match);
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::both);
     test_loop_closure(width, height, intrinsics, room, mapping::frame::settings::association_kind::both, mapping::frame::settings::adjustment_kind::absolute, mapping::frame::settings::local_map_kind::voxels);
+    test_rgbd(width, height, intrinsics, room);
+    test_rgbd(width, height, intrinsics, room, mapping::frame::settings::adjustment_kind::relative);
     test_relocalisation(width, height, intrinsics, renderer);
     test_relocalisation_into_an_older_map(width, height, intrinsics, room);
     test_loops_between_submaps(width, height, intrinsics, room, false);

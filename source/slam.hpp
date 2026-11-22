@@ -42,6 +42,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "image/remap.hpp"
 #include "mapping/calibration.hpp"
 #include "mapping/covisibility.hpp"
+#include "mapping/depth_factor.hpp"
 #include "mapping/frame.hpp"
 #include "mapping/intrinsics_refinement.hpp"
 #include "mapping/line.hpp"
@@ -64,6 +65,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/edges/relative_similarity.hpp"
 #include "optimisation/edges/reprojection.hpp"
 #include "optimisation/edges/rig_reprojection.hpp"
+#include "optimisation/edges/similarity_scale_prior.hpp"
 #include "optimisation/factor_graph.hpp"
 #include "optimisation/loss.hpp"
 #include "optimisation/losses/huber.hpp"
@@ -73,6 +75,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/vertices/pose.hpp"
 #include "optimisation/vertices/similarity.hpp"
 #include "sensor/camera.hpp"
+#include "sensor/depth.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -168,6 +171,8 @@ public:
     // A rig of several cameras (slam_rig.hpp): declared before any frame, then one image of every camera per frame.
     void set_rig(const mapping::rig& rig);
     void process_rig_frame(const std::vector<sensor::model>& cameras, const std::vector<image::image>& images);
+    // Landmarks made from a depth image's measurement rather than by triangulation.
+    size_t landmarks_from_depth = 0;
 
 private:
     tracking_state state_ = tracking_state::initialising;
@@ -742,6 +747,20 @@ private:
             edge.add_vertex(vertices.at(second_id));
             graph.add_edge(static_cast<optimisation::edge&&>(edge));
         };
+        // A metric map's loop is a rigid motion and its keyframes' scales stay at one, so the pose graph is one of rigid
+        // motions: each free keyframe's similarity is held to unit scale.
+        if (this->reconstruction.metric_scale) {
+            for (const int id : ordered_keyframe_ids) {
+                optimisation::vertex* const vertex = vertices.at(id);
+                if (vertex->is_fixed()) {
+                    continue;
+                }
+                optimisation::edge prior{ optimisation::edges::similarity_scale_prior(1.0) };
+                prior.add_vertex(vertex);
+                prior.set_information(math::matrix<double, 0, 0>::identity(1, 1) * slam::metric_scale_information);
+                graph.add_edge(static_cast<optimisation::edge&&>(prior));
+            }
+        }
         // Each keyframe is held to the one before it in its own submap, which is not always the one before it in time:
         // tracking can leave a submap for another and relocalise into it again later.
         std::unordered_map<size_t, int> previous_of_submap;
@@ -775,7 +794,7 @@ private:
         std::unordered_map<int, math::sim3<double>> corrected;
         for (const auto& [id, vertex] : vertices) {
             const double* const p = vertex->get_parameters();
-            corrected[id] = math::sim3<double>(math::se3<double>(math::so3<double>(p[6], p[3], p[4], p[5]), { { p[0], p[1], p[2] } }), p[7]);
+            corrected[id] = math::sim3<double>(math::se3<double>(math::so3<double>(p[6], p[3], p[4], p[5]), { { p[0], p[1], p[2] } }), this->reconstruction.metric_scale ? 1.0 : p[7]);
         }
         for (const auto& [id, similarity] : corrected) {
             if (joining && (this->map_component(id) == moved_component)) {
@@ -886,7 +905,7 @@ private:
     // current keyframe, which brings the far side of the loop into agreement with it; the rest of the graph is unchanged.
     bool close_loop_relative(const int keyframe_id, const mapping::loop_closure::result& loop, std::vector<mapping::loop_closure::record>& records) {
         this->relative_graph_.synchronise(this->reconstruction, this->keyframes_with_submaps());
-        const int link = this->relative_graph_.add_loop(loop.keyframe_id, keyframe_id, loop.relative);
+        const int link = this->relative_graph_.add_loop(loop.keyframe_id, keyframe_id, loop.relative, !this->reconstruction.metric_scale);
         if (link < 0) {
             core::logger::log(core::logger::level::warn, "Loop %d -> %d not closed, a keyframe is not in the relative graph.", keyframe_id, loop.keyframe_id);
             return false;
@@ -1174,6 +1193,14 @@ private:
             factor.add_vertex(point_node);
             factor.set_loss(lossfunction);
             ba.add_edge(static_cast<optimisation::edge&&>(factor));
+            // The frame's own depth of the landmark, as the adjustment takes it.
+            const double measured_depth = this->reconstruction.metric_scale ? mapping::depth_factor::sample(frame_current, match.pixel[0], match.pixel[1]) : 0.0;
+            if (measured_depth > 0.0) {
+                optimisation::edge measured = mapping::depth_factor::make_edge(frame_current, measured_depth);
+                measured.add_vertex(pose_node);
+                measured.add_vertex(point_node);
+                ba.add_edge(static_cast<optimisation::edge&&>(measured));
+            }
         }
         // Lines weigh less the more points hold the pose (ORB-LINE-SLAM's 2^-(points / 50)), so they carry a frame the points
         // cannot hold without pulling on one they hold well.
@@ -2665,6 +2692,11 @@ private:
     void demote_keyframe(const int candidate_id) {
         this->keyframe_ids_.erase(candidate_id);
         this->loop_closure_.remove_keyframe(candidate_id);
+        // Its observations have sampled their depths, and no observation is added to a frame that is not a keyframe.
+        const std::unordered_map<int, mapping::frame>::iterator demoted = this->reconstruction.frames.find(candidate_id);
+        if (demoted != this->reconstruction.frames.end()) {
+            demoted->second.depth.release();
+        }
         int reference_id = -1;
         for (const int keyframe_id : this->keyframe_ids_) {
             if (this->reconstruction.frames.count(keyframe_id) == 0) {
@@ -3404,6 +3436,18 @@ private:
         }
     }
 
+    // A depth camera's frames (slam_depth.hpp): the depth taken with the next frame, the frame whose depth is released when the
+    // next arrives unless it became a keyframe, and whether depth images are given, so that a metric map starts from one.
+    static constexpr size_t depth_initialisation_tracks_minimum = 100;
+    static constexpr double metric_scale_information = 1.0e8;
+    sensor::depth next_depth_;
+    int depth_frame_id_ = -1;
+    bool depth_given_ = false;
+    void attach_depth(mapping::frame& frame);
+    bool starts_from_depth(const mapping::frame& frame) const;
+    bool initialise_from_depth(mapping::frame& frame_current);
+    bool create_landmark_from_depth(const mapping::frame& frame_current, feature::tracker::tracker::track& t, const double measured, const image::image& image_grey, double& depth_in_frame);
+
 public:
     // The pixel noise per coordinate that the two-view thresholds assume for a sharp frame (measurement_sigma 1), and the
     // perspective solve's angular tolerance in pixels. On TUM's 525 px focal length they give the former fixed
@@ -3656,12 +3700,19 @@ public:
         this->process(camera_intrinsics, image_grey, nullptr, nullptr, 0);
     }
 
+    // A frame with the depth image registered to its camera, empty when it came without one (see slam_depth.hpp).
+    void process_frame(const sensor::model& camera_intrinsics, const image::image& image_grey, sensor::depth&& frame_depth) {
+        this->next_depth_ = static_cast<sensor::depth&&>(frame_depth);
+        this->process(camera_intrinsics, image_grey, nullptr, nullptr, 0);
+    }
+
 private:
     // A frame of the reference camera, with the views of a rig's other cameras at the same moment when there are any.
     void process(const sensor::model& camera_intrinsics, const image::image& image_grey, const sensor::model* const view_cameras, const image::image* const view_images, const size_t view_count) {
         // While the caller gives the camera it gave before, the frame takes the camera as the adjustments have refined it.
         this->calibration_.set_level(this->frontend.calibration);
         mapping::frame frame(this->reconstruction.allocate_frame_id(), this->calibration_.camera_for(camera_intrinsics), image_grey, this->frontend);
+        this->attach_depth(frame);
         if (this->frontend.blur_weighting) {
             this->laplacian_history_.push_back(frame.laplacian_variance);
             if (this->laplacian_history_.size() > slam::blur_history_frames) {
@@ -3698,6 +3749,7 @@ private:
         this->loop_closure_.set_place_recognition((this->frontend.place_recognition == mapping::frame::settings::place_recognition_kind::ibow) ? mapping::place_recognition::engine::ibow : mapping::place_recognition::engine::hbst);
         this->loop_closure_.set_covisible_revisits(this->frontend.loop_revisits && !this->relative_adjustment());
         this->loop_closure_.set_loop_confirmations(static_cast<size_t>(math::max(this->frontend.loop_confirmations, 1)));
+        this->loop_closure_.set_fixed_scale(this->reconstruction.metric_scale);
         this->reconstruction.line_ray_angle_degrees = this->frontend.line_angle;
         this->reconstruction.solver_strategy = this->frontend.solver;
         this->reconstruction.solver_precision = this->frontend.solver_precision;
@@ -3784,8 +3836,8 @@ private:
 
         this->trim_track_histories(frame_id);
 
-        // Nothing to do for the first frame, unless a metric rig can initialise from it alone.
-        if ((frame_id == 0) && !this->reconstruction.sensor_rig.metric()) {
+        // Nothing to do for the first frame, unless a metric rig can initialise from it alone, or its depth can.
+        if ((frame_id == 0) && !this->reconstruction.sensor_rig.metric() && !this->starts_from_depth(frame_added)) {
             return;
         }
 
@@ -3863,6 +3915,13 @@ private:
             }
         }
         else if (initialise && this->reconstruction.sensor_rig.metric() && this->initialise_from_rig(frame_current)) {
+            is_keyframe = true;
+        }
+        else if (initialise && this->reconstruction.metric_scale && this->depth_given_) {
+            if (!this->initialise_from_depth(frame_current)) {
+                this->reconstruction.frames.erase(frame_current.id);
+                return;
+            }
             is_keyframe = true;
         }
         else if (initialise && (frame_current.id == this->init_anchor_frame_id_)) {
@@ -4292,6 +4351,7 @@ private:
 
         int new_landmarks = this->reconstruction.sensor_rig.metric() ? static_cast<int>(this->triangulate_across_cameras(frame_current, true)) : 0;
         std::vector<double> new_landmark_depths;
+        size_t from_depth = 0;
         size_t candidates = 0;
         size_t without_reference = 0;
         size_t at_infinity = 0;
@@ -4303,6 +4363,20 @@ private:
             for (feature::tracker::tracker::track* const t : active) {
                 if (t->landmark_id != -1) {
                     continue;
+                }
+                // A metric map takes a landmark's depth from the keyframe's depth image where it has one, and triangulates
+                // where it has none, as beyond the depth camera's range. It does not wait for the track to outlast the frame,
+                // as a triangulated landmark must: on the rendered room that halved the error (7.4 to 2.4 cm).
+                double measured_depth = 0.0;
+                if (this->reconstruction.metric_scale && frame_current.depth.sample(static_cast<double>(t->x), static_cast<double>(t->y), measured_depth)) {
+                    double depth_in_frame = 0.0;
+                    if (this->create_landmark_from_depth(frame_current, *t, measured_depth, image_grey, depth_in_frame)) {
+                        ++candidates;
+                        ++from_depth;
+                        ++new_landmarks;
+                        new_landmark_depths.push_back(depth_in_frame);
+                        continue;
+                    }
                 }
                 if (t->length < 2) {
                     continue;
@@ -4428,7 +4502,7 @@ private:
                 }
                 ++new_landmarks;
             }
-            core::logger::log(core::logger::level::debug, "Triangulation keyframe %d: %zu candidates, %d landmarks (%zu unbounded), %zu at infinity (%zu below the parallax gate), %zu failed the gates, %zu without a keyframe reference.", frame_current.id, candidates, new_landmarks, demoted, at_infinity + below_parallax, below_parallax, failed_gates, without_reference);
+            core::logger::log(core::logger::level::debug, "Triangulation keyframe %d: %zu candidates, %d landmarks (%zu from depth, %zu unbounded), %zu at infinity (%zu below the parallax gate), %zu failed the gates, %zu without a keyframe reference.", frame_current.id, candidates, new_landmarks, from_depth, demoted, at_infinity + below_parallax, below_parallax, failed_gates, without_reference);
         }
         new_landmarks += static_cast<int>(this->triangulate_view_tracks(frame_current));
         int new_line_landmarks = 0;
@@ -4597,6 +4671,7 @@ private:
     }
 };
 
+#include "slam_depth.hpp"
 #include "slam_rig.hpp"
 
 #endif // ZEROSLAM_SLAM_HPP
