@@ -1597,6 +1597,12 @@ private:
             return false;
         }
         this->reckoning_.centre = reckoned_centre + (this->reckoned_velocity() * static_cast<double>(frame_current.id - this->reckoning_.frame_id));
+        // An odometer carries the centre on by the motion it measured since the frame posed last (mapping::odometry).
+        math::se3<double> odometry_motion;
+        if (this->posed_pose(posed_rotation, posed_centre) && this->reconstruction.wheel_odometry.camera_motion(this->reckoning_.posed_frame_id, frame_current.id, this->reconstruction.sensor_rig, odometry_motion)) {
+            const math::se3<double> carried = odometry_motion * math::se3<double>(posed_rotation, -(posed_rotation * posed_centre));
+            this->reckoning_.centre = -(math::transpose(carried.rotation().get_matrix()) * carried.translation());
+        }
         this->reckoning_.rotation = rotation;
         this->reckoning_.frame_id = frame_current.id;
         return true;
