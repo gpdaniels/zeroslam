@@ -53,8 +53,9 @@ namespace optimisation::edges {
     // The measurement does not fit in the edge, so it is the edge's observation, observation(preintegration) laid out as
     // [dR (x, y, z, w), dv, dp, dt, b_g0, b_a0, J_R^g, J_v^g, J_v^a, J_p^g, J_p^a] with the jacobians row major, 62 values.
     //
-    // The imu's place on the body is a parameter for now. Estimating it would add an extrinsic vertex as a sixth vertex, in a
-    // variant of this edge that chains the pose jacobians through it as pose_jacobian does through the fixed transform.
+    // The imu's place on the body is a fixed parameter, or, when the edge is made to take one, a sixth vertex: an extrinsic vertex
+    // (optimisation::vertices::extrinsic, sensor to body, updated on the left) that an adjustment may refine, which the
+    // parameter then only starts.
     class inertial final {
     public:
         constexpr static const char* name = "inertial";
@@ -97,9 +98,13 @@ namespace optimisation::edges {
     private:
         math::matrix<double, 3, 1> gravity;
         math::se3<double> body_from_imu;
+        bool extrinsic_vertex;
 
     public:
-        explicit inertial(const math::matrix<double, 3, 1>& gravity_world, const math::se3<double>& imu_on_body = math::se3<double>::identity());
+        explicit inertial(const math::matrix<double, 3, 1>& gravity_world, const math::se3<double>& imu_on_body = math::se3<double>::identity(), const bool with_extrinsic_vertex = false);
+
+        // Five vertices, or six with the extrinsic vertex.
+        int get_vertex_count() const;
 
     public:
         // The observation of a preintegration, and its information, the inverse of its covariance (false when it cannot be inverted).
@@ -124,6 +129,10 @@ namespace optimisation::edges {
         // The jacobian with respect to a body pose vertex's update, exp(delta) * T_bw, from those with respect to the imu's rotation
         // and position at that pose.
         static math::matrix<double, 9, 6> pose_jacobian(const math::matrix<double, 9, 3>& rotation, const math::matrix<double, 9, 3>& position, const double* const pose, const math::se3<double>& imu_on_body, const double scale = 1.0);
+
+        // The jacobian with respect to an extrinsic vertex's update, exp(delta) * T_bi, from those with respect to the imu's
+        // rotation and position at a body pose.
+        static math::matrix<double, 9, 6> extrinsic_jacobian(const math::matrix<double, 9, 3>& rotation, const math::matrix<double, 9, 3>& position, const double* const pose, const math::se3<double>& imu_on_body);
 
         void compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const;
 

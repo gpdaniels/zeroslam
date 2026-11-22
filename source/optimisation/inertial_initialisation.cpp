@@ -220,7 +220,7 @@ namespace optimisation {
         const double linear_scale = linear ? solution[(3 * count) + 3] : 0.0;
         if (linear && (linear_scale > 0.0) && math::isfinite(linear_scale) && (linear_gravity.get_length_squared() > 0.0)) {
             outcome.linear_scale = linear_scale;
-            scale = linear_scale;
+            scale = settings.fixed_scale ? 1.0 : linear_scale;
             direction = inertial_initialisation::rotation_from_down(linear_gravity);
             for (size_t k = 0; k < count; ++k) {
                 velocities[k] = { { solution[3 * k], solution[(3 * k) + 1], solution[(3 * k) + 2] } };
@@ -250,7 +250,9 @@ namespace optimisation {
             }
             optimisation::vertex* const bias_vertex = graph.add_vertex(make_vertex_bias(bias));
             optimisation::vertex* const direction_vertex = graph.add_vertex(make_vertex_direction(direction));
-            optimisation::vertex* const scale_vertex = graph.add_vertex(make_vertex_scale(scale));
+            optimisation::vertex scale_node = make_vertex_scale(scale);
+            scale_node.set_fixed(settings.fixed_scale);
+            optimisation::vertex* const scale_vertex = graph.add_vertex(static_cast<optimisation::vertex&&>(scale_node));
             std::vector<optimisation::edge*> inertial_edges;
             for (size_t k = 0; k + 1 < count; ++k) {
                 optimisation::edge factor{ optimisation::edges::inertial_gravity_scale(gravity_magnitude, body_from_imu) };
@@ -321,6 +323,14 @@ namespace optimisation {
             for (size_t i = 0; i < 6; ++i) {
                 information[((bias_offset + i) * static_cast<size_t>(size)) + bias_offset + i] += prior_information[i][i];
             }
+            if (settings.fixed_scale) {
+                // A held scale is known: its row stands alone.
+                for (size_t i = 0; i < static_cast<size_t>(size); ++i) {
+                    information[(scale_offset * static_cast<size_t>(size)) + i] = 0.0;
+                    information[(i * static_cast<size_t>(size)) + scale_offset] = 0.0;
+                }
+                information[(scale_offset * static_cast<size_t>(size)) + scale_offset] = 1.0;
+            }
             outcome.scale_deviation = math::inf<double>();
             outcome.gravity_deviation = math::inf<double>();
             std::vector<double> factor_lower(static_cast<size_t>(size * size), 0.0);
@@ -337,7 +347,7 @@ namespace optimisation {
                     }
                 }
                 if (inverted) {
-                    outcome.scale_deviation = math::sqrt(math::max(covariance[2][2], 0.0));
+                    outcome.scale_deviation = settings.fixed_scale ? 0.0 : math::sqrt(math::max(covariance[2][2], 0.0));
                     // The larger eigenvalue of the direction's 2x2 block.
                     const double mean = 0.5 * (covariance[0][0] + covariance[1][1]);
                     const double difference = 0.5 * (covariance[0][0] - covariance[1][1]);

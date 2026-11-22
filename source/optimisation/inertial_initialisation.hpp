@@ -69,6 +69,9 @@ namespace optimisation {
             // The largest standard deviations of the log scale and of gravity's direction (rad) for the estimate to be observable.
             double maximum_scale_deviation = 0.05;
             double maximum_gravity_deviation = 0.035;
+            // Whether the map is metric already, as a stereo rig's is: the scale is then held at one, and only gravity, the
+            // velocities and the biases are estimated.
+            bool fixed_scale = false;
         };
 
         class result final {

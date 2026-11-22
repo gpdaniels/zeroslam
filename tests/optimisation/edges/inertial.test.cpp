@@ -23,6 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/edges/reprojection.hpp"
 #include "optimisation/factor_graph.hpp"
 #include "optimisation/vertex.hpp"
+#include "optimisation/vertices/extrinsic.hpp"
 #include "optimisation/vertices/imu_bias.hpp"
 #include "optimisation/vertices/point.hpp"
 #include "optimisation/vertices/pose.hpp"
@@ -225,6 +226,40 @@ int main(int argc, char* argv[]) {
             for (size_t r = 0; r < 9; ++r) {
                 for (size_t c = 0; c < analytic.cols(); ++c) {
                     REQUIRE(std::abs(analytic[r][c] - numeric[r][c]) < 1e-6 * (1.0 + std::abs(numeric[r][c])));
+                }
+            }
+        }
+
+        // With the imu's place on the body an extrinsic vertex instead, the residual is the same at the same transform, and the
+        // jacobians, the extrinsic's among them, agree with central differences with the extrinsic moved off.
+        {
+            optimisation::vertex extrinsic{ optimisation::vertices::extrinsic() };
+            double extrinsic_parameters[optimisation::vertices::extrinsic::parameter_count];
+            optimisation::vertices::extrinsic::to_parameters(body_from_imu, extrinsic_parameters);
+            REQUIRE(extrinsic.set_parameters(&extrinsic_parameters[0], optimisation::vertices::extrinsic::parameter_count));
+            optimisation::edge with_extrinsic{ optimisation::edges::inertial(gravity, math::se3<double>::identity(), true) };
+            REQUIRE(with_extrinsic.required_vertices() == 6);
+            with_extrinsic.set_observation(edge.get_observation());
+            optimisation::vertex* const nodes[6] = { &first_pose, &first_velocity, &bias, &second_pose, &second_velocity, &extrinsic };
+            for (optimisation::vertex* const node : nodes) {
+                REQUIRE(with_extrinsic.add_vertex(node));
+            }
+            with_extrinsic.compute_residual();
+            for (size_t i = 0; i < 9; ++i) {
+                REQUIRE(std::abs(with_extrinsic.get_residual()[i][0] - edge.get_residual()[i][0]) < 1e-12);
+            }
+            const double extrinsic_moved[6] = { 0.02, -0.03, 0.01, 0.01, 0.02, -0.015 };
+            extrinsic.plus(&extrinsic_moved[0]);
+            with_extrinsic.compute_residual();
+            with_extrinsic.compute_jacobians();
+            for (int slot = 0; slot < 6; ++slot) {
+                const math::matrix<double, 0, 0>& analytic = with_extrinsic.get_jacobians()[static_cast<size_t>(slot)];
+                const math::matrix<double, 0, 0> numeric = numeric_jacobian(with_extrinsic, slot);
+                REQUIRE(analytic.cols() == numeric.cols());
+                for (size_t r = 0; r < 9; ++r) {
+                    for (size_t c = 0; c < analytic.cols(); ++c) {
+                        REQUIRE(std::abs(analytic[r][c] - numeric[r][c]) < 1e-6 * (1.0 + std::abs(numeric[r][c])));
+                    }
                 }
             }
         }

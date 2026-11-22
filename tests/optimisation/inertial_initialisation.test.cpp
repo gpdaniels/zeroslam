@@ -193,6 +193,23 @@ int main(int argc, char* argv[]) {
         REQUIRE(again.scale_deviation == free.scale_deviation);
     }
 
+    // A metric map, a stereo rig's, keeps its scale: only gravity, the velocities and the biases are estimated.
+    {
+        const window keyframes = make_window(trajectory, recording, parameters, body_from_imu, map_from_gravity, 1.0, 1.0, 0.25, 13);
+        optimisation::inertial_initialisation::options options;
+        options.body_from_imu = body_from_imu;
+        options.fixed_scale = true;
+        const optimisation::inertial_initialisation::result metric = optimisation::inertial_initialisation::estimate(keyframes.poses, keyframes.preintegrations, options);
+        REQUIRE(metric.success);
+        REQUIRE(metric.observable);
+        REQUIRE(metric.scale == 1.0);
+        REQUIRE(metric.scale_deviation == 0.0);
+        REQUIRE(angle_between(metric.gravity, true_gravity) < 0.01);
+        for (size_t i = 0; i < 3; ++i) {
+            REQUIRE(std::abs(metric.bias.gyroscope[i] - true_bias.gyroscope[i]) < 2e-3);
+        }
+    }
+
     // A platform that barely moves holds neither the scale nor gravity's direction: the estimate is not observable.
     {
         simulation::imu_trajectory::options still_options;

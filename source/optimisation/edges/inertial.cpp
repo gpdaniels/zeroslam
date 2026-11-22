@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/edges/inertial.hpp"
 
 #include "core/assert.hpp"
+#include "optimisation/vertices/extrinsic.hpp"
 
 namespace {
     math::matrix<double, 3, 3> skew(const math::matrix<double, 3, 1>& vector) {
@@ -66,9 +67,14 @@ namespace optimisation::edges {
         return result;
     }
 
-    inertial::inertial(const math::matrix<double, 3, 1>& gravity_world, const math::se3<double>& imu_on_body)
+    inertial::inertial(const math::matrix<double, 3, 1>& gravity_world, const math::se3<double>& imu_on_body, const bool with_extrinsic_vertex)
         : gravity(gravity_world)
-        , body_from_imu(imu_on_body) {
+        , body_from_imu(imu_on_body)
+        , extrinsic_vertex(with_extrinsic_vertex) {
+    }
+
+    int inertial::get_vertex_count() const {
+        return this->extrinsic_vertex ? (inertial::vertex_count + 1) : inertial::vertex_count;
     }
 
     math::matrix<double, 0, 0> inertial::observation(const sensor::imu::preintegration& preintegration) {
@@ -203,10 +209,28 @@ namespace optimisation::edges {
         return result;
     }
 
+    math::matrix<double, 9, 6> inertial::extrinsic_jacobian(const math::matrix<double, 9, 3>& rotation, const math::matrix<double, 9, 3>& position, const double* const pose, const math::se3<double>& imu_on_body) {
+        // The update exp((phi, rho)) * T_bi turns the imu on the body to Exp(phi) R_bi and moves it to p_bi + phi x p_bi + rho at
+        // first order: the imu turns by R_bi^T phi on its right, and moves by R_wb (rho - [p_bi]x phi) in the world.
+        const math::matrix<double, 3, 3> world_from_body = math::transpose(pose_from_parameters(pose).rotation().get_matrix());
+        const math::matrix<double, 3, 3> imu_from_body = math::transpose(imu_on_body.rotation().get_matrix());
+        const math::matrix<double, 9, 3> turn = (rotation * imu_from_body) - (position * (world_from_body * skew(imu_on_body.translation())));
+        const math::matrix<double, 9, 3> move = position * world_from_body;
+        math::matrix<double, 9, 6> result;
+        for (size_t r = 0; r < 9; ++r) {
+            for (size_t c = 0; c < 3; ++c) {
+                result[r][c] = turn[r][c];
+                result[r][3 + c] = move[r][c];
+            }
+        }
+        return result;
+    }
+
     void inertial::compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const {
         const measurement preintegrated = measurement::from_observation(context.get_observation());
-        const sensor::imu::preintegration::state first = inertial::imu_state(context.get_vertex(0)->get_parameters(), context.get_vertex(1)->get_parameters(), this->body_from_imu);
-        const sensor::imu::preintegration::state second = inertial::imu_state(context.get_vertex(3)->get_parameters(), context.get_vertex(4)->get_parameters(), this->body_from_imu);
+        const math::se3<double> imu_on_body = this->extrinsic_vertex ? optimisation::vertices::extrinsic::from_parameters(context.get_vertex(5)->get_parameters()) : this->body_from_imu;
+        const sensor::imu::preintegration::state first = inertial::imu_state(context.get_vertex(0)->get_parameters(), context.get_vertex(1)->get_parameters(), imu_on_body);
+        const sensor::imu::preintegration::state second = inertial::imu_state(context.get_vertex(3)->get_parameters(), context.get_vertex(4)->get_parameters(), imu_on_body);
         const double* const bias_parameters = context.get_vertex(2)->get_parameters();
         sensor::imu::bias estimate;
         estimate.gyroscope = { { bias_parameters[0], bias_parameters[1], bias_parameters[2] } };
@@ -222,8 +246,9 @@ namespace optimisation::edges {
         const measurement preintegrated = measurement::from_observation(context.get_observation());
         const double* const first_pose = context.get_vertex(0)->get_parameters();
         const double* const second_pose = context.get_vertex(3)->get_parameters();
-        const sensor::imu::preintegration::state first = inertial::imu_state(first_pose, context.get_vertex(1)->get_parameters(), this->body_from_imu);
-        const sensor::imu::preintegration::state second = inertial::imu_state(second_pose, context.get_vertex(4)->get_parameters(), this->body_from_imu);
+        const math::se3<double> imu_on_body = this->extrinsic_vertex ? optimisation::vertices::extrinsic::from_parameters(context.get_vertex(5)->get_parameters()) : this->body_from_imu;
+        const sensor::imu::preintegration::state first = inertial::imu_state(first_pose, context.get_vertex(1)->get_parameters(), imu_on_body);
+        const sensor::imu::preintegration::state second = inertial::imu_state(second_pose, context.get_vertex(4)->get_parameters(), imu_on_body);
         const double* const bias_parameters = context.get_vertex(2)->get_parameters();
         sensor::imu::bias estimate;
         estimate.gyroscope = { { bias_parameters[0], bias_parameters[1], bias_parameters[2] } };
@@ -231,12 +256,16 @@ namespace optimisation::edges {
         double values[9];
         state_jacobians blocks;
         inertial::evaluate(preintegrated, first, second, estimate, this->gravity, &values[0], &blocks);
-        const math::matrix<double, 9, 6> first_pose_jacobian = inertial::pose_jacobian(blocks.rotation_i, blocks.position_i, first_pose, this->body_from_imu);
-        const math::matrix<double, 9, 6> second_pose_jacobian = inertial::pose_jacobian(blocks.rotation_j, blocks.position_j, second_pose, this->body_from_imu);
+        const math::matrix<double, 9, 6> first_pose_jacobian = inertial::pose_jacobian(blocks.rotation_i, blocks.position_i, first_pose, imu_on_body);
+        const math::matrix<double, 9, 6> second_pose_jacobian = inertial::pose_jacobian(blocks.rotation_j, blocks.position_j, second_pose, imu_on_body);
         edge::set_jacobian(jacobians[0], 9, 6, first_pose_jacobian.data());
         edge::set_jacobian(jacobians[1], 9, 3, blocks.velocity_i.data());
         edge::set_jacobian(jacobians[2], 9, 6, blocks.bias.data());
         edge::set_jacobian(jacobians[3], 9, 6, second_pose_jacobian.data());
         edge::set_jacobian(jacobians[4], 9, 3, blocks.velocity_j.data());
+        if (this->extrinsic_vertex) {
+            const math::matrix<double, 9, 6> extrinsic = inertial::extrinsic_jacobian(blocks.rotation_i, blocks.position_i, first_pose, imu_on_body) + inertial::extrinsic_jacobian(blocks.rotation_j, blocks.position_j, second_pose, imu_on_body);
+            edge::set_jacobian(jacobians[5], 9, 6, extrinsic.data());
+        }
     }
 }
