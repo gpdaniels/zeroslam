@@ -153,12 +153,38 @@ namespace optimisation {
             }
         }
 
+        // The residual of a depth, the measured inverse depth less w / m(q) of the homogeneous point (q, w), where w is the
+        // landmark's inverse depth, which no transform changes, and the jacobian of the prediction by q in the first row (the
+        // second is zero), with its derivative by w apart; a point at or behind the camera gives the measured inverse depth
+        // and no jacobian.
+        void project_depth(const relative_bundle_adjustment::observation& measured, const double (&point)[4], double (&residual)[2], double (&jacobian)[2][3], double& by_inverse_depth) {
+            const double length = math::sqrt((point[0] * point[0]) + (point[1] * point[1]) + (point[2] * point[2]));
+            const double measure = measured.radial ? length : point[2];
+            for (size_t row = 0; row < 2; ++row) {
+                for (size_t column = 0; column < 3; ++column) {
+                    jacobian[row][column] = 0.0;
+                }
+            }
+            residual[1] = 0.0;
+            by_inverse_depth = 0.0;
+            if (!(measure > 1.0e-9)) {
+                residual[0] = 1.0 / measured.depth;
+                return;
+            }
+            residual[0] = (1.0 / measured.depth) - (point[3] / measure);
+            const double factor = -point[3] / (measure * measure);
+            for (size_t column = 0; column < 3; ++column) {
+                jacobian[0][column] = measured.radial ? (factor * point[column] / length) : ((column == 2) ? factor : 0.0);
+            }
+            by_inverse_depth = 1.0 / measure;
+        }
+
         // The residual of one observation, the jacobian of its prediction by each step's transform into scratch.steps, and
         // by the landmark. A transform is updated as T * exp(delta), and exp(delta) moves a homogeneous point (Y, w) by
         // G(Y, w) * delta with G = [-[Y]x, w * I, Y]. So a forward step moves the point by P_(a+1) * G(v_(a+1)) * delta, where
         // v_(a+1) is the point entering the step and P_(a+1) the matrix of the chain up to and including it, and an inverse
         // step, (T * exp(delta))^-1 = exp(-delta) * T^-1, by -P_a * G(v_a) * delta with v_a the point leaving it.
-        void linearise_observation(const relative_bundle_adjustment& problem, const relative_bundle_adjustment::observation& measured, workspace& scratch, double (&residual)[2], double (&landmark_jacobian)[2][3]) {
+        void linearise_observation(const relative_bundle_adjustment& problem, const relative_bundle_adjustment::observation& measured, workspace& scratch, double (&residual)[2], double (&landmark_jacobian)[2][3], const bool depth = false) {
             const size_t steps = measured.path.size();
             scratch.suffix.resize(4 * (steps + 1));
             scratch.prefix.resize(9 * (steps + 1));
@@ -206,7 +232,13 @@ namespace optimisation {
             }
 
             double projection[2][3];
-            project(problem.cameras[static_cast<size_t>(measured.camera)], measured, current, residual, projection);
+            double by_inverse_depth = 0.0;
+            if (depth) {
+                project_depth(measured, current, residual, projection, by_inverse_depth);
+            }
+            else {
+                project(problem.cameras[static_cast<size_t>(measured.camera)], measured, current, residual, projection);
+            }
 
             for (size_t a = 0; a < steps; ++a) {
                 const bool inverse = measured.path[a].inverse;
@@ -240,6 +272,7 @@ namespace optimisation {
                 }
                 landmark_jacobian[row][2] = (projection[row][0] * origin[0]) + (projection[row][1] * origin[1]) + (projection[row][2] * origin[2]);
             }
+            landmark_jacobian[0][2] += by_inverse_depth;
         }
 
         double observation_cost(const relative_bundle_adjustment& problem, const relative_bundle_adjustment::observation& measured, const loss& robust, const workspace& scratch) {
@@ -252,7 +285,17 @@ namespace optimisation {
             math::matrix<double, 3, 1> rho = math::matrix<double, 3, 1>::zero();
             // An observation without a finite residual costs as one a thousand sigma out, which no step is drawn by.
             robust.compute(math::isfinite(chi2) ? chi2 : 1.0e6, rho);
-            return rho[0];
+            if (!(measured.depth > 0.0)) {
+                return rho[0];
+            }
+            double depth_jacobian[2][3];
+            double by_inverse_depth = 0.0;
+            project_depth(measured, point, residual, depth_jacobian, by_inverse_depth);
+            const double depth_chi2 = (residual[0] * residual[0]) / (measured.depth_sigma * measured.depth_sigma);
+            math::matrix<double, 3, 1> depth_rho = math::matrix<double, 3, 1>::zero();
+            const loss depth_robust{ losses::huber(relative_bundle_adjustment::depth_huber) };
+            depth_robust.compute(math::isfinite(depth_chi2) ? depth_chi2 : 1.0e6, depth_rho);
+            return rho[0] + depth_rho[0];
         }
 
         double total_cost(const relative_bundle_adjustment& problem, const loss& robust, workspace& scratch) {
@@ -301,6 +344,39 @@ namespace optimisation {
                 landmark_jacobian[row][column] = landmark_values[row][column];
             }
         }
+    }
+
+    void relative_bundle_adjustment::linearise_depth(const observation& measured, double (&residual)[2], std::vector<math::matrix<double, 2, 7>>& step_jacobians, math::matrix<double, 2, 3>& landmark_jacobian) const {
+        workspace scratch;
+        prepare(*this, scratch);
+        double landmark_values[2][3];
+        linearise_observation(*this, measured, scratch, residual, landmark_values, true);
+        step_jacobians.resize(measured.path.size());
+        for (size_t a = 0; a < measured.path.size(); ++a) {
+            for (size_t row = 0; row < 2; ++row) {
+                for (size_t column = 0; column < 7; ++column) {
+                    step_jacobians[a][row][column] = scratch.steps[(14 * a) + (7 * row) + column];
+                }
+            }
+        }
+        for (size_t row = 0; row < 2; ++row) {
+            for (size_t column = 0; column < 3; ++column) {
+                landmark_jacobian[row][column] = landmark_values[row][column];
+            }
+        }
+    }
+
+    bool relative_bundle_adjustment::predict_inverse_depth(const observation& measured, double& inverse_depth) const {
+        workspace scratch;
+        prepare(*this, scratch);
+        double point[4];
+        chain(*this, measured, scratch, point);
+        const double measure = measured.radial ? math::sqrt((point[0] * point[0]) + (point[1] * point[1]) + (point[2] * point[2])) : point[2];
+        if (!(measure > 1.0e-9)) {
+            return false;
+        }
+        inverse_depth = point[3] / measure;
+        return true;
     }
 
     double relative_bundle_adjustment::cost(const double huber_delta) const {
@@ -377,10 +453,17 @@ namespace optimisation {
             }
 
             prepare(*this, scratch);
-            for (const observation& measured : this->observations) {
+            const loss depth_robust{ losses::huber(relative_bundle_adjustment::depth_huber) };
+            for (size_t term = 0; term < 2 * this->observations.size(); ++term) {
+                // Each observation is its reprojection, then its depth when it has one, with a zero second row.
+                const observation& measured = this->observations[term / 2];
+                const bool depth_term = (term % 2) == 1;
+                if (depth_term && !(measured.depth > 0.0)) {
+                    continue;
+                }
                 double residual[2];
                 double landmark_jacobian[2][3];
-                linearise_observation(*this, measured, scratch, residual, landmark_jacobian);
+                linearise_observation(*this, measured, scratch, residual, landmark_jacobian, depth_term);
                 // A point at the camera's plane, or past where its distortion is defined, gives no usable linearisation.
                 bool finite = math::isfinite(residual[0]) && math::isfinite(residual[1]);
                 for (size_t index = 0; finite && (index < 14 * measured.path.size()); ++index) {
@@ -392,10 +475,10 @@ namespace optimisation {
                 if (!finite) {
                     continue;
                 }
-                const double sigma_squared = measured.sigma * measured.sigma;
+                const double sigma_squared = depth_term ? (measured.depth_sigma * measured.depth_sigma) : (measured.sigma * measured.sigma);
                 const double chi2 = ((residual[0] * residual[0]) + (residual[1] * residual[1])) / sigma_squared;
                 math::matrix<double, 3, 1> rho = math::matrix<double, 3, 1>::zero();
-                robust.compute(chi2, rho);
+                (depth_term ? depth_robust : robust).compute(chi2, rho);
                 const double weight = rho[1] / sigma_squared;
 
                 // Each active transform's jacobian, summed over the steps it appears in.

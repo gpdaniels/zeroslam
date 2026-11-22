@@ -23,6 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "math/matrix.hpp"
 #include "optimisation/edge.hpp"
 #include "optimisation/loss.hpp"
+#include "optimisation/relative_bundle_adjustment.hpp"
 #include "optimisation/vertex.hpp"
 
 namespace mapping {
@@ -61,6 +62,9 @@ namespace mapping {
 
         // Whether a measured depth agrees with where the frame's pose puts the landmark, within the bound on the inverse depths.
         static bool agrees(const mapping::frame& frame, const mapping::point& landmark, const double depth);
+
+        // Gives an observation of the relative adjustment the measured depth, with the inverse depth's deviation.
+        static void relative_observation(const mapping::frame& frame, const double depth, optimisation::relative_bundle_adjustment::observation& measured);
 
         // The world point a depth measured at an image position puts a landmark at, through the frame's camera and pose.
         static bool location(const mapping::frame& frame, const double x, const double y, const double depth, math::matrix<double, 3, 1>& world, double& axial_depth);

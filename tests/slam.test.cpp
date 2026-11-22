@@ -982,16 +982,9 @@ static void test_rgbd(const int width, const int height, const math::matrix<doub
     std::fprintf(stdout, "RGB-D room (%s): %zu of %zu frames posed, error rms %.4f m and worst %.4f m over %.2f m travelled (%.4f of it estimated), %zu landmarks from depth, %zu loops.\n", (adjustment == mapping::frame::settings::adjustment_kind::relative) ? "relative" : "absolute", posed, trajectory.size(), rms, worst, travelled, travelled_estimated / travelled, system.landmarks_from_depth, system.verified_loops.size());
     std::fflush(stdout);
     REQUIRE(posed == trajectory.size());
-    if (adjustment == mapping::frame::settings::adjustment_kind::absolute) {
-        REQUIRE(rms < 0.04);
-        REQUIRE(worst < 0.2);
-        REQUIRE(std::abs((travelled_estimated / travelled) - 1.0) < 0.02);
-    }
-    else {
-        // The relative adjustment takes no depth factors (see README "Depth cameras"), so only the depths that start the map,
-        // make its landmarks and refine its poses hold the scale between the loop and the final adjustment.
-        REQUIRE(std::abs((travelled_estimated / travelled) - 1.0) < 0.2);
-    }
+    REQUIRE(rms < 0.04);
+    REQUIRE(worst < 0.2);
+    REQUIRE(std::abs((travelled_estimated / travelled) - 1.0) < 0.02);
 }
 
 static void test_relocalisation(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {

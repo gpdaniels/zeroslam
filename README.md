@@ -207,7 +207,7 @@ Depth frames have timestamps that increase among their own, and a camera frame t
 With a depth camera the map has metric scale (the property a stereo rig gives it too): it starts from the first frame with depth at 100 or more of its tracks, with no second view, and its landmarks take their depths from the keyframes' depth images (and are triangulated where there is no depth, as beyond the range).
 Each observation's depth is a factor in the adjustments beside its reprojection, the difference of the measured and predicted inverse depths weighted by the noise model, with a robust loss of its own, so that a depth off at an occluding edge loses its weight without the bearing; a depth beside a jump of more than 5% in the depth image is not taken, and one that disagrees with the adjusted map is dropped.
 The frames' poses are refined with their depths too, no baseline holds the scale, and a loop is a rigid motion rather than a similarity.
-With `adjustment=relative` the depths start the map, make the landmarks and refine the poses, and loops are rigid links, but the relative adjustment takes no depth factors: only the final global adjustment does, and the map drifts further.
+With `adjustment=relative` the relative adjustment takes each observation's depth as a residual beside its reprojection the same way, holds no length prior for the scale, and joins a loop by a rigid link.
 A scene's depth camera is a `mono16` (millimetres) or `32FC1` (metres) image topic `/sensor/depth_[01-99]` registered to `image_01`, which the importers store at the times of its frames.
 A depth camera in a rig of several cameras, and depth registered to a camera through an extrinsic, are not taken yet.
 

@@ -81,6 +81,12 @@ namespace mapping {
         }
     }
 
+    void depth_factor::relative_observation(const mapping::frame& frame, const double depth, optimisation::relative_bundle_adjustment::observation& measured) {
+        measured.depth = depth;
+        measured.depth_sigma = frame.depth.inverse_sigma(depth);
+        measured.radial = frame.depth.get_settings().measure == sensor::depth::measure_kind::radial;
+    }
+
     bool depth_factor::predicted(const mapping::frame& frame, const mapping::point& landmark, double& value) {
         if (landmark.at_infinity()) {
             return false;
