@@ -94,6 +94,7 @@ typedef enum zeroslam_sensor_enum {
     zeroslam_sensor_remote_bearing = 0x00000200,
     zeroslam_sensor_remote_description = 0x00000400,
     zeroslam_sensor_camera = 0x00000800,
+    zeroslam_sensor_wheel_odometry = 0x00008000,
     zeroslam_sensor_invalid = -1
 } zeroslam_sensor_enum;
 ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_enum) == 4, "For ABI compatibility the sizeof(zeroslam_sensor_enum) must be 4 bytes.")
@@ -118,6 +119,8 @@ static inline const char* zeroslam_sensor_enum_to_string(zeroslam_sensor_enum se
             return "remote description";
         case zeroslam_sensor_camera:
             return "camera";
+        case zeroslam_sensor_wheel_odometry:
+            return "wheel odometry";
         case zeroslam_sensor_invalid:
             return "invalid";
     }
@@ -240,6 +243,43 @@ typedef struct zeroslam_sensor_extrinsics_struct {
 } zeroslam_sensor_extrinsics_struct;
 ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_extrinsics_struct) == 64, "For ABI compatibility the sizeof(zeroslam_sensor_extrinsics_struct) must be 64 bytes.")
 
+// Wheel odometry, a rig entry of type zeroslam_sensor_wheel_odometry beside the cameras with these parameters, its extrinsic the
+// odometry frame's pose on the body (x forward, z up, the origin the rear axle's centre or the drive axle's middle) given with
+// zeroslam_set_sensor_extrinsics. Its samples are zeroslam_set_sensor_data entries of three doubles: the cumulative rotation in
+// radians of the measured wheel (Ackermann) or the left wheel (differential drive), of the right wheel, and the steering reading.
+typedef enum zeroslam_odometry_model_enum {
+    zeroslam_odometry_ackermann_rear_axle = 0,
+    zeroslam_odometry_ackermann_front_wheel = 1,
+    zeroslam_odometry_differential_drive = 2
+} zeroslam_odometry_model_enum;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_odometry_model_enum) == 4, "For ABI compatibility the sizeof(zeroslam_odometry_model_enum) must be 4 bytes.")
+
+// The model (a zeroslam_odometry_model_enum) and its calibration: an Ackermann vehicle's wheel radius, wheelbase, steering gain
+// and steering offset (steering angle = gain * reading + offset), or a differential drive's left and right wheel radii and track
+// width, in metres and radians; bit i of free_mask refines parameter i, with a prior of parameter_deviations[i] (zero for
+// none). The noise is the wheel slip, the steering reading, the lateral slip, the heading, the height and the tilt, as standard
+// deviations per square root metre but the steering's per reading, then the least translation and rotation of any interval.
+// The extrinsic's prior deviations are its rotation then its translation about the odometry frame's axes, zero for none: planar
+// motion leaves the height above the plane, the last, unobservable, so refining the extrinsic wants a tight one there.
+typedef struct zeroslam_sensor_parameters_wheel_odometry_struct {
+    int model;
+    int free_mask;
+    double parameters[8];
+    double parameter_deviations[8];
+    double noise[8];
+    double extrinsic_deviations[6];
+} zeroslam_sensor_parameters_wheel_odometry_struct;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_parameters_wheel_odometry_struct) == 248, "For ABI compatibility the sizeof(zeroslam_sensor_parameters_wheel_odometry_struct) must be 248 bytes.")
+
+// The odometer's calibration as the system holds it, refined where asked for, and its extrinsic as zeroslam_sensor_extrinsics_struct.
+typedef struct zeroslam_odometry_calibration_struct {
+    int sensor_id;
+    int parameters_length;
+    double parameters[8];
+    double pose[7];
+} zeroslam_odometry_calibration_struct;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_odometry_calibration_struct) == 128, "For ABI compatibility the sizeof(zeroslam_odometry_calibration_struct) must be 128 bytes.")
+
 typedef struct zeroslam_sensor_data_struct {
     long long int timestamp;
     int sensor_id;
@@ -356,6 +396,9 @@ ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sens
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_sensor_extrinsics(zeroslam_system* system, zeroslam_sensor_extrinsics_struct* extrinsics, int* length);
 
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system* system, const zeroslam_sensor_data_struct* data, int length);
+
+// The wheel odometer's calibration and extrinsic as the system holds them; fails with invalid_rig_sensor without an odometer.
+ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_odometry_calibration(zeroslam_system* system, zeroslam_odometry_calibration_struct* calibration);
 
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_finalise(zeroslam_system* system);
 

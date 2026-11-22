@@ -45,6 +45,7 @@ class zeroslam_sensor_enum(_enum.IntEnum):
     zeroslam_sensor_remote_bearing = 0x00000200
     zeroslam_sensor_remote_description = 0x00000400
     zeroslam_sensor_camera = 0x00000800
+    zeroslam_sensor_wheel_odometry = 0x00008000
     zeroslam_sensor_invalid = -1
 
 
@@ -115,6 +116,31 @@ class zeroslam_sensor_extrinsics_struct(_ctypes.Structure):
     _fields_ = [
         ("sensor_id", _ctypes.c_int),
         ("refinement", _ctypes.c_int),
+        ("pose", _ctypes.c_double * 7)
+    ]
+
+class zeroslam_odometry_model_enum(_enum.IntEnum):
+    zeroslam_odometry_ackermann_rear_axle = 0
+    zeroslam_odometry_ackermann_front_wheel = 1
+    zeroslam_odometry_differential_drive = 2
+
+class zeroslam_sensor_parameters_wheel_odometry_struct(_ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("model", _ctypes.c_int),
+        ("free_mask", _ctypes.c_int),
+        ("parameters", _ctypes.c_double * 8),
+        ("parameter_deviations", _ctypes.c_double * 8),
+        ("noise", _ctypes.c_double * 8),
+        ("extrinsic_deviations", _ctypes.c_double * 6)
+    ]
+
+class zeroslam_odometry_calibration_struct(_ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("sensor_id", _ctypes.c_int),
+        ("parameters_length", _ctypes.c_int),
+        ("parameters", _ctypes.c_double * 8),
         ("pose", _ctypes.c_double * 7)
     ]
 
@@ -240,6 +266,8 @@ assert _ctypes.sizeof(zeroslam_sensor_parameters_camera_struct) == 104
 assert _ctypes.sizeof(zeroslam_sensor_parameters_camera_model_struct) == 272
 assert _ctypes.sizeof(zeroslam_sensor_rig_struct) == 12 + _ctypes.sizeof(_ctypes.c_void_p)
 assert _ctypes.sizeof(zeroslam_sensor_extrinsics_struct) == 64
+assert _ctypes.sizeof(zeroslam_sensor_parameters_wheel_odometry_struct) == 248
+assert _ctypes.sizeof(zeroslam_odometry_calibration_struct) == 128
 assert _ctypes.sizeof(zeroslam_sensor_data_struct) == 16 + _ctypes.sizeof(_ctypes.c_void_p)
 assert _ctypes.sizeof(zeroslam_pose_struct) == 456
 assert _ctypes.sizeof(zeroslam_point_struct) == 32
@@ -329,6 +357,11 @@ zeroslam_get_sensor_extrinsics = _wrap("zeroslam_get_sensor_extrinsics", [
     _ctypes.POINTER(zeroslam_system),
     _ctypes.POINTER(zeroslam_sensor_extrinsics_struct),
     _ctypes.POINTER(_ctypes.c_int)
+])
+
+zeroslam_get_odometry_calibration = _wrap("zeroslam_get_odometry_calibration", [
+    _ctypes.POINTER(zeroslam_system),
+    _ctypes.POINTER(zeroslam_odometry_calibration_struct)
 ])
 
 zeroslam_set_sensor_data = _wrap("zeroslam_set_sensor_data", [
@@ -430,6 +463,9 @@ class system:
     def get_sensor_extrinsics(self, extrinsics, length):
         return zeroslam_return_enum(zeroslam_get_sensor_extrinsics(self._handle, extrinsics, _ctypes.byref(length)))
 
+    def get_odometry_calibration(self, calibration):
+        return zeroslam_return_enum(zeroslam_get_odometry_calibration(self._handle, _ctypes.byref(calibration)))
+
     def set_sensor_data(self, data, length):
         return zeroslam_return_enum(zeroslam_set_sensor_data(self._handle, data, length))
 
@@ -471,6 +507,9 @@ __all__ = [
     "zeroslam_sensor_rig_struct",
     "zeroslam_extrinsic_enum",
     "zeroslam_sensor_extrinsics_struct",
+    "zeroslam_odometry_model_enum",
+    "zeroslam_sensor_parameters_wheel_odometry_struct",
+    "zeroslam_odometry_calibration_struct",
     "zeroslam_sensor_data_struct",
     "zeroslam_pose_struct",
     "zeroslam_point_struct",
@@ -491,6 +530,7 @@ __all__ = [
     "zeroslam_set_sensor_rig",
     "zeroslam_set_sensor_extrinsics",
     "zeroslam_get_sensor_extrinsics",
+    "zeroslam_get_odometry_calibration",
     "zeroslam_set_sensor_data",
     "zeroslam_finalise",
     "zeroslam_get_camera_calibration",

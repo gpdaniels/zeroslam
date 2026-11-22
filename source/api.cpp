@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "api.hpp"
 
+#include "api_odometry.hpp"
 #include "api_rig.hpp"
 #include "core/logger.hpp"
 #include "core/thread_pool.hpp"
@@ -62,6 +63,8 @@ struct zeroslam_system final {
     std::vector<camera_entry> cameras;
     // A rig of several cameras: their extrinsics and the frame that waits for the rest of its images (api_rig.hpp).
     api_rig rig;
+    // A wheel odometer among the rig's sensors (api_odometry.hpp).
+    api_odometry odometry;
 
     struct frame_record final {
         long long int timestamp;
@@ -985,10 +988,17 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_rig(zeroslam_system* 
         return zeroslam_return_failure_invalid_rig_sensor;
     }
     std::vector<zeroslam_system::camera_entry> cameras;
+    api_odometry odometry;
     for (int i = 0; i < length; ++i) {
         const zeroslam_sensor_rig_struct& entry = rig[i];
         if (entry.sensor_id == 0) {
             return zeroslam_return_failure_invalid_rig_sensor;
+        }
+        if (api_odometry::declares(entry)) {
+            if (!odometry.take(entry)) {
+                return zeroslam_return_failure_invalid_rig_sensor;
+            }
+            continue;
         }
         if (entry.type != zeroslam_sensor_camera) {
             return zeroslam_return_failure_invalid_rig_sensor;
@@ -1021,8 +1031,14 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_rig(zeroslam_system* 
     if (!api_rig::cameras_supported(cameras.size())) {
         return zeroslam_return_failure_invalid_rig_sensor;
     }
+    for (const zeroslam_system::camera_entry& camera : cameras) {
+        if (odometry.is_declared() && (camera.sensor_id == odometry.get_sensor_id())) {
+            return zeroslam_return_failure_invalid_rig_sensor;
+        }
+    }
     system->cameras.swap(cameras);
     system->rig.clear_extrinsics();
+    system->odometry = odometry;
     return zeroslam_return_success;
 }
 
@@ -1037,7 +1053,11 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_extrinsics(zeroslam_s
     for (const zeroslam_system::camera_entry& camera : system->cameras) {
         sensor_ids.push_back(camera.sensor_id);
     }
-    if (system->any_data || sensor_ids.empty() || !system->rig.set_extrinsics(extrinsics, length, sensor_ids)) {
+    std::vector<zeroslam_sensor_extrinsics_struct> camera_extrinsics;
+    if (system->any_data || sensor_ids.empty() || !system->odometry.take_extrinsics(extrinsics, length, camera_extrinsics)) {
+        return zeroslam_return_failure_invalid_rig_sensor;
+    }
+    if (!camera_extrinsics.empty() && !system->rig.set_extrinsics(camera_extrinsics.data(), static_cast<int>(camera_extrinsics.size()), sensor_ids)) {
         return zeroslam_return_failure_invalid_rig_sensor;
     }
     return zeroslam_return_success;
@@ -1065,6 +1085,16 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_sensor_extrinsics(zeroslam_s
     api_rig::fill_extrinsics(rig, extrinsics);
     *length = required;
     return zeroslam_return_success;
+}
+
+zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_odometry_calibration(zeroslam_system* system, zeroslam_odometry_calibration_struct* calibration) {
+    if (system == nullptr) {
+        return zeroslam_return_failure_invalid_system;
+    }
+    if (calibration == nullptr) {
+        return zeroslam_return_failure_invalid_argument;
+    }
+    return system->odometry.fill_calibration(system->slam_instance.reconstruction, calibration) ? zeroslam_return_success : zeroslam_return_failure_invalid_rig_sensor;
 }
 }
 
@@ -1096,7 +1126,7 @@ namespace {
             for (const zeroslam_system::camera_entry& camera : system->cameras) {
                 sensor_ids.push_back(camera.sensor_id);
             }
-            system->slam_instance.set_rig(system->rig.make_rig(sensor_ids));
+            system->slam_instance.set_rig(system->odometry.with_odometer(system->rig.make_rig(sensor_ids)));
         }
         system->any_data = true;
         for (int i = 0; i < length; ++i) {
@@ -1110,6 +1140,7 @@ namespace {
                 models.push_back(camera.intrinsics);
                 images.push_back(image::image(static_cast<size_t>(camera.height), static_cast<size_t>(camera.width), system->rig.pixels(index)));
             }
+            system->odometry.note_frame(system->slam_instance, system->rig.timestamp());
             system->slam_instance.process_rig_frame(models, images);
             system->frames.push_back({ system->rig.timestamp(), system->slam_instance.reconstruction.next_frame_id - 1 });
             system->latest_timestamp = system->rig.timestamp();
@@ -1126,6 +1157,19 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
     }
     if ((data == nullptr) || (length <= 0)) {
         return zeroslam_return_failure_invalid_argument;
+    }
+    if (system->odometry.is_declared() && !system->odometry.is_dispatching()) {
+        const auto camera_runs = [system](const zeroslam_sensor_data_struct* const run, const int count) {
+            return zeroslam_set_sensor_data(system, run, count);
+        };
+        const auto camera_rig = [system]() {
+            std::vector<int> sensor_ids;
+            for (const zeroslam_system::camera_entry& camera : system->cameras) {
+                sensor_ids.push_back(camera.sensor_id);
+            }
+            return system->rig.make_rig(sensor_ids);
+        };
+        return system->odometry.set_sensor_data(system->slam_instance, data, length, system->cameras.size() == 1, camera_runs, camera_rig);
     }
     if (system->cameras.size() > 1) {
         return set_rig_sensor_data(system, data, length);
@@ -1160,6 +1204,7 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
         const zeroslam_sensor_data_struct& entry = data[i];
         const zeroslam_system::camera_entry* const camera = cameras[static_cast<size_t>(i)];
         const image::image frame_image(static_cast<size_t>(camera->height), static_cast<size_t>(camera->width), static_cast<unsigned char*>(entry.measurement_data));
+        system->odometry.note_frame(system->slam_instance, entry.timestamp);
         system->slam_instance.process_frame(camera->intrinsics, frame_image);
         system->frames.push_back({ entry.timestamp, system->slam_instance.reconstruction.next_frame_id - 1 });
         system->latest_timestamp = entry.timestamp;
