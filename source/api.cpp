@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "api.hpp"
 
+#include "api_imu.hpp"
 #include "api_rig.hpp"
 #include "core/logger.hpp"
 #include "core/thread_pool.hpp"
@@ -62,6 +63,9 @@ struct zeroslam_system final {
     std::vector<camera_entry> cameras;
     // A rig of several cameras: their extrinsics and the frame that waits for the rest of its images (api_rig.hpp).
     api_rig rig;
+    // An imu of the rig (api_imu.hpp), whose samples go to the system between the cameras' frames.
+    api_imu imu;
+    bool imu_dispatching = false;
 
     struct frame_record final {
         long long int timestamp;
@@ -985,10 +989,18 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_rig(zeroslam_system* 
         return zeroslam_return_failure_invalid_rig_sensor;
     }
     std::vector<zeroslam_system::camera_entry> cameras;
+    const zeroslam_sensor_rig_struct* imu_entry = nullptr;
     for (int i = 0; i < length; ++i) {
         const zeroslam_sensor_rig_struct& entry = rig[i];
         if (entry.sensor_id == 0) {
             return zeroslam_return_failure_invalid_rig_sensor;
+        }
+        if (entry.type == zeroslam_sensor_imu) {
+            if ((imu_entry != nullptr) || !api_imu::accepts(entry)) {
+                return zeroslam_return_failure_invalid_rig_sensor;
+            }
+            imu_entry = &entry;
+            continue;
         }
         if (entry.type != zeroslam_sensor_camera) {
             return zeroslam_return_failure_invalid_rig_sensor;
@@ -1021,6 +1033,12 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_rig(zeroslam_system* 
     if (!api_rig::cameras_supported(cameras.size())) {
         return zeroslam_return_failure_invalid_rig_sensor;
     }
+    for (const zeroslam_system::camera_entry& camera : cameras) {
+        if ((imu_entry != nullptr) && (camera.sensor_id == imu_entry->sensor_id)) {
+            return zeroslam_return_failure_invalid_rig_sensor;
+        }
+    }
+    system->imu.declare(imu_entry);
     system->cameras.swap(cameras);
     system->rig.clear_extrinsics();
     return zeroslam_return_success;
@@ -1037,7 +1055,8 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_extrinsics(zeroslam_s
     for (const zeroslam_system::camera_entry& camera : system->cameras) {
         sensor_ids.push_back(camera.sensor_id);
     }
-    if (system->any_data || sensor_ids.empty() || !system->rig.set_extrinsics(extrinsics, length, sensor_ids)) {
+    std::vector<zeroslam_sensor_extrinsics_struct> camera_extrinsics;
+    if (system->any_data || sensor_ids.empty() || !system->imu.take_extrinsic(extrinsics, length, camera_extrinsics) || !system->rig.set_extrinsics(camera_extrinsics.data(), static_cast<int>(camera_extrinsics.size()), sensor_ids)) {
         return zeroslam_return_failure_invalid_rig_sensor;
     }
     return zeroslam_return_success;
@@ -1110,9 +1129,47 @@ namespace {
                 models.push_back(camera.intrinsics);
                 images.push_back(image::image(static_cast<size_t>(camera.height), static_cast<size_t>(camera.width), system->rig.pixels(index)));
             }
+            system->slam_instance.set_frame_timestamp(system->rig.timestamp());
             system->slam_instance.process_rig_frame(models, images);
             system->frames.push_back({ system->rig.timestamp(), system->slam_instance.reconstruction.next_frame_id - 1 });
             system->latest_timestamp = system->rig.timestamp();
+        }
+        return zeroslam_return_success;
+    }
+
+    // The data of a rig with an imu: the imu's samples reach the system as they come, between the cameras' frames, which go as
+    // they would without it. The rig, the imu among its sensors, is declared at the first data of either.
+    zeroslam_return_enum set_inertial_sensor_data(zeroslam_system* system, const zeroslam_sensor_data_struct* data, int length) {
+        if (!system->imu.accepts_samples(data, length)) {
+            return zeroslam_return_failure_invalid_sensor_data;
+        }
+        if (!system->any_data) {
+            std::vector<int> sensor_ids;
+            for (const zeroslam_system::camera_entry& camera : system->cameras) {
+                sensor_ids.push_back(camera.sensor_id);
+            }
+            system->slam_instance.set_rig(system->rig.make_rig(sensor_ids));
+            system->slam_instance.set_imu(system->imu.sensor_id(), system->imu.noise(), system->imu.body_from_imu(), system->imu.refined());
+            system->any_data = true;
+        }
+        int begin = 0;
+        while (begin < length) {
+            if (system->imu.owns(data[begin])) {
+                static_cast<void>(system->slam_instance.add_imu_sample(system->imu.take_sample(data[begin])));
+                ++begin;
+                continue;
+            }
+            int end = begin;
+            while ((end < length) && !system->imu.owns(data[end])) {
+                ++end;
+            }
+            system->imu_dispatching = true;
+            const zeroslam_return_enum result = zeroslam_set_sensor_data(system, data + begin, end - begin);
+            system->imu_dispatching = false;
+            if (result != zeroslam_return_success) {
+                return result;
+            }
+            begin = end;
         }
         return zeroslam_return_success;
     }
@@ -1126,6 +1183,9 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
     }
     if ((data == nullptr) || (length <= 0)) {
         return zeroslam_return_failure_invalid_argument;
+    }
+    if (system->imu.declared() && !system->imu_dispatching) {
+        return set_inertial_sensor_data(system, data, length);
     }
     if (system->cameras.size() > 1) {
         return set_rig_sensor_data(system, data, length);
@@ -1160,6 +1220,7 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
         const zeroslam_sensor_data_struct& entry = data[i];
         const zeroslam_system::camera_entry* const camera = cameras[static_cast<size_t>(i)];
         const image::image frame_image(static_cast<size_t>(camera->height), static_cast<size_t>(camera->width), static_cast<unsigned char*>(entry.measurement_data));
+        system->slam_instance.set_frame_timestamp(entry.timestamp);
         system->slam_instance.process_frame(camera->intrinsics, frame_image);
         system->frames.push_back({ entry.timestamp, system->slam_instance.reconstruction.next_frame_id - 1 });
         system->latest_timestamp = entry.timestamp;

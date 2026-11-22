@@ -199,6 +199,62 @@ def main():
     require(not system.is_valid(), "closed system is invalid")
     require(system.get_timestamp(timestamp) == zeroslam.zeroslam_return_enum.zeroslam_return_failure_invalid_system, "closed system rejects calls")
     print("destroy: on with block exit")
+
+    # A camera with an imu: the imu is a sensor of the rig with its noise model, posed on the body like a camera, and its samples go in
+    # with the frames in time order. This camera glides at a steady speed, so the imu measures no turn and only gravity's pull (the
+    # camera's y axis points down): it is taken in, and the system initialises it once the motion is excited enough.
+    with zeroslam.system() as inertial:
+        imu_id = 2
+        imu_parameters = zeroslam.zeroslam_sensor_parameters_imu_struct(1.6968e-04, 2.0e-03, 1.9393e-05, 3.0e-03, 200.0, 0.0, 0.0)
+        sensors = (zeroslam.zeroslam_sensor_rig_struct * 2)()
+        sensors[0] = rig
+        sensors[1].type = zeroslam.zeroslam_sensor_enum.zeroslam_sensor_imu
+        sensors[1].sensor_id = imu_id
+        sensors[1].parameters_length = ctypes.sizeof(imu_parameters)
+        sensors[1].parameters_data = ctypes.cast(ctypes.pointer(imu_parameters), ctypes.c_void_p)
+        result = inertial.set_sensor_rig(sensors[0], 2)
+        print("set_sensor_rig (camera and imu): {} (imu, id {})".format(result.name, imu_id))
+        require(result == success, "set_sensor_rig (camera and imu)")
+        placements = (zeroslam.zeroslam_sensor_extrinsics_struct * 2)()
+        placements[0] = extrinsic
+        placements[1].sensor_id = imu_id
+        placements[1].refinement = zeroslam.zeroslam_extrinsic_enum.zeroslam_extrinsic_fixed
+        placements[1].pose[0] = 0.05
+        placements[1].pose[6] = 1.0
+        result = inertial.set_sensor_extrinsics(placements[0], 2)
+        print("set_sensor_extrinsics (camera and imu): {} (imu 5 cm along the camera's x axis)".format(result.name))
+        require(result == success, "set_sensor_extrinsics (camera and imu)")
+        still = zeroslam.zeroslam_sensor_measurement_imu_struct()
+        still.linear_acceleration[1] = -9.81
+        imu_time = 1000000000 - 5000000
+        samples = 0
+        for frame_index in range(frame_count):
+            frame_time = 1000000000 + (frame_interval * frame_index)
+            entries = []
+            while imu_time + 5000000 <= frame_time:
+                imu_time += 5000000
+                sample = zeroslam.zeroslam_sensor_data_struct()
+                sample.timestamp = imu_time
+                sample.sensor_id = imu_id
+                sample.measurement_length = ctypes.sizeof(still)
+                sample.measurement_data = ctypes.cast(ctypes.pointer(still), ctypes.c_void_p)
+                entries.append(sample)
+                samples += 1
+            pixels = render_corridor(width, height, camera_parameters, 0.05 * frame_index)
+            buffer = (ctypes.c_ubyte * len(pixels)).from_buffer(pixels)
+            image = zeroslam.zeroslam_sensor_data_struct()
+            image.timestamp = frame_time
+            image.sensor_id = sensor_id
+            image.measurement_length = width * height
+            image.measurement_data = ctypes.cast(buffer, ctypes.c_void_p)
+            entries.append(image)
+            batch = (zeroslam.zeroslam_sensor_data_struct * len(entries))(*entries)
+            result = inertial.set_sensor_data(batch[0], len(entries))
+            require(result == success, "set_sensor_data (camera and imu)")
+        print("set_sensor_data (camera and imu): {} ({} frames, {} imu samples between them)".format(result.name, frame_count, samples))
+        pose = zeroslam.zeroslam_pose_struct()
+        require(inertial.get_pose(pose) == success, "get_pose (camera and imu)")
+        print("newest pose (camera and imu): timestamp {}, centre ({:.3f}, {:.3f}, {:.3f})".format(pose.timestamp, pose.pose[0], pose.pose[1], pose.pose[2]))
     return 0
 
 

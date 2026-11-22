@@ -378,5 +378,81 @@ int main(int argc, char* argv[]) {
         REQUIRE(result == zeroslam_return_success);
     }
 
+    {
+        /* A camera with an imu: the imu is a sensor of the rig with its noise model, posed on the body like a camera, and its samples go
+           in with the frames in time order. This camera glides at a steady speed, so the imu measures no turn and only gravity's pull
+           (the camera's y axis points down): it is taken in, and the system initialises it only once the motion is excited enough. */
+        result = zeroslam_create(&system);
+        REQUIRE(result == zeroslam_return_success);
+        zeroslam_sensor_parameters_imu_struct imu_parameters;
+        memset(&imu_parameters, 0, sizeof(imu_parameters));
+        imu_parameters.gyroscope_noise_density = 1.6968e-04;
+        imu_parameters.accelerometer_noise_density = 2.0e-03;
+        imu_parameters.gyroscope_random_walk = 1.9393e-05;
+        imu_parameters.accelerometer_random_walk = 3.0e-03;
+        imu_parameters.rate = 200.0;
+        const int imu_id = 2;
+        zeroslam_sensor_rig_struct sensors[2];
+        memset(&sensors[0], 0, sizeof(sensors));
+        sensors[0] = rig;
+        sensors[1].type = zeroslam_sensor_imu;
+        sensors[1].sensor_id = imu_id;
+        sensors[1].parameters_length = (int)sizeof(imu_parameters);
+        sensors[1].parameters_data = &imu_parameters;
+        result = zeroslam_set_sensor_rig(system, &sensors[0], 2);
+        printf("set_sensor_rig (camera and imu): %s (%s, id %d)\n", zeroslam_return_enum_to_string(result), zeroslam_sensor_enum_to_string(sensors[1].type), imu_id);
+        REQUIRE(result == zeroslam_return_success);
+        zeroslam_sensor_extrinsics_struct placements[2];
+        memset(&placements[0], 0, sizeof(placements));
+        placements[0] = extrinsic;
+        placements[1].sensor_id = imu_id;
+        placements[1].refinement = zeroslam_extrinsic_fixed;
+        placements[1].pose[0] = 0.05;
+        placements[1].pose[6] = 1.0;
+        result = zeroslam_set_sensor_extrinsics(system, &placements[0], 2);
+        printf("set_sensor_extrinsics (camera and imu): %s (imu 5 cm along the camera's x axis)\n", zeroslam_return_enum_to_string(result));
+        REQUIRE(result == zeroslam_return_success);
+        unsigned char* frame_pixels = (unsigned char*)malloc((size_t)(width * height));
+        REQUIRE(frame_pixels != NULL);
+        zeroslam_sensor_measurement_imu_struct still;
+        memset(&still, 0, sizeof(still));
+        still.linear_acceleration[1] = -9.81;
+        long long int imu_time = 1000000000ll - 5000000ll;
+        int samples = 0;
+        for (int frame_index = 0; frame_index < frame_count; ++frame_index) {
+            const long long int frame_time = 1000000000ll + (frame_interval * frame_index);
+            zeroslam_sensor_data_struct batch[16];
+            int batch_length = 0;
+            while ((imu_time + 5000000ll <= frame_time) && (batch_length < 15)) {
+                imu_time += 5000000ll;
+                memset(&batch[batch_length], 0, sizeof(batch[batch_length]));
+                batch[batch_length].timestamp = imu_time;
+                batch[batch_length].sensor_id = imu_id;
+                batch[batch_length].measurement_length = (int)sizeof(still);
+                batch[batch_length].measurement_data = &still;
+                ++batch_length;
+                ++samples;
+            }
+            render_corridor(frame_pixels, width, height, &camera_parameters, 0.05 * frame_index);
+            memset(&batch[batch_length], 0, sizeof(batch[batch_length]));
+            batch[batch_length].timestamp = frame_time;
+            batch[batch_length].sensor_id = sensor_id;
+            batch[batch_length].measurement_length = width * height;
+            batch[batch_length].measurement_data = frame_pixels;
+            ++batch_length;
+            result = zeroslam_set_sensor_data(system, &batch[0], batch_length);
+            REQUIRE(result == zeroslam_return_success);
+        }
+        free(frame_pixels);
+        printf("set_sensor_data (camera and imu): %s (%d frames, %d imu samples between them)\n", zeroslam_return_enum_to_string(result), frame_count, samples);
+        zeroslam_pose_struct pose;
+        memset(&pose, 0, sizeof(pose));
+        result = zeroslam_get_pose(system, &pose);
+        REQUIRE(result == zeroslam_return_success);
+        print_pose("newest pose (camera and imu)", &pose);
+        result = zeroslam_destroy(&system);
+        REQUIRE(result == zeroslam_return_success);
+    }
+
     return EXIT_SUCCESS;
 }

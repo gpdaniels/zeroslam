@@ -45,6 +45,7 @@ class zeroslam_sensor_enum(_enum.IntEnum):
     zeroslam_sensor_remote_bearing = 0x00000200
     zeroslam_sensor_remote_description = 0x00000400
     zeroslam_sensor_camera = 0x00000800
+    zeroslam_sensor_imu = 0x00004000
     zeroslam_sensor_invalid = -1
 
 
@@ -95,6 +96,27 @@ class zeroslam_sensor_parameters_camera_model_struct(_ctypes.Structure):
         ("model", _ctypes.c_int),
         ("parameters_length", _ctypes.c_int),
         ("parameters", _ctypes.c_double * 32)
+    ]
+
+class zeroslam_sensor_parameters_imu_struct(_ctypes.Structure):
+    """An imu's noise densities, rate (Hz), gravity (m/s^2, 0 for 9.81) and clock offset from the cameras (s)."""
+    _pack_ = 1
+    _fields_ = [
+        ("gyroscope_noise_density", _ctypes.c_double),
+        ("accelerometer_noise_density", _ctypes.c_double),
+        ("gyroscope_random_walk", _ctypes.c_double),
+        ("accelerometer_random_walk", _ctypes.c_double),
+        ("rate", _ctypes.c_double),
+        ("gravity", _ctypes.c_double),
+        ("time_offset", _ctypes.c_double),
+    ]
+
+class zeroslam_sensor_measurement_imu_struct(_ctypes.Structure):
+    """One imu sample in its own frame: angular velocity (rad/s) and specific force (m/s^2)."""
+    _pack_ = 1
+    _fields_ = [
+        ("angular_velocity", _ctypes.c_double * 3),
+        ("linear_acceleration", _ctypes.c_double * 3),
     ]
 
 class zeroslam_sensor_rig_struct(_ctypes.Structure):
@@ -239,6 +261,8 @@ class zeroslam_map_edges_struct(_ctypes.Structure):
 assert _ctypes.sizeof(zeroslam_sensor_parameters_camera_struct) == 104
 assert _ctypes.sizeof(zeroslam_sensor_parameters_camera_model_struct) == 272
 assert _ctypes.sizeof(zeroslam_sensor_rig_struct) == 12 + _ctypes.sizeof(_ctypes.c_void_p)
+assert _ctypes.sizeof(zeroslam_sensor_parameters_imu_struct) == 56
+assert _ctypes.sizeof(zeroslam_sensor_measurement_imu_struct) == 48
 assert _ctypes.sizeof(zeroslam_sensor_extrinsics_struct) == 64
 assert _ctypes.sizeof(zeroslam_sensor_data_struct) == 16 + _ctypes.sizeof(_ctypes.c_void_p)
 assert _ctypes.sizeof(zeroslam_pose_struct) == 456
