@@ -1446,11 +1446,12 @@ static double aligned_centre_error(const slam& system, const std::vector<math::s
     return std::sqrt(error / spread_expected);
 }
 
-// The loop of test_loop_closure through a double sphere lens that sees 97 degrees either side of its axis: tracking, and the
-// trajectory against the truth, 0.7% of its spread off with inverse depth landmarks and 1.5% with xyz ones (the image plane
-// gates it once had, dropping every point behind it, gave 0.8% and 1.8%). Landmarks are observed behind the image plane of
-// the frame that sees them, through the camera's model: the inverse depth ones within 90 degrees of their anchor
-// keyframe's axis, the xyz ones anywhere the camera sees.
+// The loop of test_loop_closure through a double sphere lens whose image circle reaches 123 degrees from its axis (108
+// at the left and right edges of the image): tracking, and the trajectory against the truth, 0.7% of its spread off
+// with inverse depth landmarks and 1.5% with xyz ones (the image plane gates it once had, dropping every point behind
+// it, gave 0.8% and 1.8%). Landmarks are observed behind the image plane of the frame that sees them, through the
+// camera's model: the inverse depth ones within 90 degrees of their anchor keyframe's axis, the xyz ones anywhere the
+// camera sees.
 static void test_wide_angle_camera(const int width, const int height, world& faces, const int face_size, const bool inverse_depth) {
     constexpr static const int approach_frames = 8;
     constexpr static const int circle_frames = 72;

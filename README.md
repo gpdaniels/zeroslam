@@ -122,7 +122,7 @@ Points and pixels outside a model's valid region project and unproject to nothin
 
 Inside the library the camera is the type erased `sensor::camera::model<double>` (`source/sensor/camera/model.hpp`), which also gives the pinhole `[fx fy cx cy]` that agrees with the model to first order at its principal point, for the parts that need a pinhole: the resampling the line detector runs on, the image the epipolar re-acquisition matches on, and the scale of the pixel noise.
 The two-view initialisation, the turn between frames, the perspective and essential solvers, the line measurements, the epipolar re-acquisition and the inverse depth landmarks (`depth=inverse`, the default) work on the image plane `(x / z, y / z)`, and take rays within 80 degrees of the optical axis; a wide angle camera's rays further out are tracked, triangulated, matched by projection and adjusted through its model, and with `depth=xyz` landmarks past 90 degrees from a keyframe's axis are mapped too.
-A camera seeing past 180 degrees runs (the tests run a double sphere lens of 194 degrees across), but its outer ring adds to the map only through those.
+A camera seeing past 180 degrees runs (the pipeline test runs a double sphere lens whose image circle reaches 123 degrees from its axis, 108 at the edge of the image), but its outer ring adds to the map only through those.
 
 ### Configuration ###
 
