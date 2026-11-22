@@ -77,6 +77,8 @@ namespace simulation {
         double x;
         double y;
         bool outlier;
+        // The camera of the rig that saw it, 0 for the first.
+        int camera = 0;
     };
 
     struct options final {
@@ -95,6 +97,10 @@ namespace simulation {
         double image_height = 480.0;
         double noise_sigma = 0.0;
         double outlier_fraction = 0.0;
+        // A rig of cameras on the orbiting body, each camera's pose on it (camera to body), all with the one camera model; the
+        // poses are then the body's. Empty for a single camera at the body, as two cameras side by side make a stereo pair and
+        // two facing apart a pair that shares no view.
+        std::vector<math::se3<double>> rig;
     };
 
     class scene final {
@@ -138,43 +144,47 @@ namespace simulation {
                 result.poses.push_back(scene::look_at(centre));
             }
 
+            const size_t cameras = generation_options.rig.empty() ? 1 : generation_options.rig.size();
             for (int k = 0; k < generation_options.frame_count; ++k) {
-                const math::se3<double>& pose = result.poses[static_cast<size_t>(k)];
-                for (int i = 0; i < generation_options.point_count; ++i) {
-                    const math::matrix<double, 3, 1> in_camera = pose * result.points[static_cast<size_t>(i)];
-                    math::matrix<double, 2, 1> pixel;
-                    if (!result.camera.project(in_camera.data(), pixel.data())) {
-                        continue;
-                    }
-                    if ((pixel[0] < 0.5) || (pixel[0] > generation_options.image_width - 0.5) || (pixel[1] < 0.5) || (pixel[1] > generation_options.image_height - 0.5)) {
-                        continue;
-                    }
-                    observation exact;
-                    exact.frame_index = k;
-                    exact.point_index = i;
-                    exact.x = pixel[0];
-                    exact.y = pixel[1];
-                    exact.outlier = false;
-                    result.observations_exact.push_back(exact);
+                for (size_t c = 0; c < cameras; ++c) {
+                    const math::se3<double> pose = generation_options.rig.empty() ? result.poses[static_cast<size_t>(k)] : (generation_options.rig[c].inverse() * result.poses[static_cast<size_t>(k)]);
+                    for (int i = 0; i < generation_options.point_count; ++i) {
+                        const math::matrix<double, 3, 1> in_camera = pose * result.points[static_cast<size_t>(i)];
+                        math::matrix<double, 2, 1> pixel;
+                        if (!result.camera.project(in_camera.data(), pixel.data())) {
+                            continue;
+                        }
+                        if ((pixel[0] < 0.5) || (pixel[0] > generation_options.image_width - 0.5) || (pixel[1] < 0.5) || (pixel[1] > generation_options.image_height - 0.5)) {
+                            continue;
+                        }
+                        observation exact;
+                        exact.frame_index = k;
+                        exact.point_index = i;
+                        exact.x = pixel[0];
+                        exact.y = pixel[1];
+                        exact.outlier = false;
+                        exact.camera = static_cast<int>(c);
+                        result.observations_exact.push_back(exact);
 
-                    observation corrupted = exact;
-                    if (generation_options.noise_sigma > 0.0) {
-                        corrupted.x += generation_options.noise_sigma * random.gaussian();
-                        corrupted.y += generation_options.noise_sigma * random.gaussian();
-                    }
-                    if (generation_options.outlier_fraction > 0.0) {
-                        const double draw = random.uniform();
-                        if (draw < generation_options.outlier_fraction) {
-                            corrupted.x = static_cast<double>(static_cast<long long>(random.uniform(0.0, generation_options.image_width))) + 0.5;
-                            corrupted.y = static_cast<double>(static_cast<long long>(random.uniform(0.0, generation_options.image_height))) + 0.5;
-                            corrupted.outlier = true;
+                        observation corrupted = exact;
+                        if (generation_options.noise_sigma > 0.0) {
+                            corrupted.x += generation_options.noise_sigma * random.gaussian();
+                            corrupted.y += generation_options.noise_sigma * random.gaussian();
                         }
-                        else {
-                            static_cast<void>(random.uniform());
-                            static_cast<void>(random.uniform());
+                        if (generation_options.outlier_fraction > 0.0) {
+                            const double draw = random.uniform();
+                            if (draw < generation_options.outlier_fraction) {
+                                corrupted.x = static_cast<double>(static_cast<long long>(random.uniform(0.0, generation_options.image_width))) + 0.5;
+                                corrupted.y = static_cast<double>(static_cast<long long>(random.uniform(0.0, generation_options.image_height))) + 0.5;
+                                corrupted.outlier = true;
+                            }
+                            else {
+                                static_cast<void>(random.uniform());
+                                static_cast<void>(random.uniform());
+                            }
                         }
+                        result.observations.push_back(corrupted);
                     }
-                    result.observations.push_back(corrupted);
                 }
             }
             return result;

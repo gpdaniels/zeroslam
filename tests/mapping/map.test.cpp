@@ -22,6 +22,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "math/lie.hpp"
 #include "sensor/camera.hpp"
 #include "sensor/camera/pinhole_radial_tangential.hpp"
+#include "simulation/scene.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -466,6 +467,96 @@ int main(int argc, char* argv[]) {
         REQUIRE(calibration.make_refinement(unused));
         m.optimise(1, true, 10, false, &unused);
         REQUIRE(!unused.refined);
+    }
+
+    // A rig of two cameras adjusted over a simulated orbit, a stereo pair 30 cm apart and a pair facing apart that shares no
+    // view: the second camera's observations reach the frames through its extrinsic, the rig's baseline gives the map its
+    // scale, and an extrinsic refined from a start 2 degrees and 1.5 cm off is recovered, its length held.
+    for (int arrangement = 0; arrangement < 2; ++arrangement) {
+        const math::se3<double> truth_extrinsic = (arrangement == 0) ? math::se3<double>(math::so3<double>::identity(), { { 0.3, 0.0, 0.0 } }) : math::se3<double>(math::so3<double>::exp({ { 0.0, 3.14159265358979, 0.0 } }), { { 0.0, 0.0, -0.3 } });
+        simulation::options options;
+        options.point_count = 400;
+        options.point_extent = 3.0;
+        options.frame_count = 6;
+        options.orbit_arc_radians = 0.5;
+        options.orbit_radius = (arrangement == 0) ? 6.0 : 1.0;
+        options.point_count = (arrangement == 0) ? 400 : 2000;
+        options.point_extent = (arrangement == 0) ? 3.0 : 6.0;
+        options.orbit_height = (arrangement == 0) ? 1.0 : 0.2;
+        options.rig = { math::se3<double>::identity(), truth_extrinsic };
+        const simulation::scene truth = simulation::scene::generate(options);
+        const double camera_parameters[4] = { options.focal_x, options.focal_y, options.centre_x, options.centre_y };
+        const sensor::model camera_model(sensor::camera::pinhole<double>(&camera_parameters[0], 4));
+        // A pair that shares no view calibrates as a hand and an eye do, from the rig's turns, and turns about the one axis of
+        // the orbit leave the turn of its extrinsic about that axis unmeasured: that pair is adjusted with its calibration held.
+        for (int refine = 0; refine < ((arrangement == 0) ? 2 : 1); ++refine) {
+            mapping::map m;
+            m.sensor_rig.add(1, mapping::rig::sensor_kind::camera, math::se3<double>::identity(), false);
+            // The declared extrinsic is off by a turn and by a shift across the baseline that keeps its length.
+            const double length = std::sqrt(truth_extrinsic.translation().get_length_squared());
+            const math::matrix<double, 3, 1> shifted = truth_extrinsic.translation() + math::matrix<double, 3, 1>({ 0.0, 0.015, 0.0 });
+            const math::se3<double> declared = (refine == 0) ? truth_extrinsic : math::se3<double>(math::so3<double>::exp({ { 0.02, -0.025, 0.015 } }) * truth_extrinsic.rotation(), shifted * (length / std::sqrt(shifted.get_length_squared())));
+            m.sensor_rig.add(2, mapping::rig::sensor_kind::camera, declared, refine == 1);
+            m.metric_scale = m.sensor_rig.metric();
+            REQUIRE(m.metric_scale);
+            for (int k = 0; k < options.frame_count; ++k) {
+                mapping::frame f;
+                f.id = k;
+                f.camera = camera_model;
+                const math::se3<double> start = (k == 0) ? truth.poses[0] : (math::se3<double>::exp({ { 0.004, -0.003, 0.002, 0.02, -0.01, 0.015 } }) * truth.poses[static_cast<size_t>(k)]);
+                f.rotation = start.rotation().get_matrix();
+                f.translation = start.translation();
+                mapping::frame view;
+                view.id = k;
+                view.camera = camera_model;
+                f.views.push_back(view);
+                m.add_frame(f);
+            }
+            m.next_frame_id = options.frame_count;
+            m.gauge_frame_id = 0;
+            std::vector<int> counts(truth.points.size(), 0);
+            for (const simulation::observation& obs : truth.observations) {
+                ++counts[static_cast<size_t>(obs.point_index)];
+            }
+            for (size_t i = 0; i < truth.points.size(); ++i) {
+                if (counts[i] >= 3) {
+                    m.add_landmark(mapping::point(static_cast<int>(i), truth.points[i] + math::matrix<double, 3, 1>({ 0.02, -0.03, 0.025 }), math::matrix<double, 3, 1>({ 0.5, 0.5, 0.5 })));
+                }
+            }
+            m.next_landmark_id = static_cast<int>(truth.points.size());
+            size_t seen_by_second = 0;
+            for (const simulation::observation& obs : truth.observations) {
+                if (counts[static_cast<size_t>(obs.point_index)] >= 3) {
+                    m.add_observation(obs.frame_index, m.landmarks.at(obs.point_index), obs.x, obs.y, 0, 0, obs.camera);
+                    seen_by_second += static_cast<size_t>(obs.camera);
+                }
+            }
+            REQUIRE(seen_by_second > 250);
+            {
+                // An observation of the second camera projects through its extrinsic.
+                const mapping::map::observation& first = m.observations.begin()->second.front();
+                math::matrix<double, 2, 1> pixel;
+                REQUIRE(m.project_observation(m.frames.at(first.frame_id), first, m.landmarks.at(m.observations.begin()->first), pixel));
+            }
+            m.optimise(0, false, 100, false);
+            // Cameras that share no view hold the scale only through the rig's turns, more weakly than a stereo baseline, and
+            // the solve stops further from the exact solution.
+            const double tolerance = (arrangement == 0) ? 1.0e-5 : 1.0e-3;
+            const size_t second = m.sensor_rig.camera(1);
+            const math::matrix<double, 6, 1> extrinsic_error = (m.sensor_rig.reference_from_sensor(second) * truth_extrinsic.inverse()).log();
+            for (size_t i = 0; i < 6; ++i) {
+                REQUIRE(std::abs(extrinsic_error[i]) < tolerance);
+            }
+            // The scale is the baseline's: the poses are the truth's, in metres.
+            for (int k = 0; k < options.frame_count; ++k) {
+                const mapping::frame& f = m.frames.at(k);
+                const math::matrix<double, 6, 1> pose_error = (math::se3<double>(f.rotation, f.translation) * truth.poses[static_cast<size_t>(k)].inverse()).log();
+                for (size_t i = 0; i < 6; ++i) {
+                    REQUIRE(std::abs(pose_error[i]) < tolerance);
+                }
+            }
+            REQUIRE(m.landmarks.size() > 100);
+        }
     }
 
     return EXIT_SUCCESS;

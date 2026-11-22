@@ -23,12 +23,14 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "mapping/intrinsics_refinement.hpp"
 #include "mapping/line.hpp"
 #include "mapping/point.hpp"
+#include "mapping/rig.hpp"
 #include "math/lie.hpp"
 #include "optimisation/edge.hpp"
 #include "optimisation/edges/baseline.hpp"
 #include "optimisation/edges/line_reprojection.hpp"
 #include "optimisation/edges/reprojection.hpp"
 #include "optimisation/edges/reprojection_inverse_depth.hpp"
+#include "optimisation/edges/rig_reprojection.hpp"
 #include "optimisation/factor_graph.hpp"
 #include "optimisation/loss.hpp"
 #include "optimisation/losses/huber.hpp"
@@ -63,6 +65,9 @@ namespace mapping {
             int octave;
             // The pyramid level the position was measured on: 0 for a tracked position, the detection level for a detected one.
             int measurement_octave = 0;
+            // The camera of the rig that saw it (see mapping::rig::camera): 0 for the reference camera, the frame itself, and
+            // otherwise the frame's view through that camera, frame.views[camera - 1].
+            int camera = 0;
         };
 
         struct line_observation final {
@@ -79,6 +84,14 @@ namespace mapping {
         std::unordered_map<decltype(mapping::point::id), std::vector<observation>> observations;
         std::unordered_map<int, mapping::line> line_landmarks;
         std::unordered_map<decltype(mapping::line::id), std::vector<line_observation>> line_observations;
+
+        // The sensors and their extrinsics. The frames' poses are the reference camera's, and the observations of the other
+        // cameras reach the frames through their extrinsics, which adjustments refine where the rig asks for it.
+        mapping::rig sensor_rig;
+
+        // Whether the map has a metric scale, which a metric rig (a stereo baseline) gives it: no scale gauge is then held, the
+        // measurements hold the scale themselves. The one property the pipeline asks about the scale.
+        bool metric_scale = false;
 
         int next_frame_id = 0;
         int next_landmark_id = 0;
@@ -230,28 +243,29 @@ namespace mapping {
                 for (const observation& candidate : moved) {
                     bool present = false;
                     for (const observation& existing : kept) {
-                        present = present || (existing.frame_id == candidate.frame_id);
+                        present = present || ((existing.frame_id == candidate.frame_id) && (existing.camera == candidate.camera));
                     }
                     if (!present) {
                         kept.push_back(candidate);
                     }
                 }
                 std::sort(kept.begin(), kept.end(), [](const observation& lhs, const observation& rhs) {
-                    return lhs.frame_id < rhs.frame_id;
+                    return (lhs.frame_id != rhs.frame_id) ? (lhs.frame_id < rhs.frame_id) : (lhs.camera < rhs.camera);
                 });
             }
             this->landmarks.erase(drop_id);
             return true;
         }
 
-        void add_observation(int frame_id, const mapping::point& landmark, double x, double y, int octave = 0, int measurement_octave = 0) {
-            this->observations[landmark.id].push_back(observation{ frame_id, static_cast<size_t>(-1), math::matrix<double, 2, 1>{ { x, y } }, octave, measurement_octave });
+        void add_observation(int frame_id, const mapping::point& landmark, double x, double y, int octave = 0, int measurement_octave = 0, int camera = 0) {
+            this->observations[landmark.id].push_back(observation{ frame_id, static_cast<size_t>(-1), math::matrix<double, 2, 1>{ { x, y } }, octave, measurement_octave, camera });
         }
 
         // A position measured on pyramid level L is 2^L times coarser than one refined at level 0, so it has 4^-L the information.
         static double observation_sigma(const mapping::frame& frame, const observation& obs) {
             const int level = math::max(0, math::min(obs.measurement_octave, 16));
-            return frame.measurement_sigma * static_cast<double>(1u << static_cast<unsigned int>(level));
+            const mapping::frame* const view = map::view_of(frame, obs.camera);
+            return ((view != nullptr) ? view->measurement_sigma : frame.measurement_sigma) * static_cast<double>(1u << static_cast<unsigned int>(level));
         }
 
         math::matrix<double, 3, 1> depth_direction_of(const mapping::point& landmark) const {
@@ -293,9 +307,35 @@ namespace mapping {
                 optimisation::vertex point_vertex{ optimisation::vertices::point() };
                 point_vertex.set_parameters(landmark.inverse_depth ? landmark.inverse_parameters.data() : landmark.location.data(), 3);
                 const double sigma = map::observation_sigma(frame, obs);
-                optimisation::edge factor = map::make_point_edge(frame.camera, landmark, obs, lossfunction, sigma);
-                factor.add_vertex(&pose_vertex);
-                factor.add_vertex(&point_vertex);
+                optimisation::edge factor = this->make_observation_edge(frame, landmark, obs, lossfunction, sigma);
+                if (obs.camera == 0) {
+                    factor.add_vertex(&pose_vertex);
+                    factor.add_vertex(&point_vertex);
+                }
+                else {
+                    if ((map::view_of(frame, obs.camera) == nullptr) || (static_cast<size_t>(obs.camera) >= this->sensor_rig.camera_count())) {
+                        continue;
+                    }
+                    optimisation::vertex extrinsic_vertex = this->sensor_rig.extrinsic_vertex(this->sensor_rig.camera(static_cast<size_t>(obs.camera)));
+                    std::vector<optimisation::vertex*> extrinsics(static_cast<size_t>(obs.camera) + 1, nullptr);
+                    extrinsics[static_cast<size_t>(obs.camera)] = &extrinsic_vertex;
+                    if (!map::add_observation_vertices(factor, &pose_vertex, &point_vertex, extrinsics, obs.camera)) {
+                        continue;
+                    }
+                    factor.compute_jacobians();
+                    const math::matrix<double, 0, 0>& view_jacobian = factor.get_jacobians()[1];
+                    const double view_weight = 1.0 / (sigma * sigma);
+                    for (size_t a = 0; a < 3; ++a) {
+                        for (size_t b = 0; b < 3; ++b) {
+                            double sum = 0.0;
+                            for (size_t r = 0; r < 2; ++r) {
+                                sum += view_jacobian[r][a] * view_jacobian[r][b];
+                            }
+                            information[a][b] += view_weight * sum;
+                        }
+                    }
+                    continue;
+                }
                 factor.compute_jacobians();
                 const math::matrix<double, 0, 0>& jacobian = factor.get_jacobians()[1];
                 const double weight = 1.0 / (sigma * sigma);
@@ -310,6 +350,99 @@ namespace mapping {
                 }
             }
             landmark.set_information(information, this->depth_direction_of(landmark));
+        }
+
+        // The frame a camera of the rig saw at the frame's moment: the frame itself for the reference camera, its view for
+        // another, or null when it has no view through that camera.
+        static const mapping::frame* view_of(const mapping::frame& frame, const int camera) {
+            if (camera == 0) {
+                return &frame;
+            }
+            return ((camera > 0) && (static_cast<size_t>(camera - 1) < frame.views.size())) ? &frame.views[static_cast<size_t>(camera - 1)] : nullptr;
+        }
+
+        // The world to camera pose of a camera of the rig, from the world to reference pose of a frame.
+        void camera_pose(const int camera, const math::matrix<double, 3, 3>& rotation, const math::matrix<double, 3, 1>& translation, math::matrix<double, 3, 3>& camera_rotation, math::matrix<double, 3, 1>& camera_translation) const {
+            if ((camera == 0) || (static_cast<size_t>(camera) >= this->sensor_rig.camera_count())) {
+                camera_rotation = rotation;
+                camera_translation = translation;
+                return;
+            }
+            const math::se3<double> camera_from_reference = this->sensor_rig.reference_from_sensor(this->sensor_rig.camera(static_cast<size_t>(camera))).inverse();
+            const math::matrix<double, 3, 3> rotation_cr = camera_from_reference.rotation().get_matrix();
+            camera_rotation = rotation_cr * rotation;
+            camera_translation = (rotation_cr * translation) + camera_from_reference.translation();
+        }
+
+        // Projects a landmark where the observation's camera sees it, the frame posed as given.
+        bool project_observation_at(const mapping::frame& frame, const observation& obs, const mapping::point& landmark, const math::matrix<double, 3, 3>& rotation, const math::matrix<double, 3, 1>& translation, math::matrix<double, 2, 1>& pixel) const {
+            if (obs.camera == 0) {
+                return map::project_landmark(frame.camera, rotation, translation, landmark, pixel);
+            }
+            const mapping::frame* const view = map::view_of(frame, obs.camera);
+            if ((view == nullptr) || (static_cast<size_t>(obs.camera) >= this->sensor_rig.camera_count())) {
+                return false;
+            }
+            math::matrix<double, 3, 3> camera_rotation;
+            math::matrix<double, 3, 1> camera_translation;
+            this->camera_pose(obs.camera, rotation, translation, camera_rotation, camera_translation);
+            return map::project_landmark(view->camera, camera_rotation, camera_translation, landmark, pixel);
+        }
+
+        // Projects a landmark where the observation's camera sees it.
+        bool project_observation(const mapping::frame& frame, const observation& obs, const mapping::point& landmark, math::matrix<double, 2, 1>& pixel) const {
+            if (obs.camera == 0) {
+                return map::project_landmark(frame, landmark, pixel);
+            }
+            return this->project_observation_at(frame, obs, landmark, frame.rotation, frame.translation, pixel);
+        }
+
+        // A view of the frame posed as its camera is, for the code that projects into one camera.
+        void pose_view(const mapping::frame& frame, mapping::frame& view, const int camera) const {
+            this->camera_pose(camera, frame.rotation, frame.translation, view.rotation, view.translation);
+        }
+
+        // Poses every view of the frame from the frame's pose.
+        void pose_views(mapping::frame& frame) const {
+            for (size_t index = 0; index < frame.views.size(); ++index) {
+                this->pose_view(frame, frame.views[index], static_cast<int>(index + 1));
+            }
+        }
+
+        // The reprojection edge of an observation, its vertices still to add: the pose and the landmark for the reference
+        // camera, and the camera's extrinsic after them for any other (see add_observation_vertices).
+        optimisation::edge make_observation_edge(const mapping::frame& frame, const mapping::point& landmark, const observation& obs, const optimisation::loss& lossfunction, const double sigma) const {
+            const mapping::frame* const view = map::view_of(frame, obs.camera);
+            if ((obs.camera == 0) || (view == nullptr)) {
+                return map::make_point_edge(frame.camera, landmark, obs, lossfunction, sigma);
+            }
+            optimisation::edge m = landmark.inverse_depth ? optimisation::edge{ optimisation::edges::rig_reprojection(sensor::camera::model<double>(view->camera), landmark.anchor_rotation, landmark.anchor_translation) } : optimisation::edge{ optimisation::edges::rig_reprojection(sensor::camera::model<double>(view->camera)) };
+            m.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { obs.point[0], obs.point[1] } }.data()));
+            if (sigma != 1.0) {
+                m.set_information(math::matrix<double, 0, 0>::identity(2, 2) * (1.0 / (sigma * sigma)));
+            }
+            m.set_loss(lossfunction);
+            return m;
+        }
+
+        // Adds the vertices of an observation's edge, the extrinsic of its camera from those given (one per camera, null for
+        // the reference). False when the edge would need an extrinsic that is not given.
+        static bool add_observation_vertices(optimisation::edge& factor, optimisation::vertex* const pose, optimisation::vertex* const point, const std::vector<optimisation::vertex*>& extrinsics, const int camera) {
+            factor.add_vertex(pose);
+            factor.add_vertex(point);
+            if (camera == 0) {
+                return true;
+            }
+            if ((camera <= 0) || (static_cast<size_t>(camera) >= extrinsics.size()) || (extrinsics[static_cast<size_t>(camera)] == nullptr)) {
+                return false;
+            }
+            factor.add_vertex(extrinsics[static_cast<size_t>(camera)]);
+            return true;
+        }
+
+        // Whether any landmark is seen from another camera than the reference.
+        bool multiple_cameras() const {
+            return this->sensor_rig.camera_count() > 1;
         }
 
         static optimisation::edge make_point_edge(const sensor::model& camera_model, const mapping::point& landmark, const observation& obs, const optimisation::loss& lossfunction, const double sigma, const bool with_intrinsics = false) {
@@ -335,7 +468,7 @@ namespace mapping {
                 for (const std::pair<int, const observation*>& entry : frame_observations) {
                     math::matrix<double, 2, 1> reprojected;
                     const double sigma = map::observation_sigma(frame, *entry.second);
-                    inliers += map::project_landmark(frame, this->landmarks.at(entry.first), reprojected) && ((reprojected - entry.second->point).get_length_squared() <= map::inlier_bound_squared * sigma * sigma);
+                    inliers += this->project_observation(frame, *entry.second, this->landmarks.at(entry.first), reprojected) && ((reprojected - entry.second->point).get_length_squared() <= map::inlier_bound_squared * sigma * sigma);
                 }
                 return inliers;
             };
@@ -353,17 +486,38 @@ namespace mapping {
             optimisation::vertex* const pose_node = solver.add_vertex(static_cast<optimisation::vertex&&>(pose_vertex));
             std::vector<optimisation::edge*> edges;
             edges.reserve(frame_observations.size());
+            std::vector<optimisation::vertex*> extrinsics;
             for (const std::pair<int, const observation*>& entry : frame_observations) {
                 const mapping::point& landmark = this->landmarks.at(entry.first);
                 optimisation::vertex point_vertex{ optimisation::vertices::point() };
                 point_vertex.set_parameters(landmark.inverse_depth ? landmark.inverse_parameters.data() : landmark.location.data(), 3);
                 point_vertex.set_fixed(true);
                 point_vertex.set_marginalised(true);
+                if (entry.second->camera == 0) {
+                    optimisation::vertex* const point_node = solver.add_vertex(static_cast<optimisation::vertex&&>(point_vertex));
+                    optimisation::edge factor = map::make_point_edge(camera_model, landmark, *entry.second, wide_loss, map::observation_sigma(frame, *entry.second));
+                    factor.add_vertex(pose_node);
+                    factor.add_vertex(point_node);
+                    edges.push_back(solver.add_edge(static_cast<optimisation::edge&&>(factor)));
+                    continue;
+                }
+                const size_t camera = static_cast<size_t>(entry.second->camera);
+                if ((map::view_of(frame, entry.second->camera) == nullptr) || (camera >= this->sensor_rig.camera_count())) {
+                    continue;
+                }
+                if (extrinsics.size() <= camera) {
+                    extrinsics.resize(camera + 1, nullptr);
+                }
+                if (extrinsics[camera] == nullptr) {
+                    optimisation::vertex extrinsic_vertex = this->sensor_rig.extrinsic_vertex(this->sensor_rig.camera(camera));
+                    extrinsic_vertex.set_fixed(true);
+                    extrinsics[camera] = solver.add_vertex(static_cast<optimisation::vertex&&>(extrinsic_vertex));
+                }
                 optimisation::vertex* const point_node = solver.add_vertex(static_cast<optimisation::vertex&&>(point_vertex));
-                optimisation::edge factor = map::make_point_edge(camera_model, landmark, *entry.second, wide_loss, map::observation_sigma(frame, *entry.second));
-                factor.add_vertex(pose_node);
-                factor.add_vertex(point_node);
-                edges.push_back(solver.add_edge(static_cast<optimisation::edge&&>(factor)));
+                optimisation::edge factor = this->make_observation_edge(frame, landmark, *entry.second, wide_loss, map::observation_sigma(frame, *entry.second));
+                if (map::add_observation_vertices(factor, pose_node, point_node, extrinsics, entry.second->camera)) {
+                    edges.push_back(solver.add_edge(static_cast<optimisation::edge&&>(factor)));
+                }
             }
             solver.solve(map::repose_rounds, true);
             for (optimisation::edge* const factor : edges) {
@@ -565,6 +719,19 @@ namespace mapping {
                 non_fixed_poses += (fixed == false);
             }
             intrinsics.add_vertex(this->frames, camera_vertexes);
+            // The extrinsics of the rig's other cameras, refined with the landmarks where the rig asks for it and held in a
+            // pose adjustment; a refined camera keeps the distance from the reference it was declared at, the map's scale.
+            std::vector<optimisation::vertex*> extrinsic_vertexes;
+            optimisation::vertex* reference_vertex = nullptr;
+            const mapping::rig rig_before = this->sensor_rig;
+            if (this->multiple_cameras()) {
+                extrinsic_vertexes.assign(this->sensor_rig.camera_count(), nullptr);
+                for (size_t camera = 1; camera < extrinsic_vertexes.size(); ++camera) {
+                    optimisation::vertex node = this->sensor_rig.extrinsic_vertex(this->sensor_rig.camera(camera));
+                    node.set_fixed(node.is_fixed() || fix_landmarks);
+                    extrinsic_vertexes[camera] = ba.add_vertex(static_cast<optimisation::vertex&&>(node));
+                }
+            }
             // Add landmarks.
             int non_fixed_landmarks = 0;
             int non_fixed_edges = 0;
@@ -573,6 +740,7 @@ namespace mapping {
                 optimisation::edge* factor;
                 int landmark_id;
                 int frame_id;
+                int camera;
             };
 
             std::vector<point_edge> point_edges;
@@ -605,7 +773,7 @@ namespace mapping {
                             bound_it = bound_squared_of_frame.emplace(obs.frame_id, bound * bound).first;
                         }
                         math::matrix<double, 2, 1> projected;
-                        const bool unusable = !map::project_landmark(observing_frame, landmark_record, projected) || !((projected - obs.point).get_length_squared() <= bound_it->second);
+                        const bool unusable = !this->project_observation(observing_frame, obs, landmark_record, projected) || !((projected - obs.point).get_length_squared() <= bound_it->second);
                         unusable_observations.push_back(unusable ? 1 : 0);
                         std::pair<size_t, size_t>& counts = unusable_of_frame[obs.frame_id];
                         counts.first += unusable ? 1 : 0;
@@ -643,7 +811,7 @@ namespace mapping {
                     if (camera_vertexes.at(frame_id)->is_fixed() && fix_landmarks) {
                         continue;
                     }
-                    if (fix_landmarks && !map::within_gross_bound(this->frames.at(frame_id), this->landmarks.at(landmark_id), obs.point, obs.measurement_octave)) {
+                    if (fix_landmarks && !this->observation_within_gross_bound(this->frames.at(frame_id), this->landmarks.at(landmark_id), obs)) {
                         ++gross_excluded;
                         continue;
                     }
@@ -659,17 +827,20 @@ namespace mapping {
                         non_fixed_landmarks += (fix_landmarks == false);
                     }
                     const double sigma = map::observation_sigma(this->frames.at(frame_id), obs);
-                    optimisation::edge m = map::make_point_edge(this->frames.at(frame_id).camera, landmark_record, obs, lossfunction, sigma, intrinsics.takes(frame_id));
-                    m.add_vertex(camera_vertexes[frame_id]);
-                    m.add_vertex(landmark_vertexes[landmark_id]);
-                    if (intrinsics.takes(frame_id)) {
+                    // The reference camera's observations take the camera's intrinsics when the calibration refines them.
+                    const bool takes_intrinsics = (obs.camera == 0) && intrinsics.takes(frame_id);
+                    optimisation::edge m = takes_intrinsics ? map::make_point_edge(this->frames.at(frame_id).camera, landmark_record, obs, lossfunction, sigma, true) : this->make_observation_edge(this->frames.at(frame_id), landmark_record, obs, lossfunction, sigma);
+                    if (!map::add_observation_vertices(m, camera_vertexes[frame_id], landmark_vertexes[landmark_id], extrinsic_vertexes, obs.camera)) {
+                        continue;
+                    }
+                    if (takes_intrinsics) {
                         intrinsics.attach(m);
                     }
                     if (fix_landmarks && (landmark_record.uncertainty == mapping::point::uncertainty_kind::unbounded)) {
                         m.compute_jacobians();
                         m.set_information(math::matrix<double, 0, 0>(2, 2, landmark_record.observation_information(m.get_jacobians()[1], sigma).data()));
                     }
-                    point_edges.push_back({ ba.add_edge(static_cast<optimisation::edge&&>(m)), landmark_id, frame_id });
+                    point_edges.push_back({ ba.add_edge(static_cast<optimisation::edge&&>(m)), landmark_id, frame_id, obs.camera });
                     ++non_fixed_edges;
                 }
             }
@@ -744,7 +915,7 @@ namespace mapping {
                 }
             }
 
-            if (!fix_landmarks && (camera_vertexes.count(this->gauge_frame_id) > 0)) {
+            if (!fix_landmarks && !this->metric_scale && (camera_vertexes.count(this->gauge_frame_id) > 0)) {
                 const auto camera_centre = [this](const int frame_id) {
                     const mapping::frame& frame = this->frames.at(frame_id);
                     return math::matrix<double, 3, 1>(-(math::transpose(frame.rotation) * frame.translation));
@@ -828,7 +999,7 @@ namespace mapping {
                     }
                 }
             }
-            if (!fix_landmarks && (local_window > 0) && (camera_vertexes.count(this->gauge_frame_id) == 0)) {
+            if (!fix_landmarks && !this->metric_scale && (local_window > 0) && (camera_vertexes.count(this->gauge_frame_id) == 0)) {
                 const auto camera_centre = [this](const int frame_id) {
                     const mapping::frame& frame = this->frames.at(frame_id);
                     return math::matrix<double, 3, 1>(-(math::transpose(frame.rotation) * frame.translation));
@@ -903,6 +1074,30 @@ namespace mapping {
                 }
             };
             remove_unconnected(camera_vertexes, non_fixed_poses);
+            for (size_t camera = 1; camera < extrinsic_vertexes.size(); ++camera) {
+                optimisation::vertex* const node = extrinsic_vertexes[camera];
+                if ((node == nullptr) || node->is_fixed()) {
+                    continue;
+                }
+                if (ba.get_connected_edges(node).empty()) {
+                    ba.remove_vertex(node);
+                    extrinsic_vertexes[camera] = nullptr;
+                    continue;
+                }
+                const double distance = this->sensor_rig.at(this->sensor_rig.camera(camera)).declared_distance;
+                if (distance >= mapping::rig::metric_baseline_minimum) {
+                    if (reference_vertex == nullptr) {
+                        optimisation::vertex reference = this->sensor_rig.extrinsic_vertex(static_cast<size_t>(this->sensor_rig.reference()));
+                        reference.set_fixed(true);
+                        reference_vertex = ba.add_vertex(static_cast<optimisation::vertex&&>(reference));
+                    }
+                    optimisation::edge length{ optimisation::edges::baseline(distance) };
+                    length.add_vertex(node);
+                    length.add_vertex(reference_vertex);
+                    length.set_information(math::matrix<double, 0, 0>::identity(1, 1) * map::gauge_baseline_information);
+                    ba.add_edge(static_cast<optimisation::edge&&>(length));
+                }
+            }
             remove_unconnected(landmark_vertexes, non_fixed_landmarks);
             remove_unconnected(line_vertexes, non_fixed_lines);
 
@@ -937,7 +1132,7 @@ namespace mapping {
             }
 
             double initial_chi = ba.get_current_chi();
-            std::vector<std::pair<int, int>> dropped_observations;
+            std::vector<point_edge> dropped_observations;
             int number_of_accepted_rounds = 0;
             const bool two_pass = !fix_landmarks && (rounds > map::first_pass_rounds);
             if (two_pass) {
@@ -951,7 +1146,7 @@ namespace mapping {
                 for (const point_edge& entry : point_edges) {
                     if (entry.factor->chi2() > map::inlier_bound_squared) {
                         ba.remove_edge(entry.factor);
-                        dropped_observations.push_back({ entry.landmark_id, entry.frame_id });
+                        dropped_observations.push_back(entry);
                     }
                     else {
                         kept_edges.push_back(entry);
@@ -995,6 +1190,11 @@ namespace mapping {
                 const math::se3<double> v_se3 = math::se3<double>(math::so3<double>(p[6], p[3], p[4], p[5]), { { p[0], p[1], p[2] } });
                 frame.rotation = v_se3.rotation().get_matrix();
                 frame.translation = v_se3.translation();
+            }
+            for (size_t camera = 1; camera < extrinsic_vertexes.size(); ++camera) {
+                if (extrinsic_vertexes[camera] != nullptr) {
+                    this->sensor_rig.read_extrinsic_vertex(this->sensor_rig.camera(camera), *extrinsic_vertexes[camera]);
+                }
             }
             for (const auto& [landmark_id, vertex] : landmark_vertexes) {
                 mapping::point& landmark = this->landmarks.at(landmark_id);
@@ -1069,10 +1269,10 @@ namespace mapping {
                         math::matrix<double, 2, 1> reprojected;
                         const double sigma = map::observation_sigma(frame_it->second, obs);
                         const double sigma_squared = sigma * sigma;
-                        inliers_before_by_frame[obs.frame_id] += map::project_landmark(intrinsics.camera_before(obs.frame_id, frame_it->second), frame_before_it->second.rotation, frame_before_it->second.translation, before_it->second, reprojected) && ((reprojected - obs.point).get_length_squared() <= map::inlier_bound_squared * sigma_squared);
+                        inliers_before_by_frame[obs.frame_id] += ((obs.camera == 0) ? map::project_landmark(intrinsics.camera_before(obs.frame_id, frame_it->second), frame_before_it->second.rotation, frame_before_it->second.translation, before_it->second, reprojected) : this->project_observation_at(frame_it->second, obs, before_it->second, frame_before_it->second.rotation, frame_before_it->second.translation, reprojected)) && ((reprojected - obs.point).get_length_squared() <= map::inlier_bound_squared * sigma_squared);
                         std::pair<size_t, size_t>& after = gross_after_by_frame[obs.frame_id];
                         ++after.second;
-                        after.first += !map::project_landmark(frame_it->second, landmark_it->second, reprojected) || ((reprojected - obs.point).get_length_squared() > map::gross_error_squared * sigma_squared);
+                        after.first += !this->project_observation(frame_it->second, obs, landmark_it->second, reprojected) || ((reprojected - obs.point).get_length_squared() > map::gross_error_squared * sigma_squared);
                     }
                 }
                 std::vector<int> diverged_frame_ids;
@@ -1101,6 +1301,7 @@ namespace mapping {
                         this->line_landmarks.at(landmark_id) = landmark;
                     }
                     intrinsics.restore(this->frames);
+                    this->sensor_rig = rig_before;
                     return;
                 }
                 std::sort(diverged_frame_ids.begin(), diverged_frame_ids.end());
@@ -1130,7 +1331,7 @@ namespace mapping {
                         math::matrix<double, 2, 1> reprojected;
                         ++examined;
                         const double sigma = map::observation_sigma(frame_it->second, obs);
-                        gross += !map::project_landmark(frame_it->second, landmark_it->second, reprojected) || ((reprojected - obs.point).get_length_squared() > map::gross_error_squared * sigma * sigma);
+                        gross += !this->project_observation(frame_it->second, obs, landmark_it->second, reprojected) || ((reprojected - obs.point).get_length_squared() > map::gross_error_squared * sigma * sigma);
                     }
                 }
                 if ((examined >= map::divergence_minimum_observations) && (gross * map::divergence_gross_fraction_denominator > examined)) {
@@ -1147,18 +1348,19 @@ namespace mapping {
                         this->line_landmarks.at(landmark_id) = landmark;
                     }
                     intrinsics.restore(this->frames);
+                    this->sensor_rig = rig_before;
                     return;
                 }
             }
             if (!fix_landmarks) {
-                for (const std::pair<int, int>& dropped : dropped_observations) {
-                    const std::unordered_map<int, std::vector<observation>>::iterator observations_it = this->observations.find(dropped.first);
+                for (const point_edge& dropped : dropped_observations) {
+                    const std::unordered_map<int, std::vector<observation>>::iterator observations_it = this->observations.find(dropped.landmark_id);
                     if (observations_it == this->observations.end()) {
                         continue;
                     }
                     std::vector<observation>& landmark_observations = observations_it->second;
                     for (size_t index = 0; index < landmark_observations.size(); ++index) {
-                        if (landmark_observations[index].frame_id == dropped.second) {
+                        if ((landmark_observations[index].frame_id == dropped.frame_id) && (landmark_observations[index].camera == dropped.camera)) {
                             landmark_observations.erase(landmark_observations.begin() + static_cast<std::ptrdiff_t>(index));
                             break;
                         }
@@ -1198,6 +1400,21 @@ namespace mapping {
             return (pixel - projected).get_length_squared() <= bound_squared;
         }
 
+        // within_gross_bound for the camera that made the observation.
+        bool observation_within_gross_bound(const mapping::frame& frame, const mapping::point& landmark, const observation& obs) const {
+            if (obs.camera == 0) {
+                return map::within_gross_bound(frame, landmark, obs.point, obs.measurement_octave);
+            }
+            math::matrix<double, 2, 1> projected;
+            if (!this->project_observation(frame, obs, landmark, projected)) {
+                return false;
+            }
+            const double scale = static_cast<double>(1u << static_cast<unsigned int>(math::max(0, math::min(obs.measurement_octave, 16))));
+            const double sigma = map::observation_sigma(frame, obs);
+            const double bound_squared = (landmark.uncertainty == mapping::point::uncertainty_kind::unbounded) ? (map::gross_unbounded_pixels * map::gross_unbounded_pixels * scale * scale) : (map::gross_error_squared * sigma * sigma);
+            return (obs.point - projected).get_length_squared() <= bound_squared;
+        }
+
         size_t remove_outlier_observations(const std::unordered_set<int>& landmark_ids, const std::unordered_set<int>& frame_ids) {
             size_t removed = 0;
             size_t examined = 0;
@@ -1218,7 +1435,7 @@ namespace mapping {
                     if ((frame_it != this->frames.end()) && (frame_ids.count(obs.frame_id) != 0)) {
                         math::matrix<double, 2, 1> reprojected;
                         const double sigma = map::observation_sigma(frame_it->second, obs);
-                        const double error_squared = map::project_landmark(frame_it->second, landmark_it->second, reprojected) ? ((reprojected - obs.point).get_length_squared() / (sigma * sigma)) : 1.0e300;
+                        const double error_squared = this->project_observation(frame_it->second, obs, landmark_it->second, reprojected) ? ((reprojected - obs.point).get_length_squared() / (sigma * sigma)) : 1.0e300;
                         keep = error_squared <= map::inlier_bound_squared;
                         ++examined;
                         beyond_5 += (error_squared > 25.0);
@@ -1371,7 +1588,7 @@ namespace mapping {
                     const mapping::frame& frame = frame_it->second;
                     const math::matrix<double, 2, 1> measured = obs.point;
                     math::matrix<double, 2, 1> reprojected;
-                    if (!map::project_landmark(frame, it->second, reprojected)) {
+                    if (!this->project_observation(frame, obs, it->second, reprojected)) {
                         reprojection_error += map::cull_mean_normalised_distance_maximum;
                     }
                     else {

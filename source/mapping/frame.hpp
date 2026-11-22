@@ -146,6 +146,15 @@ namespace mapping {
                 relative
             };
             adjustment_kind adjustment = adjustment_kind::absolute;
+            // Which extrinsics of a rig's cameras the absolute adjustments refine: those the rig declares refined, none, or every
+            // camera's but the reference's (mapping::rig). A refined camera keeps the distance from the reference it was declared
+            // at, which is the map's scale.
+            enum class extrinsics_kind {
+                declared,
+                fixed,
+                refine
+            };
+            extrinsics_kind extrinsics = extrinsics_kind::declared;
             bool inverse_depth = true;
             bool fixed_budget = false;
             int pose_outlier_limit = 0;
@@ -178,6 +187,11 @@ namespace mapping {
 
         std::vector<feature::point> keypoints;
         std::vector<feature::descriptor::stored> descriptors;
+
+        // What the rig's other cameras saw at the same moment, camera c as views[c - 1] (see mapping::rig::camera), each a
+        // frame of its own camera and image whose pose is that camera's: the frame's pose through the camera's extrinsic, set
+        // by mapping::map::pose_views. Empty for a monocular rig. The frame's own pose is the rig's, its reference camera's.
+        std::vector<frame> views;
 
     public:
         float to_level0_x(const float level_x, const size_t level) const {

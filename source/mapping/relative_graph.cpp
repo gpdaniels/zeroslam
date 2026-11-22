@@ -479,7 +479,9 @@ namespace mapping {
         std::unordered_map<int, std::vector<std::pair<int, const mapping::map::observation*>>> observed;
         for (const int landmark_id : landmark_ids) {
             for (const mapping::map::observation& obs : reconstruction.observations.at(landmark_id)) {
-                if (this->nodes.count(obs.frame_id) != 0) {
+                // The relative graph adjusts what the reference camera of a rig sees; the other cameras' observations are left
+                // to the absolute adjustments (see README "Configuration", adjustment).
+                if ((obs.camera == 0) && (this->nodes.count(obs.frame_id) != 0)) {
                     observed[obs.frame_id].push_back({ landmark_id, &obs });
                 }
             }
@@ -587,7 +589,7 @@ namespace mapping {
                 targets.clear();
                 while ((group_end < by_base.size()) && (by_base[group_end].first == base)) {
                     for (const mapping::map::observation& obs : reconstruction.observations.at(by_base[group_end].second)) {
-                        if (this->nodes.count(obs.frame_id) != 0) {
+                        if ((obs.camera == 0) && (this->nodes.count(obs.frame_id) != 0)) {
                             targets.push_back(obs.frame_id);
                         }
                     }
@@ -602,7 +604,7 @@ namespace mapping {
                     const size_t first_observation = problem.observations.size();
                     size_t static_observers = 0;
                     for (const mapping::map::observation& obs : reconstruction.observations.at(landmark_id)) {
-                        if ((this->nodes.count(obs.frame_id) == 0) || (this->search_towards.count(obs.frame_id) == 0)) {
+                        if ((obs.camera != 0) || (this->nodes.count(obs.frame_id) == 0) || (this->search_towards.count(obs.frame_id) == 0)) {
                             continue;
                         }
                         this->steps_to_source(obs.frame_id, steps);
@@ -871,7 +873,7 @@ namespace mapping {
                 for (size_t read = 0; read < landmark_observations.size(); ++read) {
                     bool drop = false;
                     for (size_t candidate = index; candidate < next; ++candidate) {
-                        drop = drop || (removed[candidate].frame_id == landmark_observations[read].frame_id);
+                        drop = drop || ((removed[candidate].frame_id == landmark_observations[read].frame_id) && (landmark_observations[read].camera == 0));
                     }
                     if (drop) {
                         ++result.removed;
