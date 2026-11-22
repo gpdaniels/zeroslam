@@ -127,6 +127,32 @@ namespace sensor::camera {
     }
 
     template <typename type>
+    bool pinhole_radial_tangential<type>::get_parameter_roles(parameter_role* const roles, const size_t roles_length) const {
+        if ((roles == nullptr) || (roles_length != pinhole_radial_tangential::parameter_count)) {
+            return false;
+        }
+        // k1 k2 p1 p2 are what a calibration of a common lens holds, k3 and the rational k4 k5 k6 only a wide one needs.
+        const parameter_role layout[pinhole_radial_tangential::parameter_count] = {
+            parameter_role::focal_length,
+            parameter_role::focal_length,
+            parameter_role::principal_point,
+            parameter_role::principal_point,
+            parameter_role::distortion,
+            parameter_role::distortion,
+            parameter_role::distortion,
+            parameter_role::distortion,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher
+        };
+        for (size_t index = 0; index < pinhole_radial_tangential::parameter_count; ++index) {
+            roles[index] = layout[index];
+        }
+        return true;
+    }
+
+    template <typename type>
     bool pinhole_radial_tangential<type>::distort(
         const type* const undistorted_xy,
         type* const distorted_xy,

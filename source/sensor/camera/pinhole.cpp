@@ -78,6 +78,18 @@ namespace sensor::camera {
     }
 
     template <typename type>
+    bool pinhole<type>::get_parameter_roles(parameter_role* const roles, const size_t roles_length) const {
+        if ((roles == nullptr) || (roles_length != pinhole::parameter_count)) {
+            return false;
+        }
+        roles[0] = parameter_role::focal_length;
+        roles[1] = parameter_role::focal_length;
+        roles[2] = parameter_role::principal_point;
+        roles[3] = parameter_role::principal_point;
+        return true;
+    }
+
+    template <typename type>
     bool pinhole<type>::project(
         const type* const point_xyz,
         type* const point_xy,

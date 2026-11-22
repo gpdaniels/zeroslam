@@ -18,6 +18,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef ZEROSLAM_SENSOR_CAMERA_MODEL_HPP
 #define ZEROSLAM_SENSOR_CAMERA_MODEL_HPP
 
+#include "sensor/camera/parameter_role.hpp"
+
 namespace {
     using size_t = decltype(sizeof(0));
 }
@@ -77,6 +79,19 @@ namespace sensor::camera {
             constexpr static const bool value = true;
         };
 
+        template <typename model_type, typename = void>
+        struct has_parameter_roles {
+            constexpr static const bool value = false;
+        };
+
+        template <typename model_type>
+        struct has_parameter_roles<
+            model_type,
+            decltype(static_cast<void>(static_cast<bool>(model::reference<const model_type>().get_parameter_roles(static_cast<parameter_role*>(nullptr), size_t(0)))))
+        > {
+            constexpr static const bool value = true;
+        };
+
     private:
         struct table final {
             const char* name;
@@ -84,11 +99,24 @@ namespace sensor::camera {
             bool (*set_parameters)(void* storage, const type* const parameters, const size_t parameters_length);
             bool (*get_parameters)(const void* storage, type* const parameters, const size_t parameters_length);
             bool (*get_pinhole)(const void* storage, type* const pinhole_parameters, const size_t pinhole_parameters_length);
+            bool (*get_parameter_roles)(const void* storage, parameter_role* const roles, const size_t roles_length);
             bool (*project)(const void* storage, const type* const point_xyz, type* const point_xy, type* const jacobian_projection, type* const jacobian_parameters);
             bool (*unproject)(const void* storage, const type* const point_xy, type* const ray_xyz, type* const jacobian_unprojection);
             void (*copy)(const void* from, void* to);
             void (*destroy)(void* object);
         };
+
+        template <typename model_type>
+        static bool (*parameter_roles_for())(const void* storage, parameter_role* const roles, const size_t roles_length) {
+            if constexpr (model::has_parameter_roles<model_type>::value) {
+                return [](const void* object, parameter_role* const roles, const size_t roles_length) -> bool {
+                    return static_cast<const model_type*>(object)->get_parameter_roles(roles, roles_length);
+                };
+            }
+            else {
+                return nullptr;
+            }
+        }
 
         template <typename model_type>
         static const table* table_for() {
@@ -106,6 +134,7 @@ namespace sensor::camera {
                 [](const void* object, type* const pinhole_parameters, const size_t pinhole_parameters_length) -> bool {
                     return static_cast<const model_type*>(object)->get_pinhole(pinhole_parameters, pinhole_parameters_length);
                 },
+                model::parameter_roles_for<model_type>(),
                 [](const void* object, const type* const point_xyz, type* const point_xy, type* const jacobian_projection, type* const jacobian_parameters) -> bool {
                     return static_cast<const model_type*>(object)->project(point_xyz, point_xy, jacobian_projection, jacobian_parameters);
                 },
@@ -232,6 +261,12 @@ namespace sensor::camera {
                 }
             }
             return true;
+        }
+
+        // What each parameter is, false when the model does not say (a model may provide get_parameter_roles), or the
+        // length is not the parameter count.
+        bool get_parameter_roles(parameter_role* const roles, const size_t roles_length) const {
+            return (this->functions != nullptr) && (this->functions->get_parameter_roles != nullptr) && this->functions->get_parameter_roles(this->storage, roles, roles_length);
         }
 
         // The pixel (pixel-centre frame) of a camera-frame point, false outside the model's valid region, with the row major 2x3
