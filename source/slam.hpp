@@ -25,6 +25,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "estimation/pose/essential.hpp"
 #include "estimation/pose/homography.hpp"
 #include "estimation/robust/solver/essential.hpp"
+#include "estimation/robust/solver/generalised_p3p.hpp"
 #include "estimation/robust/solver/homography.hpp"
 #include "estimation/robust/solver/p3p.hpp"
 #include "feature/angle/orb.hpp"
@@ -48,6 +49,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "mapping/map.hpp"
 #include "mapping/point.hpp"
 #include "mapping/relative_graph.hpp"
+#include "mapping/rig.hpp"
 #include "mapping/voxel_map.hpp"
 #include "match/distance/hamming.hpp"
 #include "match/matcher/bruteforce.hpp"
@@ -61,6 +63,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/edges/line_reprojection.hpp"
 #include "optimisation/edges/relative_similarity.hpp"
 #include "optimisation/edges/reprojection.hpp"
+#include "optimisation/edges/rig_reprojection.hpp"
 #include "optimisation/factor_graph.hpp"
 #include "optimisation/loss.hpp"
 #include "optimisation/losses/huber.hpp"
@@ -161,6 +164,10 @@ public:
     const mapping::voxel_map& voxels() const {
         return this->voxel_map_;
     }
+
+    // A rig of several cameras (slam_rig.hpp): declared before any frame, then one image of every camera per frame.
+    void set_rig(const mapping::rig& rig);
+    void process_rig_frame(const std::vector<sensor::model>& cameras, const std::vector<image::image>& images);
 
 private:
     tracking_state state_ = tracking_state::initialising;
@@ -742,7 +749,7 @@ private:
             }
             previous_of_submap[submap_index] = current_id;
         }
-        add_edge(loop.keyframe_id, keyframe_id, loop.relative);
+        add_edge(loop.keyframe_id, keyframe_id, slam::loop_measurement(loop.relative, this->reconstruction.metric_scale));
         for (const verified_loop& earlier : this->verified_loops) {
             if ((vertices.count(earlier.keyframe_id) != 0) && (vertices.count(earlier.loop.keyframe_id) != 0)) {
                 add_edge(earlier.loop.keyframe_id, earlier.keyframe_id, camera_to_world.at(earlier.loop.keyframe_id).inverse() * camera_to_world.at(earlier.keyframe_id));
@@ -860,6 +867,7 @@ private:
                     t->landmark_id = match.recorded_landmark_id;
                 }
             }
+            this->relink_view_tracks(match.landmark_id, match.recorded_landmark_id);
             for (mapping::loop_closure::record& record : records) {
                 if (record.landmark_id == match.landmark_id) {
                     record.landmark_id = match.recorded_landmark_id;
@@ -1011,6 +1019,8 @@ private:
         math::matrix<double, 3, 1> location;
         feature::tracker::tracker::track* source;
         const mapping::point* landmark;
+        // The camera of the rig that saw it (mapping::map::observation::camera), 0 for the frame's own.
+        int camera = 0;
     };
 
     struct line_correspondence final {
@@ -1048,6 +1058,7 @@ private:
             }
             correspondences.push_back({ { static_cast<double>(t->x), static_cast<double>(t->y) }, landmark.location, t, &landmark });
         }
+        this->append_view_correspondences(frame_current, correspondences);
 
         std::vector<line_correspondence> line_correspondences;
         if (this->frontend.lines && this->frontend.line_pose) {
@@ -1126,6 +1137,7 @@ private:
             return static_cast<double>(1u << static_cast<unsigned int>(level));
         };
         std::vector<optimisation::edge*> weighted_edges(correspondences.size(), nullptr);
+        std::vector<optimisation::vertex*> extrinsic_nodes;
         for (size_t c = 0; c < correspondences.size(); ++c) {
             const pose_correspondence& match = correspondences[c];
             const bool weighted = (match.landmark != nullptr) && (match.landmark->uncertainty == mapping::point::uncertainty_kind::unbounded);
@@ -1134,6 +1146,10 @@ private:
             point_vertex.set_fixed(true);
             point_vertex.set_marginalised(true);
             optimisation::vertex* const point_node = ba.add_vertex(static_cast<optimisation::vertex&&>(point_vertex));
+            if (match.camera != 0) {
+                weighted_edges[c] = this->add_view_pose_edge(ba, pose_node, point_node, frame_current, match, weighted, octave_scale(match), lossfunction, extrinsic_nodes);
+                continue;
+            }
             if (weighted) {
                 const mapping::map::observation recorded{ frame_current.id, static_cast<size_t>(-1), math::matrix<double, 2, 1>({ match.pixel[0], match.pixel[1] }), 0 };
                 optimisation::edge factor = mapping::map::make_point_edge(frame_current.camera, *match.landmark, recorded, lossfunction, 1.0);
@@ -1201,11 +1217,18 @@ private:
             if (weighted_edges[c] != nullptr) {
                 optimisation::edge& factor = *weighted_edges[c];
                 factor.compute_jacobians();
-                factor.set_information(math::matrix<double, 0, 0>(2, 2, match.landmark->observation_information(factor.get_jacobians()[1], frame_current.measurement_sigma * octave_scale(match)).data()));
+                factor.set_information(math::matrix<double, 0, 0>(2, 2, match.landmark->observation_information(factor.get_jacobians()[1], slam::correspondence_sigma(frame_current, match) * octave_scale(match)).data()));
                 factor.compute_residual();
                 // A landmark the refined pose puts behind the camera agrees with nothing, however small the residual that
                 // stands in for its reprojection is, as for the landmarks of the other kind below.
                 if (factor.is_measurable() && (factor.chi2() <= 5.991)) {
+                    agreed[c] = static_cast<unsigned char>(1);
+                    inliers += 1;
+                }
+                continue;
+            }
+            if (match.camera != 0) {
+                if (this->view_correspondence_agrees(frame_current, match, rotation, translation, octave_scale(match))) {
                     agreed[c] = static_cast<unsigned char>(1);
                     inliers += 1;
                 }
@@ -1261,6 +1284,7 @@ private:
         inliers += line_inliers;
         frame_current.rotation = rotation;
         frame_current.translation = translation;
+        this->reconstruction.pose_views(frame_current);
         return true;
     }
 
@@ -1304,10 +1328,10 @@ private:
     // rejects, so that such a link neither adds an observation to a keyframe (one far outside the view can drag the keyframe's
     // pose adjustment off and with it every recent landmark into the cull) nor keeps the landmark from being matched again. The
     // history starts again at the frame so that a new landmark is not triangulated across the slip.
-    size_t unlink_strays(const mapping::frame& frame_current) {
+    size_t unlink_strays(const mapping::frame& frame_current, const int camera = 0) {
         std::vector<std::pair<feature::tracker::tracker::track*, double>> linked;
         size_t in_band = 0;
-        for (feature::tracker::tracker::track* const t : this->active_point_tracks()) {
+        for (feature::tracker::tracker::track* const t : this->point_tracks_of(camera)) {
             if (t->landmark_id < 0) {
                 continue;
             }
@@ -1587,6 +1611,9 @@ private:
     static constexpr int reckoned_frames_stale = 2;
 
     bool pose_from_tracks(mapping::frame& frame_current, size_t& correspondences) {
+        if (!frame_current.views.empty()) {
+            return this->pose_from_rig_tracks(frame_current, correspondences);
+        }
         std::vector<estimation::correspondence_2d_3d<double>> pnp_correspondencies;
         {
             const std::vector<feature::tracker::tracker::track*> active = this->active_point_tracks();
@@ -1989,6 +2016,7 @@ private:
             }
             t->history.resize(keep);
         }
+        this->unlink_view_tracks_before(this->init_anchor_frame_id_);
         for (feature::tracker::line::track* const t : this->line_tracker_.all_tracks()) {
             t->landmark_id = -1;
             size_t keep = 0;
@@ -2058,6 +2086,7 @@ private:
             }
             t->history.resize(keep);
         }
+        this->trim_view_histories(frame_id, false);
         if (!this->frontend.lines) {
             return;
         }
@@ -2079,6 +2108,46 @@ private:
         }
         return this->tracker_.all_tracks();
     }
+
+    // The rig's other cameras, defined in slam_rig.hpp: camera c tracks its features with view_trackers_[c - 1].
+    std::vector<feature::tracker::tracker> view_trackers_;
+    std::vector<std::vector<double>> view_laplacian_history_;
+    // Whether each sensor was declared refined, which the extrinsics setting may override.
+    std::vector<unsigned char> declared_refined_;
+    // A landmark is triangulated across the rig's baseline from this parallax, less than two frames of one camera need, the
+    // baseline being known; a match lies within the band of the epipolar line, wider while the extrinsic is refined.
+    static constexpr double rig_parallax_degrees_minimum = 0.5;
+    static constexpr double rig_epipolar_pixels = 2.0;
+    static constexpr double rig_epipolar_refined_factor = 4.0;
+    static constexpr unsigned int rig_match_hamming = 50;
+    static constexpr float rig_match_ratio = 0.8f;
+    static constexpr size_t rig_initialisation_landmarks_minimum = 50;
+    static constexpr double rig_track_link_pixels = 1.5;
+    feature::tracker::tracker& tracker_of(const int camera);
+    std::vector<feature::tracker::tracker::track*> point_tracks_of(const int camera);
+    std::vector<feature::tracker::tracker::track*> all_point_tracks_of(const int camera);
+    size_t tracked_views(const mapping::frame& frame) const;
+    void apply_extrinsics_setting();
+    void add_views(mapping::frame& frame, const sensor::model* const view_cameras, const image::image* const view_images, const size_t view_count);
+    void update_view_trackers(mapping::frame& frame);
+    void unlink_dangling_view_tracks();
+    void unlink_view_tracks_before(const int frame_id);
+    void relink_view_tracks(const int from_landmark_id, const int to_landmark_id);
+    void trim_view_histories(const int frame_id, const bool at_keyframe);
+    static double correspondence_sigma(const mapping::frame& frame_current, const pose_correspondence& match);
+    optimisation::edge* add_view_pose_edge(optimisation::factor_graph& ba, optimisation::vertex* const pose_node, optimisation::vertex* const point_node, const mapping::frame& frame_current, const pose_correspondence& match, const bool weighted, const double scale, const optimisation::loss& lossfunction, std::vector<optimisation::vertex*>& extrinsic_nodes);
+    bool view_correspondence_agrees(const mapping::frame& frame_current, const pose_correspondence& match, const math::matrix<double, 3, 3>& rotation, const math::matrix<double, 3, 1>& translation, const double scale) const;
+    void append_view_correspondences(mapping::frame& frame_current, std::vector<pose_correspondence>& correspondences);
+    bool pose_from_rig_tracks(mapping::frame& frame_current, size_t& correspondences);
+    void track_view_local_maps(mapping::frame& frame_current);
+    void add_view_observations(mapping::frame& frame_current);
+    size_t triangulate_across_cameras(mapping::frame& frame_current, const bool create);
+    size_t triangulate_view_tracks(mapping::frame& frame_current);
+    bool initialise_from_rig(mapping::frame& frame_current);
+    // A frame that saw a landmark from two of the rig's cameras shares it with the other frames once.
+    static void count_frames_once(const std::vector<mapping::map::observation>& landmark_observations, std::vector<int>& observing_frames);
+    // A loop on a metric map is rigid, its scale the measurements'.
+    static math::sim3<double> loop_measurement(const math::sim3<double>& relative, const bool metric_scale);
 
     static constexpr double triangulation_parallax_degrees_minimum = 1.0;
 
@@ -2681,7 +2750,7 @@ private:
                     if (obs.frame_id == candidate_id) {
                         observed = true;
                     }
-                    else if ((this->keyframe_ids_.count(obs.frame_id) != 0) && (this->reconstruction.frames.count(obs.frame_id) != 0)) {
+                    else if ((obs.camera == 0) && (this->keyframe_ids_.count(obs.frame_id) != 0) && (this->reconstruction.frames.count(obs.frame_id) != 0)) {
                         ++other_keyframes;
                         observed_before = observed_before || (obs.frame_id < candidate_id);
                         observed_after = observed_after || (obs.frame_id > candidate_id);
@@ -2789,6 +2858,7 @@ private:
             for (const mapping::map::observation& observation : landmark_observations) {
                 observing_frames.push_back(observation.frame_id);
             }
+            slam::count_frames_once(landmark_observations, observing_frames);
             this->covisibility_.update(landmark_id, observing_frames.data(), observing_frames.size());
         }
         this->covisibility_.end_update();
@@ -2830,13 +2900,21 @@ private:
     }
 
     size_t track_local_map(mapping::frame& frame_current, const double radius = slam::local_map_projection_radius, const bool refine_pose = true, std::vector<int>* const linked_tracks = nullptr, const bool recovering = false) {
+        return this->track_local_map_in(frame_current, 0, radius, refine_pose, linked_tracks, recovering);
+    }
+
+    // Matches the local map by projection into one camera of the rig and links that camera's tracks: the frame itself for
+    // the reference camera, or its view, posed through the camera's extrinsic. Only the reference camera's matching refines
+    // the pose, from every camera's links.
+    size_t track_local_map_in(mapping::frame& body, const int camera, const double radius, const bool refine_pose, std::vector<int>* const linked_tracks, const bool recovering) {
+        mapping::frame& frame_current = (camera == 0) ? body : body.views[static_cast<size_t>(camera - 1)];
         const std::vector<int> candidates = this->local_map_candidates(frame_current, recovering);
         if (candidates.empty()) {
             return 0;
         }
-        const std::vector<feature::tracker::tracker::track*> active = this->active_point_tracks();
+        const std::vector<feature::tracker::tracker::track*> active = this->point_tracks_of(camera);
         std::unordered_set<int> linked_landmark_ids;
-        for (const feature::tracker::tracker::track* const t : this->all_point_tracks()) {
+        for (const feature::tracker::tracker::track* const t : this->all_point_tracks_of(camera)) {
             if (t->landmark_id >= 0) {
                 linked_landmark_ids.insert(t->landmark_id);
             }
@@ -3048,16 +3126,16 @@ private:
             ++matched;
         }
         for (const std::pair<size_t, int>& spawn : spawns) {
-            feature::tracker::tracker::track& created = this->tracker_.spawn(frame_current.id, frame_current.keypoints[spawn.first], frame_current.descriptors[spawn.first]);
+            feature::tracker::tracker::track& created = this->tracker_of(camera).spawn(frame_current.id, frame_current.keypoints[spawn.first], frame_current.descriptors[spawn.first]);
             created.landmark_id = spawn.second;
             if (linked_tracks != nullptr) {
                 linked_tracks->push_back(created.id);
             }
         }
         this->matched_by_projection += matched;
-        if ((matched > 0) && refine_pose) {
+        if ((matched > 0) && refine_pose && (camera == 0)) {
             size_t refined_inliers = 0;
-            const bool refined = this->refine_pose_from_prior(frame_current, refined_inliers);
+            const bool refined = this->refine_pose_from_prior(body, refined_inliers);
             core::logger::log(core::logger::level::info, "Local map (frame %d): %zu of %zu landmarks in view without a track matched by projection (%zu tracks started), pose %s with %zu inliers.", frame_current.id, matched, in_view, spawns.size(), refined ? "refined" : "kept", refined_inliers);
         }
         return matched;
@@ -3567,6 +3645,12 @@ public:
     }
 
     void process_frame(const sensor::model& camera_intrinsics, const image::image& image_grey) {
+        this->process(camera_intrinsics, image_grey, nullptr, nullptr, 0);
+    }
+
+private:
+    // A frame of the reference camera, with the views of a rig's other cameras at the same moment when there are any.
+    void process(const sensor::model& camera_intrinsics, const image::image& image_grey, const sensor::model* const view_cameras, const image::image* const view_images, const size_t view_count) {
         // While the caller gives the camera it gave before, the frame takes the camera as the adjustments have refined it.
         this->calibration_.set_level(this->frontend.calibration);
         mapping::frame frame(this->reconstruction.allocate_frame_id(), this->calibration_.camera_for(camera_intrinsics), image_grey, this->frontend);
@@ -3593,6 +3677,8 @@ public:
             }
             core::logger::log(core::logger::level::info, "Detected Features: %sfeatures (at each pyramid level), %zu consumed.", counts, frame.keypoints.size());
         }
+
+        this->add_views(frame, view_cameras, view_images, view_count);
 
         // Move the frame into the reconstruction, pyramids and all, and work on the stored copy from here.
         const int frame_id = frame.id;
@@ -3642,6 +3728,8 @@ public:
             this->tracker_.update(frame_id, frame_added.image_pyramid, frame_added.keypoints, frame_added.descriptors);
         }
 
+        this->update_view_trackers(frame_added);
+
         core::logger::log(core::logger::level::info, "Tracked: %zu active tracks.", this->active_point_tracks().size());
 
         if (this->frontend.lines) {
@@ -3688,8 +3776,8 @@ public:
 
         this->trim_track_histories(frame_id);
 
-        // Nothing to do for the first frame.
-        if (frame_id == 0) {
+        // Nothing to do for the first frame, unless a metric rig can initialise from it alone.
+        if ((frame_id == 0) && !this->reconstruction.sensor_rig.metric()) {
             return;
         }
 
@@ -3707,6 +3795,7 @@ public:
                     t->landmark_id = -1;
                 }
             }
+            this->unlink_dangling_view_tracks();
         };
         reset_dangling();
 
@@ -3764,6 +3853,14 @@ public:
                 this->frame_submaps_[frame_current.id] = this->tracking_submap_;
                 this->relocalised_keyframe_id_ = this->recalled_keyframe_id_;
             }
+        }
+        else if (initialise && this->reconstruction.sensor_rig.metric() && this->initialise_from_rig(frame_current)) {
+            is_keyframe = true;
+        }
+        else if (initialise && (frame_current.id == this->init_anchor_frame_id_)) {
+            // A rig whose cameras share too little of their views initialises from two of its frames as one camera does, and
+            // its first frame is the anchor, with nothing to initialise against yet.
+            return;
         }
         else if (initialise) {
             const mapping::frame& frame_anchor = this->reconstruction.frames.at(this->init_anchor_frame_id_);
@@ -4080,6 +4177,7 @@ public:
             }
 
             if (pnp_success) {
+                this->track_view_local_maps(frame_current);
                 this->track_local_map(frame_current);
                 // As a fallback the voxel map's landmarks are searched too when the covisible ones leave the frame weakly tracked.
                 if ((this->frontend.local_map == mapping::frame::settings::local_map_kind::fallback) && (this->landmark_track_count() < slam::local_map_fallback_tracks)) {
@@ -4123,10 +4221,13 @@ public:
             is_keyframe = pnp_success && (tracked_count >= 3) && (frames_since_last_kf >= keyframe_min_interval) && (interval_due || (tracked_ratio < keyframe_tracked_ratio));
         }
         is_keyframe = is_keyframe && (this->relocalisation_probation_ == 0) && !relocalised && !posed_from_tracks;
+        this->reconstruction.pose_views(frame_current);
 
         if (!is_keyframe) {
             core::logger::log(core::logger::level::info, "motion-only frame %d, pose from PnP.", frame_current.id);
             this->anchor_non_keyframe(frame_current);
+            // Only a keyframe's views hold observations.
+            frame_current.views.clear();
             this->previous_tracked_frame_id_ = this->last_tracked_frame_id_;
             this->last_tracked_frame_id_ = frame_current.id;
             return;
@@ -4174,13 +4275,14 @@ public:
                 this->reconstruction.add_line_observation(frame_current.id, line_landmark, pixels[0][0], pixels[0][1], pixels[1][0], pixels[1][1]);
                 slam::extend_line_endpoints(frame_current, *t, line_landmark);
             }
+            this->add_view_observations(frame_current);
         }
         this->reconstruction.optimise(1, true, 50);
         this->reacquire(frame_current);
         this->reconstruction.cull();
         reset_dangling();
 
-        int new_landmarks = 0;
+        int new_landmarks = this->reconstruction.sensor_rig.metric() ? static_cast<int>(this->triangulate_across_cameras(frame_current, true)) : 0;
         std::vector<double> new_landmark_depths;
         size_t candidates = 0;
         size_t without_reference = 0;
@@ -4320,6 +4422,7 @@ public:
             }
             core::logger::log(core::logger::level::debug, "Triangulation keyframe %d: %zu candidates, %d landmarks (%zu unbounded), %zu at infinity (%zu below the parallax gate), %zu failed the gates, %zu without a keyframe reference.", frame_current.id, candidates, new_landmarks, demoted, at_infinity + below_parallax, below_parallax, failed_gates, without_reference);
         }
+        new_landmarks += static_cast<int>(this->triangulate_view_tracks(frame_current));
         int new_line_landmarks = 0;
         if (this->frontend.lines) {
             new_line_landmarks = this->triangulate_lines(frame_current);
@@ -4479,10 +4582,13 @@ public:
             }
             t->history.resize(keep);
         }
+        this->trim_view_histories(frame_current.id, true);
 
         this->previous_tracked_frame_id_ = this->last_tracked_frame_id_;
         this->last_tracked_frame_id_ = frame_current.id;
     }
 };
+
+#include "slam_rig.hpp"
 
 #endif // ZEROSLAM_SLAM_HPP

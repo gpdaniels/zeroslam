@@ -89,8 +89,9 @@ namespace mapping {
         // cameras reach the frames through their extrinsics, which adjustments refine where the rig asks for it.
         mapping::rig sensor_rig;
 
-        // Whether the map has a metric scale, which a metric rig (a stereo baseline) gives it: no scale gauge is then held, the
-        // measurements hold the scale themselves. The one property the pipeline asks about the scale.
+        // Whether the map has a metric scale, which a rig's baseline gives it once the map is initialised across it (a stereo
+        // pair): no scale gauge is then held, the measurements hold the scale themselves. The one property the pipeline asks
+        // about the scale.
         bool metric_scale = false;
 
         int next_frame_id = 0;
