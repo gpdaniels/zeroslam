@@ -106,6 +106,18 @@ class zeroslam_sensor_rig_struct(_ctypes.Structure):
         ("parameters_data", _ctypes.c_void_p)
     ]
 
+class zeroslam_extrinsic_enum(_enum.IntEnum):
+    zeroslam_extrinsic_fixed = 0
+    zeroslam_extrinsic_refine = 1
+
+class zeroslam_sensor_extrinsics_struct(_ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("sensor_id", _ctypes.c_int),
+        ("refinement", _ctypes.c_int),
+        ("pose", _ctypes.c_double * 7)
+    ]
+
 class zeroslam_sensor_data_struct(_ctypes.Structure):
     _pack_ = 1
     _fields_ = [
@@ -227,6 +239,7 @@ class zeroslam_map_edges_struct(_ctypes.Structure):
 assert _ctypes.sizeof(zeroslam_sensor_parameters_camera_struct) == 104
 assert _ctypes.sizeof(zeroslam_sensor_parameters_camera_model_struct) == 272
 assert _ctypes.sizeof(zeroslam_sensor_rig_struct) == 12 + _ctypes.sizeof(_ctypes.c_void_p)
+assert _ctypes.sizeof(zeroslam_sensor_extrinsics_struct) == 64
 assert _ctypes.sizeof(zeroslam_sensor_data_struct) == 16 + _ctypes.sizeof(_ctypes.c_void_p)
 assert _ctypes.sizeof(zeroslam_pose_struct) == 456
 assert _ctypes.sizeof(zeroslam_point_struct) == 32
@@ -303,6 +316,12 @@ zeroslam_set_configuration = _wrap("zeroslam_set_configuration", [
 zeroslam_set_sensor_rig = _wrap("zeroslam_set_sensor_rig", [
     _ctypes.POINTER(zeroslam_system),
     _ctypes.POINTER(zeroslam_sensor_rig_struct),
+    _ctypes.c_int
+])
+
+zeroslam_set_sensor_extrinsics = _wrap("zeroslam_set_sensor_extrinsics", [
+    _ctypes.POINTER(zeroslam_system),
+    _ctypes.POINTER(zeroslam_sensor_extrinsics_struct),
     _ctypes.c_int
 ])
 
@@ -399,6 +418,9 @@ class system:
     def set_sensor_rig(self, rig, length):
         return zeroslam_return_enum(zeroslam_set_sensor_rig(self._handle, rig, length))
 
+    def set_sensor_extrinsics(self, extrinsics, length):
+        return zeroslam_return_enum(zeroslam_set_sensor_extrinsics(self._handle, extrinsics, length))
+
     def set_sensor_data(self, data, length):
         return zeroslam_return_enum(zeroslam_set_sensor_data(self._handle, data, length))
 
@@ -438,6 +460,8 @@ __all__ = [
     "zeroslam_camera_model_parameter_count",
     "zeroslam_sensor_parameters_camera_model_struct",
     "zeroslam_sensor_rig_struct",
+    "zeroslam_extrinsic_enum",
+    "zeroslam_sensor_extrinsics_struct",
     "zeroslam_sensor_data_struct",
     "zeroslam_pose_struct",
     "zeroslam_point_struct",
@@ -456,6 +480,7 @@ __all__ = [
     "zeroslam_get_configuration",
     "zeroslam_set_configuration",
     "zeroslam_set_sensor_rig",
+    "zeroslam_set_sensor_extrinsics",
     "zeroslam_set_sensor_data",
     "zeroslam_finalise",
     "zeroslam_get_camera_calibration",

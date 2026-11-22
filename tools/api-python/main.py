@@ -92,6 +92,15 @@ def main():
         print("set_sensor_rig: {} (camera, id {}, {}x{})".format(result.name, sensor_id, width, height))
         require(result == success, "set_sensor_rig")
 
+        # Where each sensor sits on the rig's body, sensor to body, and whether it is refined: a single camera is the body.
+        extrinsic = zeroslam.zeroslam_sensor_extrinsics_struct()
+        extrinsic.sensor_id = sensor_id
+        extrinsic.refinement = zeroslam.zeroslam_extrinsic_enum.zeroslam_extrinsic_fixed
+        extrinsic.pose[6] = 1.0
+        result = system.set_sensor_extrinsics(extrinsic, 1)
+        print("set_sensor_extrinsics: {} (id {} at the body's origin, fixed)".format(result.name, sensor_id))
+        require(result == success, "set_sensor_extrinsics")
+
         frame_count = 20
         frame_interval = 33333333
         for frame_index in range(frame_count):

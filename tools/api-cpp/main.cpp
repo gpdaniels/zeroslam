@@ -115,6 +115,15 @@ int main(int argc, char* argv[]) {
     std::printf("set_sensor_rig: %s (%s, id %d, %dx%d)\n", zeroslam_return_enum_to_string(result), zeroslam_sensor_enum_to_string(rig.type), rig.sensor_id, width, height);
     REQUIRE(result == zeroslam_return_success);
 
+    // Where each sensor sits on the rig's body, sensor to body, and whether it is refined: a single camera is the body.
+    zeroslam_sensor_extrinsics_struct extrinsic{};
+    extrinsic.sensor_id = sensor_id;
+    extrinsic.refinement = zeroslam_extrinsic_fixed;
+    extrinsic.pose[6] = 1.0;
+    result = system.set_sensor_extrinsics(&extrinsic, 1);
+    std::printf("set_sensor_extrinsics: %s (id %d at the body's origin, fixed)\n", zeroslam_return_enum_to_string(result), extrinsic.sensor_id);
+    REQUIRE(result == zeroslam_return_success);
+
     constexpr static const int frame_count = 20;
     constexpr static const long long int frame_interval = 33333333ll;
     std::vector<unsigned char> pixels(static_cast<size_t>(width * height));

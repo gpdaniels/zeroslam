@@ -80,6 +80,10 @@ namespace zeroslam {
             return zeroslam_set_sensor_rig(this->handle, rig, length);
         }
 
+        zeroslam_return_enum set_sensor_extrinsics(const zeroslam_sensor_extrinsics_struct* extrinsics, int length) const {
+            return zeroslam_set_sensor_extrinsics(this->handle, extrinsics, length);
+        }
+
         zeroslam_return_enum set_sensor_data(const zeroslam_sensor_data_struct* data, int length) const {
             return zeroslam_set_sensor_data(this->handle, data, length);
         }

@@ -188,6 +188,16 @@ int main(int argc, char* argv[]) {
     printf("set_sensor_rig: %s (%s, id %d, %dx%d)\n", zeroslam_return_enum_to_string(result), zeroslam_sensor_enum_to_string(rig.type), rig.sensor_id, width, height);
     REQUIRE(result == zeroslam_return_success);
 
+    /* Where each sensor sits on the rig's body, sensor to body, and whether it is refined: a single camera is the body. */
+    zeroslam_sensor_extrinsics_struct extrinsic;
+    memset(&extrinsic, 0, sizeof(extrinsic));
+    extrinsic.sensor_id = sensor_id;
+    extrinsic.refinement = zeroslam_extrinsic_fixed;
+    extrinsic.pose[6] = 1.0;
+    result = zeroslam_set_sensor_extrinsics(system, &extrinsic, 1);
+    printf("set_sensor_extrinsics: %s (id %d at the body's origin, fixed)\n", zeroslam_return_enum_to_string(result), extrinsic.sensor_id);
+    REQUIRE(result == zeroslam_return_success);
+
     const int frame_count = 20;
     const long long int frame_interval = 33333333ll;
     unsigned char* pixels = (unsigned char*)malloc((size_t)(width * height));

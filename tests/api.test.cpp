@@ -118,6 +118,7 @@ int main(int argc, char* argv[]) {
         REQUIRE(std::strstr(buffer.data(), "verbosity=1") != nullptr);
         REQUIRE(std::strstr(buffer.data(), "association=both\n") != nullptr);
         REQUIRE(std::strstr(buffer.data(), "collisions=2\n") != nullptr);
+        REQUIRE(std::strstr(buffer.data(), "extrinsics=declared\n") != nullptr);
 
         const char* const delta = "verbosity=3\n";
         REQUIRE(zeroslam_set_configuration(system, delta, static_cast<int>(std::strlen(delta))) == zeroslam_return_success);
@@ -368,9 +369,71 @@ int main(int argc, char* argv[]) {
         rig.parameters_length = static_cast<int>(sizeof(camera_parameters));
         REQUIRE(zeroslam_set_sensor_rig(system, &rig, 1) == zeroslam_return_success);
 
+        // A rig of several cameras, each with its own id.
         zeroslam_sensor_rig_struct two[2] = { rig, rig };
-        two[1].sensor_id = 2;
         REQUIRE(zeroslam_set_sensor_rig(system, &two[0], 2) == zeroslam_return_failure_invalid_rig_sensor);
+        two[1].sensor_id = 2;
+        REQUIRE(zeroslam_set_sensor_rig(system, &two[0], 2) == zeroslam_return_success);
+
+        // Extrinsics of the rig's sensors only, each once, with a rotation and a known refinement.
+        zeroslam_sensor_extrinsics_struct extrinsics[2] = {};
+        extrinsics[0].sensor_id = 1;
+        extrinsics[0].pose[6] = 1.0;
+        extrinsics[1].sensor_id = 2;
+        extrinsics[1].pose[0] = 0.1;
+        extrinsics[1].pose[6] = 1.0;
+        extrinsics[1].refinement = zeroslam_extrinsic_refine;
+        REQUIRE(zeroslam_set_sensor_extrinsics(nullptr, &extrinsics[0], 2) == zeroslam_return_failure_invalid_system);
+        REQUIRE(zeroslam_set_sensor_extrinsics(system, nullptr, 2) == zeroslam_return_failure_invalid_argument);
+        extrinsics[1].sensor_id = 7;
+        REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[0], 2) == zeroslam_return_failure_invalid_rig_sensor);
+        extrinsics[1].sensor_id = 1;
+        REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[0], 2) == zeroslam_return_failure_invalid_rig_sensor);
+        extrinsics[1].sensor_id = 2;
+        extrinsics[1].pose[6] = 0.0;
+        REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[0], 2) == zeroslam_return_failure_invalid_rig_sensor);
+        extrinsics[1].pose[6] = 1.0;
+        extrinsics[1].refinement = 5;
+        REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[0], 2) == zeroslam_return_failure_invalid_rig_sensor);
+        extrinsics[1].refinement = zeroslam_extrinsic_refine;
+        REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[0], 2) == zeroslam_return_success);
+
+        // The extrinsics setting.
+        const char* const refine = "extrinsics=refine\n";
+        REQUIRE(zeroslam_set_configuration(system, refine, static_cast<int>(std::strlen(refine))) == zeroslam_return_success);
+        const char* const unknown = "extrinsics=sometimes\n";
+        REQUIRE(zeroslam_set_configuration(system, unknown, static_cast<int>(std::strlen(unknown))) == zeroslam_return_failure_invalid_configuration);
+
+        // The cameras of a frame share its timestamp: a camera twice, or a newer frame before the frame is whole, is refused,
+        // and a frame may arrive over several calls.
+        std::vector<unsigned char> pixels(static_cast<size_t>(camera_parameters.width * camera_parameters.height), 128);
+        zeroslam_sensor_data_struct frame[3] = {};
+        for (int i = 0; i < 3; ++i) {
+            frame[i].measurement_length = camera_parameters.width * camera_parameters.height;
+            frame[i].measurement_data = pixels.data();
+            frame[i].timestamp = 1000;
+        }
+        frame[0].sensor_id = 1;
+        frame[1].sensor_id = 1;
+        REQUIRE(zeroslam_set_sensor_data(system, &frame[0], 2) == zeroslam_return_failure_invalid_sensor_data);
+        frame[1].timestamp = 2000;
+        REQUIRE(zeroslam_set_sensor_data(system, &frame[0], 2) == zeroslam_return_failure_invalid_sensor_data);
+        frame[1].sensor_id = 2;
+        frame[1].timestamp = 1000;
+        frame[2].sensor_id = 2;
+        frame[2].timestamp = 2000;
+        REQUIRE(zeroslam_set_sensor_data(system, &frame[0], 3) == zeroslam_return_success);
+        long long int timestamp = 0;
+        REQUIRE(zeroslam_get_timestamp(system, &timestamp) == zeroslam_return_success);
+        REQUIRE(timestamp == 1000);
+        // The frame at 2000 waits for its first camera.
+        frame[0].timestamp = 3000;
+        REQUIRE(zeroslam_set_sensor_data(system, &frame[0], 1) == zeroslam_return_failure_invalid_sensor_data);
+        frame[0].timestamp = 2000;
+        REQUIRE(zeroslam_set_sensor_data(system, &frame[0], 1) == zeroslam_return_success);
+        REQUIRE(zeroslam_get_timestamp(system, &timestamp) == zeroslam_return_success);
+        REQUIRE(timestamp == 2000);
+        REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[0], 2) == zeroslam_return_failure_invalid_rig_sensor);
         REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
     }
 
@@ -671,6 +734,66 @@ int main(int argc, char* argv[]) {
         REQUIRE(keyframes.keyframes_length >= 2);
 
         REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
+    }
+
+    {
+        // A stereo rig, the second camera 20 cm to the right of the first, initialises from its first frame and poses the
+        // camera in metres: the corridor goes by at 5 cm a frame, and the primary camera's poses are what is reported.
+        constexpr static const int width = 320;
+        constexpr static const int height = 240;
+        constexpr static const double baseline = 0.2;
+        zeroslam::system system;
+        REQUIRE(system.is_valid());
+        zeroslam_sensor_parameters_camera_struct camera_parameters{};
+        camera_parameters.width = width;
+        camera_parameters.height = height;
+        camera_parameters.focal_x = 262.5;
+        camera_parameters.focal_y = 262.5;
+        camera_parameters.centre_x = 160.0;
+        camera_parameters.centre_y = 120.0;
+        zeroslam_sensor_rig_struct rig[2] = {};
+        for (int i = 0; i < 2; ++i) {
+            rig[i].type = zeroslam_sensor_camera;
+            rig[i].sensor_id = 1 + i;
+            rig[i].parameters_length = static_cast<int>(sizeof(camera_parameters));
+            rig[i].parameters_data = &camera_parameters;
+        }
+        REQUIRE(system.set_sensor_rig(&rig[0], 2) == zeroslam_return_success);
+        zeroslam_sensor_extrinsics_struct extrinsics[2] = {};
+        extrinsics[0].sensor_id = 1;
+        extrinsics[0].pose[6] = 1.0;
+        extrinsics[1].sensor_id = 2;
+        extrinsics[1].pose[0] = baseline;
+        extrinsics[1].pose[6] = 1.0;
+        REQUIRE(system.set_sensor_extrinsics(&extrinsics[0], 2) == zeroslam_return_success);
+        std::vector<unsigned char> left(static_cast<size_t>(width * height));
+        std::vector<unsigned char> right(static_cast<size_t>(width * height));
+        constexpr static const int frame_count = 20;
+        for (int frame = 0; frame < frame_count; ++frame) {
+            const double position = 0.05 * static_cast<double>(frame);
+            render_corridor(position, width, height, camera_parameters, left.data());
+            render_corridor(position + baseline, width, height, camera_parameters, right.data());
+            zeroslam_sensor_data_struct data[2] = {};
+            data[0].timestamp = 1000 * (frame + 1);
+            data[0].sensor_id = 1;
+            data[0].measurement_length = width * height;
+            data[0].measurement_data = left.data();
+            data[1] = data[0];
+            data[1].sensor_id = 2;
+            data[1].measurement_data = right.data();
+            REQUIRE(system.set_sensor_data(&data[0], 2) == zeroslam_return_success);
+        }
+        zeroslam_pose_struct first{};
+        REQUIRE(system.get_pose_at_timestamp(&first, 1000) == zeroslam_return_success);
+        REQUIRE(first.pose[0] == 0.0);
+        REQUIRE(first.pose[6] == 1.0);
+        zeroslam_pose_struct last{};
+        REQUIRE(system.get_pose(&last) == zeroslam_return_success);
+        REQUIRE(last.timestamp == 1000 * frame_count);
+        const double travelled = 0.05 * static_cast<double>(frame_count - 1);
+        REQUIRE(math::abs(last.pose[0] - travelled) < 0.05 * travelled);
+        REQUIRE(math::abs(last.pose[1]) < 0.02);
+        REQUIRE(math::abs(last.pose[2]) < 0.02);
     }
 
     return EXIT_SUCCESS;

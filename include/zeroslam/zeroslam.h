@@ -225,6 +225,21 @@ typedef struct zeroslam_sensor_rig_struct {
 } zeroslam_sensor_rig_struct;
 ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_rig_struct) == 12 + sizeof(void*), "For ABI compatibility the sizeof(zeroslam_sensor_rig_struct) must be 12+sizeof(void*) bytes.")
 
+typedef enum zeroslam_extrinsic_enum {
+    zeroslam_extrinsic_fixed = 0,
+    zeroslam_extrinsic_refine = 1
+} zeroslam_extrinsic_enum;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_extrinsic_enum) == 4, "For ABI compatibility the sizeof(zeroslam_extrinsic_enum) must be 4 bytes.")
+
+// Where a sensor of the rig sits on the rig's body: the sensor-to-body pose { x, y, z, qx, qy, qz, qw }, p_body = R * p_sensor + t
+// (the scene's ego -> sensor/[name] on /tf), and whether the system refines it (a zeroslam_extrinsic_enum in refinement).
+typedef struct zeroslam_sensor_extrinsics_struct {
+    int sensor_id;
+    int refinement;
+    double pose[7];
+} zeroslam_sensor_extrinsics_struct;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_extrinsics_struct) == 64, "For ABI compatibility the sizeof(zeroslam_sensor_extrinsics_struct) must be 64 bytes.")
+
 typedef struct zeroslam_sensor_data_struct {
     long long int timestamp;
     int sensor_id;
@@ -330,7 +345,12 @@ ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_conf
 
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_configuration(zeroslam_system* system, const char* configuration, int length);
 
+// The rig's cameras, the first of them the primary camera whose poses the system reports. Several cameras are synchronised:
+// each frame is one image of every camera with the same timestamp, in one batch or across calls.
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_rig(zeroslam_system* system, const zeroslam_sensor_rig_struct* rig, int length);
+
+// The extrinsics of sensors of the rig, after the rig and before any data; a sensor given none sits at the body's origin, fixed.
+ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_extrinsics(zeroslam_system* system, const zeroslam_sensor_extrinsics_struct* extrinsics, int length);
 
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system* system, const zeroslam_sensor_data_struct* data, int length);
 

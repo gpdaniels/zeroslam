@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "api.hpp"
 
+#include "api_rig.hpp"
 #include "core/logger.hpp"
 #include "core/thread_pool.hpp"
 #include "feature/refiner/structure_tensor.hpp"
@@ -59,6 +60,8 @@ struct zeroslam_system final {
     };
 
     std::vector<camera_entry> cameras;
+    // A rig of several cameras: their extrinsics and the frame that waits for the rest of its images (api_rig.hpp).
+    api_rig rig;
 
     struct frame_record final {
         long long int timestamp;
@@ -232,6 +235,19 @@ namespace {
 
     // In the order of mapping::calibration::level.
     constexpr static const char* const calibration_names[5] = { "off", "focal", "focal_centre", "intrinsics", "all" };
+    constexpr static const char configuration_key_extrinsics[] = "extrinsics";
+
+    const char* extrinsics_name(const mapping::frame::settings& frontend) {
+        switch (frontend.extrinsics) {
+            case mapping::frame::settings::extrinsics_kind::declared:
+                return "declared";
+            case mapping::frame::settings::extrinsics_kind::fixed:
+                return "fixed";
+            case mapping::frame::settings::extrinsics_kind::refine:
+                return "refine";
+        }
+        return "declared";
+    }
 
     constexpr static const char* const anchor_names[4] = { "translation", "affine", "translation_illumination", "affine_illumination" };
 
@@ -323,7 +339,7 @@ namespace {
         return std::snprintf(
             buffer,
             capacity,
-            "%s=%d\n%s=%s\n%s=%.9g\n%s=%s\n%s=%.9g\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n",
+            "%s=%d\n%s=%s\n%s=%.9g\n%s=%s\n%s=%.9g\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n",
             configuration_key_verbosity,
             core::logger::get_verbosity(),
             configuration_key_detector,
@@ -395,7 +411,9 @@ namespace {
             configuration_key_solver_precision,
             (frontend.solver_precision == optimisation::factor_graph::precision::single_precision) ? "single" : "double",
             configuration_key_calibration,
-            calibration_names[static_cast<int>(frontend.calibration)]
+            calibration_names[static_cast<int>(frontend.calibration)],
+            configuration_key_extrinsics,
+            extrinsics_name(frontend)
         );
     }
 
@@ -885,6 +903,20 @@ namespace {
                     return false;
                 }
             }
+            else if (token_equals(line, key_length, configuration_key_extrinsics)) {
+                if (token_equals(value, value_length, "declared")) {
+                    frontend.extrinsics = mapping::frame::settings::extrinsics_kind::declared;
+                }
+                else if (token_equals(value, value_length, "fixed")) {
+                    frontend.extrinsics = mapping::frame::settings::extrinsics_kind::fixed;
+                }
+                else if (token_equals(value, value_length, "refine")) {
+                    frontend.extrinsics = mapping::frame::settings::extrinsics_kind::refine;
+                }
+                else {
+                    return false;
+                }
+            }
             else if (token_equals(line, key_length, configuration_key_wavelet_seed)) {
                 if (token_equals(value, value_length, "rest")) {
                     frontend.wavelet_seed = feature::tracker::tracker::wavelet_seed_kind::rest;
@@ -986,12 +1018,83 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_rig(zeroslam_system* 
         }
         cameras.push_back(camera);
     }
-    if (cameras.size() != 1) {
+    if (!api_rig::cameras_supported(cameras.size())) {
         return zeroslam_return_failure_invalid_rig_sensor;
     }
     system->cameras.swap(cameras);
+    system->rig.clear_extrinsics();
     return zeroslam_return_success;
 }
+
+zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_extrinsics(zeroslam_system* system, const zeroslam_sensor_extrinsics_struct* extrinsics, int length) {
+    if (system == nullptr) {
+        return zeroslam_return_failure_invalid_system;
+    }
+    if ((extrinsics == nullptr) || (length <= 0)) {
+        return zeroslam_return_failure_invalid_argument;
+    }
+    std::vector<int> sensor_ids;
+    for (const zeroslam_system::camera_entry& camera : system->cameras) {
+        sensor_ids.push_back(camera.sensor_id);
+    }
+    if (system->any_data || sensor_ids.empty() || !system->rig.set_extrinsics(extrinsics, length, sensor_ids)) {
+        return zeroslam_return_failure_invalid_rig_sensor;
+    }
+    return zeroslam_return_success;
+}
+}
+
+namespace {
+    // The data of a rig of several cameras, a frame at a time, each frame one image of every camera (api_rig).
+    zeroslam_return_enum set_rig_sensor_data(zeroslam_system* system, const zeroslam_sensor_data_struct* data, int length) {
+        const size_t camera_count = system->cameras.size();
+        std::vector<long long> timestamps(static_cast<size_t>(length), 0);
+        std::vector<size_t> cameras(static_cast<size_t>(length), camera_count);
+        for (int i = 0; i < length; ++i) {
+            const zeroslam_sensor_data_struct& entry = data[i];
+            for (size_t index = 0; (index < camera_count) && (entry.sensor_id != 0); ++index) {
+                cameras[static_cast<size_t>(i)] = (system->cameras[index].sensor_id == entry.sensor_id) ? index : cameras[static_cast<size_t>(i)];
+            }
+            if (cameras[static_cast<size_t>(i)] == camera_count) {
+                return zeroslam_return_failure_invalid_sensor_data;
+            }
+            const zeroslam_system::camera_entry& camera = system->cameras[cameras[static_cast<size_t>(i)]];
+            if ((entry.measurement_data == nullptr) || (static_cast<size_t>(entry.measurement_length) != (static_cast<size_t>(camera.width) * static_cast<size_t>(camera.height)))) {
+                return zeroslam_return_failure_invalid_sensor_data;
+            }
+            timestamps[static_cast<size_t>(i)] = entry.timestamp;
+        }
+        if (!system->rig.accepts(timestamps.data(), cameras.data(), cameras.size(), camera_count, system->any_data, system->latest_timestamp)) {
+            return zeroslam_return_failure_invalid_sensor_data;
+        }
+        if (!system->any_data) {
+            std::vector<int> sensor_ids;
+            for (const zeroslam_system::camera_entry& camera : system->cameras) {
+                sensor_ids.push_back(camera.sensor_id);
+            }
+            system->slam_instance.set_rig(system->rig.make_rig(sensor_ids));
+        }
+        system->any_data = true;
+        for (int i = 0; i < length; ++i) {
+            if (!system->rig.take(data[i].timestamp, cameras[static_cast<size_t>(i)], static_cast<const unsigned char*>(data[i].measurement_data), static_cast<size_t>(data[i].measurement_length), camera_count)) {
+                continue;
+            }
+            std::vector<sensor::model> models;
+            std::vector<image::image> images;
+            for (size_t index = 0; index < camera_count; ++index) {
+                const zeroslam_system::camera_entry& camera = system->cameras[index];
+                models.push_back(camera.intrinsics);
+                images.push_back(image::image(static_cast<size_t>(camera.height), static_cast<size_t>(camera.width), system->rig.pixels(index)));
+            }
+            system->slam_instance.process_rig_frame(models, images);
+            system->frames.push_back({ system->rig.timestamp(), system->slam_instance.reconstruction.next_frame_id - 1 });
+            system->latest_timestamp = system->rig.timestamp();
+        }
+        return zeroslam_return_success;
+    }
+}
+
+extern "C" {
 
 zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system* system, const zeroslam_sensor_data_struct* data, int length) {
     if (system == nullptr) {
@@ -999,6 +1102,9 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
     }
     if ((data == nullptr) || (length <= 0)) {
         return zeroslam_return_failure_invalid_argument;
+    }
+    if (system->cameras.size() > 1) {
+        return set_rig_sensor_data(system, data, length);
     }
     std::vector<const zeroslam_system::camera_entry*> cameras(static_cast<size_t>(length), nullptr);
     for (int i = 0; i < length; ++i) {
