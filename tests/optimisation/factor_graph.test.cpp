@@ -35,6 +35,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/vertices/point.hpp"
 #include "optimisation/vertices/pose.hpp"
 #include "optimisation/vertices/similarity.hpp"
+#include "sensor/camera.hpp"
+#include "sensor/camera/double_sphere.hpp"
+#include "sensor/camera/kannala_brandt.hpp"
 #include "sensor/camera/model.hpp"
 #include "sensor/camera/pinhole.hpp"
 #include "sensor/camera/pinhole_radial_tangential.hpp"
@@ -407,6 +410,61 @@ static void build_calibration_problem(calibration_problem& built, core::random_p
             built.edges.push_back(built.graph.add_edge(static_cast<optimisation::edge&&>(prior)));
         }
     }
+}
+
+// The same problem through any camera model: observations by the true camera, the vertex started from another.
+static void build_model_problem(calibration_problem& built, core::random_pcg& rng, const sensor::camera::model<double>& truth, const sensor::camera::model<double>& start, const int* const locals, const size_t camera_count, const size_t landmark_count) {
+    const math::matrix<double, 3, 1> target = { { 0.0, 0.0, 6.0 } };
+    std::vector<math::se3<double>> poses;
+    for (size_t i = 0; i < camera_count; ++i) {
+        const double phase = static_cast<double>(i) / static_cast<double>(camera_count - 1);
+        const math::so3<double> turn = math::so3<double>::exp({ { 0.25 * std::sin(6.0 * phase), -0.5 + phase, 0.4 * std::cos(5.0 * phase) } });
+        const math::matrix<double, 3, 1> centre = target - (turn.get_matrix() * math::matrix<double, 3, 1>{ { 0.0, 0.0, 5.0 } });
+        const math::matrix<double, 3, 3> rotation = math::transpose(turn.get_matrix());
+        poses.push_back(math::se3<double>(math::so3<double>(rotation), -(rotation * centre)));
+    }
+    for (size_t i = 0; i < camera_count; ++i) {
+        const math::se3<double> noisy = math::se3<double>::exp({ { rng.get_random(-0.01, 0.01), rng.get_random(-0.01, 0.01), rng.get_random(-0.01, 0.01), rng.get_random(-0.02, 0.02), rng.get_random(-0.02, 0.02), rng.get_random(-0.02, 0.02) } }) * poses[i];
+        const math::se3<double>& used = (i < 2) ? poses[i] : noisy;
+        optimisation::vertex camera_vertex{ optimisation::vertices::pose() };
+        const double camera_pose[7] = { used.translation()[0], used.translation()[1], used.translation()[2], used.rotation().get_quaternion()[1], used.rotation().get_quaternion()[2], used.rotation().get_quaternion()[3], used.rotation().get_quaternion()[0] };
+        REQUIRE(camera_vertex.set_parameters(&camera_pose[0], 7));
+        camera_vertex.set_fixed(i == 0);
+        built.cameras.push_back(built.graph.add_vertex(static_cast<optimisation::vertex&&>(camera_vertex)));
+    }
+    built.intrinsics = built.graph.add_vertex(optimisation::vertices::intrinsics::make(start, locals, start.get_parameter_count()));
+    REQUIRE(built.intrinsics != nullptr);
+    const optimisation::loss robust_loss{ optimisation::losses::huber(2.0) };
+    for (size_t l = 0; l < landmark_count; ++l) {
+        // Points over a wide field, out to the corners of a fisheye's view.
+        const math::matrix<double, 3, 1> point = target + math::matrix<double, 3, 1>{ { rng.get_random(-4.0, 4.0), rng.get_random(-3.0, 3.0), rng.get_random(-2.0, 2.0) } };
+        optimisation::vertex landmark_vertex{ optimisation::vertices::point() };
+        const math::matrix<double, 3, 1> noisy = point + math::matrix<double, 3, 1>{ { rng.get_random(-0.05, 0.05), rng.get_random(-0.05, 0.05), rng.get_random(-0.05, 0.05) } };
+        REQUIRE(landmark_vertex.set_parameters(noisy.data(), 3));
+        landmark_vertex.set_marginalised(true);
+        optimisation::vertex* const landmark = built.graph.add_vertex(static_cast<optimisation::vertex&&>(landmark_vertex));
+        built.landmarks.push_back(landmark);
+        for (size_t c = 0; c < camera_count; ++c) {
+            const math::matrix<double, 3, 1> in_camera = poses[c] * point;
+            double pixel[2];
+            if (!truth.project(in_camera.data(), &pixel[0]) || (pixel[0] < 0.0) || (pixel[0] > 640.0) || (pixel[1] < 0.0) || (pixel[1] > 480.0)) {
+                continue;
+            }
+            optimisation::edge edge{ optimisation::edges::reprojection(start, true) };
+            edge.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { pixel[0] + rng.get_random(-0.3, 0.3), pixel[1] + rng.get_random(-0.3, 0.3) } }.data()));
+            edge.add_vertex(built.cameras[c]);
+            edge.add_vertex(landmark);
+            edge.add_vertex(built.intrinsics);
+            edge.set_loss(robust_loss);
+            built.edges.push_back(built.graph.add_edge(static_cast<optimisation::edge&&>(edge)));
+            REQUIRE(built.edges.back() != nullptr);
+        }
+    }
+    optimisation::edge gauge{ optimisation::edges::baseline(std::sqrt((poses[1].inverse().translation() - poses[0].inverse().translation()).get_length_squared())) };
+    gauge.add_vertex(built.cameras[1]);
+    gauge.add_vertex(built.cameras[0]);
+    gauge.set_information(math::matrix<double, 0, 0>::identity(1, 1) * 1e6);
+    built.edges.push_back(built.graph.add_edge(static_cast<optimisation::edge&&>(gauge)));
 }
 
 int main(int argc, char* argv[]) {
@@ -1171,6 +1229,68 @@ int main(int argc, char* argv[]) {
                     REQUIRE(is_value_approx(recovered[0], recovered_dense[0], (variant == 2) ? 1e-4 : 1e-6));
                     REQUIRE(is_value_approx(recovered[2], recovered_dense[2], (variant == 2) ? 1e-4 : 1e-6));
                 }
+            }
+        }
+    }
+
+    {
+        // Through the fisheye models too, Kannala-Brandt and the double sphere: started 6% long in focal length, some pixels
+        // off in the principal point and with no distortion or another shape, each solver recovers every parameter, the
+        // distortion and shape parameters included.
+        struct model_case final {
+            const char* name;
+            size_t count;
+            double truth[8];
+            double start[8];
+            double tolerance[8];
+        };
+
+        const model_case cases[2] = {
+            { sensor::camera::kannala_brandt<double>::name, 8, { 300.0, 302.0, 320.0, 240.0, 0.05, -0.01, 0.002, -0.0005 }, { 318.0, 320.12, 325.0, 236.0, 0.0, 0.0, 0.0, 0.0 }, { 1.0, 1.0, 1.0, 1.0, 0.005, 0.01, 0.01, 0.005 } },
+            { sensor::camera::double_sphere<double>::name, 6, { 250.0, 252.0, 320.0, 240.0, -0.15, 0.58, 0.0, 0.0 }, { 265.0, 267.12, 324.0, 237.0, -0.05, 0.55, 0.0, 0.0 }, { 1.0, 1.0, 1.0, 1.0, 0.02, 0.005, 0.0, 0.0 } }
+        };
+        for (const model_case& entry : cases) {
+            sensor::model truth;
+            sensor::model start;
+            REQUIRE(sensor::camera::make_model(entry.name, &entry.truth[0], entry.count, truth));
+            REQUIRE(sensor::camera::make_model(entry.name, &entry.start[0], entry.count, start));
+            // The focal lengths together, then each other parameter.
+            int locals[8] = { 0, 0, 1, 2, 3, 4, 5, 6 };
+            for (const int variant : { 0, 1 }) {
+                core::random_pcg rng(0x5eed0c03ull);
+                calibration_problem built;
+                build_model_problem(built, rng, truth, start, &locals[0], 10, 200);
+                REQUIRE(built.intrinsics->get_local_dimensions() == static_cast<int>(entry.count) - 1);
+                if (variant == 1) {
+                    built.graph.set_strategy(optimisation::factor_graph::strategy::square_root);
+                    built.graph.set_conjugate_gradient_tolerance(1e-10);
+                }
+                const double initial_chi = built.graph.get_current_chi();
+                REQUIRE(built.graph.solve(100, true) > 0);
+                REQUIRE(built.graph.get_diagnostics().used_square_root == (variant == 1));
+                REQUIRE(built.graph.get_current_chi() < 1e-2 * initial_chi);
+                const double* const recovered = built.intrinsics->get_parameters();
+                // The parameters each within its bound, the focal lengths within 1% (a fisheye's trades a little against its
+                // shape), and the camera as a whole: every pixel of the image unprojects through the truth and projects back
+                // through the recovered camera within half a pixel.
+                for (size_t index = 0; index < entry.count; ++index) {
+                    const double tolerance = (index < 2) ? (0.01 * entry.truth[index]) : entry.tolerance[index];
+                    REQUIRE(std::abs(recovered[index] - entry.truth[index]) < tolerance);
+                }
+                sensor::model recovered_camera;
+                REQUIRE(sensor::camera::make_model(entry.name, recovered, entry.count, recovered_camera));
+                double worst = 0.0;
+                for (double v = 20.0; v < 480.0; v += 40.0) {
+                    for (double u = 20.0; u < 640.0; u += 40.0) {
+                        const double pixel[2] = { u, v };
+                        double ray[3];
+                        double back[2];
+                        REQUIRE(truth.unproject(&pixel[0], &ray[0]));
+                        REQUIRE(recovered_camera.project(&ray[0], &back[0]));
+                        worst = std::max(worst, std::sqrt(((back[0] - u) * (back[0] - u)) + ((back[1] - v) * (back[1] - v))));
+                    }
+                }
+                REQUIRE(worst < 0.5);
             }
         }
     }

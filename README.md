@@ -184,6 +184,7 @@ The refinement therefore starts at the first adjustment of the whole map with at
 Run from focal lengths 5% and 10% too long (`zeroslam process --focal-scale 1.05`), `calibration=focal_centre` took the absolute trajectory error of EuRoC MH_01 from 6.5 and 15.4 cm back to 1.7 cm, what the given calibration gives, the focal length coming to 463 px from 482 and 505 px as from the given 459 px; TUM fr1_desk went from 2.1 and 2.4 cm to 2.0 and 1.9 cm, and fr1_xyz from 1.4 and 1.9 cm to 1.2 cm, against 2.3 and 1.1 cm with the published calibration.
 A monocular estimate of a focal length is good to a few percent, not to a checkerboard's accuracy: from every start the refinement reached the same value within a pixel or two on each sequence, 463 px on MH_01 for the 459 px of its calibration, and 536 to 541 px on fr1_desk and 526 to 529 px on fr1_xyz for the 517 px published for that camera.
 Started from the published calibration, it left fr1_desk at 1.9 cm, fr1_xyz at 1.2 cm and MH_01 at 1.7 cm.
+Any model's parameters are refined the same way: a synthetic adjustment recovers a Kannala-Brandt and a double sphere camera, started 6% long and with no distortion or another shape, to half a pixel over the whole image, but on the rendered circle of the wide angle test, which turns about the vertical only, `intrinsics` brought a double sphere camera nearer the truth (4.8 from 5.9 pixels rms over its field) and not to it, its focal length trading against its shape.
 
 ## Scene format ##
 
