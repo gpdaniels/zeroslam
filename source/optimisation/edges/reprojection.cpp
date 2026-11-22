@@ -19,8 +19,30 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "math/lie.hpp"
 
 namespace optimisation::edges {
-    reprojection::reprojection(const sensor::camera::model<double>& camera_model)
-        : camera(camera_model) {
+    reprojection::reprojection(const sensor::camera::model<double>& camera_model, const bool with_intrinsics)
+        : camera(camera_model)
+        , intrinsics_slot(with_intrinsics ? reprojection::vertex_count : -1) {
+    }
+
+    int reprojection::get_vertex_count() const {
+        return reprojection::vertex_count + ((this->intrinsics_slot >= 0) ? 1 : 0);
+    }
+
+    const vertices::intrinsics* reprojection::intrinsics_at(const edge& context, const int slot) {
+        if ((slot < 0) || (static_cast<size_t>(slot) >= context.num_vertices())) {
+            return nullptr;
+        }
+        return context.get_vertex(slot)->get_policy<vertices::intrinsics>();
+    }
+
+    void reprojection::set_intrinsics_jacobian(const edge& context, const int slot, const bool projected, const double* const jacobian_parameters, math::matrix<double, 0, 0>& jacobian) {
+        const vertices::intrinsics* const calibration = reprojection::intrinsics_at(context, slot);
+        const size_t columns = static_cast<size_t>(context.get_vertex(slot)->get_local_dimensions());
+        double values[2 * vertex::maximum_parameters] = {};
+        if ((calibration != nullptr) && projected) {
+            calibration->select_free_columns(jacobian_parameters, 2, -1.0, &values[0]);
+        }
+        edge::set_jacobian(jacobian, 2, columns, &values[0]);
     }
 
     double reprojection::behind_camera_residual(const double depth) {
@@ -34,7 +56,9 @@ namespace optimisation::edges {
         const math::matrix<double, 3, 1> landmark_world({ xyz_params[0], xyz_params[1], xyz_params[2] });
         const math::matrix<double, 3, 1> landmark_camera = pose * landmark_world;
         math::matrix<double, 2, 1> projected = { { 0.0, 0.0 } };
-        return this->camera.project(landmark_camera.data(), projected.data());
+        const vertices::intrinsics* const calibration = reprojection::intrinsics_at(context, this->intrinsics_slot);
+        const sensor::camera::model<double>& projection = (calibration != nullptr) ? calibration->get_camera() : this->camera;
+        return projection.project(landmark_camera.data(), projected.data());
     }
 
     void reprojection::compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const {
@@ -44,7 +68,9 @@ namespace optimisation::edges {
         const math::matrix<double, 3, 1> landmark_world({ xyz_params[0], xyz_params[1], xyz_params[2] });
         const math::matrix<double, 3, 1> landmark_camera = pose * landmark_world;
         math::matrix<double, 2, 1> projected = { { 0.0, 0.0 } };
-        if (!this->camera.project(landmark_camera.data(), projected.data())) {
+        const vertices::intrinsics* const calibration = reprojection::intrinsics_at(context, this->intrinsics_slot);
+        const sensor::camera::model<double>& projection = (calibration != nullptr) ? calibration->get_camera() : this->camera;
+        if (!projection.project(landmark_camera.data(), projected.data())) {
             const double penalty = reprojection::behind_camera_residual(landmark_camera[2]);
             residual[0][0] = penalty;
             residual[1][0] = penalty;
@@ -63,7 +89,11 @@ namespace optimisation::edges {
 
         double projected[2];
         math::matrix<double, 2, 3> jacobian_camera;
-        if (!this->camera.project(landmark_camera.data(), projected, jacobian_camera.data())) {
+        const vertices::intrinsics* const calibration = reprojection::intrinsics_at(context, this->intrinsics_slot);
+        const sensor::camera::model<double>& projection = (calibration != nullptr) ? calibration->get_camera() : this->camera;
+        double jacobian_parameters[2 * vertex::maximum_parameters];
+        const bool projects = projection.project(landmark_camera.data(), projected, jacobian_camera.data(), (calibration != nullptr) ? &jacobian_parameters[0] : nullptr);
+        if (!projects) {
             jacobian_camera[0][0] = 0.0;
             jacobian_camera[0][1] = 0.0;
             jacobian_camera[0][2] = reprojection::behind_camera_slope;
@@ -101,5 +131,9 @@ namespace optimisation::edges {
 
         const math::matrix<double, 2, 3> jacobian_landmark_res = -(jacobian_camera * pose.rotation().get_matrix());
         edge::set_jacobian(jacobians[1], 2, 3, jacobian_landmark_res.data());
+
+        if (this->intrinsics_slot >= 0) {
+            reprojection::set_intrinsics_jacobian(context, this->intrinsics_slot, projects, &jacobian_parameters[0], jacobians[static_cast<size_t>(this->intrinsics_slot)]);
+        }
     }
 }

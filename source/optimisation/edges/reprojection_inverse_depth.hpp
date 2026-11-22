@@ -33,22 +33,30 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 namespace optimisation::edges {
+    // The reprojection of an anchored inverse depth landmark (vertices::point holding the bearing (x / z, y / z) and the
+    // inverse depth in its anchor frame) into the frame of a pose. As reprojection, made with_intrinsics it takes a third
+    // vertex, the camera's vertices::intrinsics, after the pose and the landmark.
     class reprojection_inverse_depth final {
     public:
         constexpr static const char* name = "reprojection_inverse_depth";
         constexpr static const int residual_count = 2;
+        // The vertices without the optional ones, get_vertex_count gives those of an edge.
         constexpr static const int vertex_count = 2;
 
     private:
         sensor::camera::model<double> camera;
         math::matrix<double, 3, 3> anchor_rotation;
         math::matrix<double, 3, 1> anchor_translation;
+        // The slot of the intrinsics vertex, -1 when the camera is held fixed.
+        int intrinsics_slot;
 
     private:
         void compute_scaled_point(const edge& context, math::matrix<double, 3, 1>& q, math::matrix<double, 3, 3>& rotation_combined, math::matrix<double, 3, 1>& rho_column, double& rho) const;
 
     public:
-        reprojection_inverse_depth(const sensor::camera::model<double>& camera_model, const math::matrix<double, 3, 3>& anchor_rotation_value, const math::matrix<double, 3, 1>& anchor_translation_value);
+        reprojection_inverse_depth(const sensor::camera::model<double>& camera_model, const math::matrix<double, 3, 3>& anchor_rotation_value, const math::matrix<double, 3, 1>& anchor_translation_value, const bool with_intrinsics = false);
+
+        int get_vertex_count() const;
 
         // Whether the camera projects the point where the vertices put it, so that the residual is a distance in the image and
         // not the behind camera residual. A negative inverse depth is no obstacle, as in compute_residual.

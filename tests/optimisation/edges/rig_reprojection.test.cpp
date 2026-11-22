@@ -25,6 +25,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/factor_graph.hpp"
 #include "optimisation/vertex.hpp"
 #include "optimisation/vertices/extrinsic.hpp"
+#include "optimisation/vertices/intrinsics.hpp"
 #include "optimisation/vertices/point.hpp"
 #include "optimisation/vertices/pose.hpp"
 #include "sensor/camera/model.hpp"
@@ -280,6 +281,51 @@ int main(int argc, char* argv[]) {
             for (size_t i = 0; i < 6; ++i) {
                 REQUIRE(std::abs(error[i]) < 1e-6);
             }
+        }
+    }
+
+    {
+        // With the camera's intrinsics as a fourth vertex after the extrinsic, the edge projects through the intrinsics
+        // vertex's camera: at the camera it was made with it measures what the edge holding that camera does, the intrinsics
+        // and extrinsic compose in the one edge, and every block's Jacobian, the intrinsics' by the focal lengths moving
+        // together, the principal point and the leading distortion, is the derivative through its vertex.
+        const int locals[12] = { 0, 0, 1, 2, 3, 4, 5, 6, -1, -1, -1, -1 };
+        optimisation::vertex pose_vertex{ optimisation::vertices::pose() };
+        set_pose(pose_vertex, pose);
+        optimisation::vertex extrinsic_vertex{ optimisation::vertices::extrinsic() };
+        set_extrinsic(extrinsic_vertex, body_from_camera);
+        optimisation::vertex intrinsics_vertex = optimisation::vertices::intrinsics::make(camera, &locals[0], 12);
+        REQUIRE(intrinsics_vertex.is_valid());
+        for (int kind = 0; kind < 2; ++kind) {
+            optimisation::vertex landmark_vertex{ optimisation::vertices::point() };
+            REQUIRE(landmark_vertex.set_parameters((kind == 0) ? world_point.data() : &inverse_landmark[0], 3));
+            optimisation::edge calibrated = (kind == 0) ? optimisation::edge{ optimisation::edges::rig_reprojection(camera, true) } : optimisation::edge{ optimisation::edges::rig_reprojection(camera, anchor.rotation().get_matrix(), anchor.translation(), true) };
+            optimisation::edge held = (kind == 0) ? optimisation::edge{ optimisation::edges::rig_reprojection(camera) } : optimisation::edge{ optimisation::edges::rig_reprojection(camera, anchor.rotation().get_matrix(), anchor.translation()) };
+            REQUIRE(calibrated.required_vertices() == 4);
+            REQUIRE(held.required_vertices() == 3);
+            const double observed[2] = { 380.0, 255.0 };
+            for (optimisation::edge* const factor : { &calibrated, &held }) {
+                factor->set_observation(math::matrix<double, 0, 0>(2, 1, &observed[0]));
+                REQUIRE(factor->add_vertex(&pose_vertex));
+                REQUIRE(factor->add_vertex(&landmark_vertex));
+                REQUIRE(factor->add_vertex(&extrinsic_vertex));
+            }
+            REQUIRE(calibrated.add_vertex(&intrinsics_vertex));
+            REQUIRE(!calibrated.add_vertex(&intrinsics_vertex));
+            calibrated.compute_residual();
+            held.compute_residual();
+            calibrated.compute_jacobians();
+            held.compute_jacobians();
+            for (size_t r = 0; r < 2; ++r) {
+                REQUIRE(calibrated.get_residual()[r][0] == held.get_residual()[r][0]);
+                for (size_t slot = 0; slot < 3; ++slot) {
+                    for (size_t c = 0; c < held.get_jacobians()[slot].cols(); ++c) {
+                        REQUIRE(calibrated.get_jacobians()[slot][r][c] == held.get_jacobians()[slot][r][c]);
+                    }
+                }
+            }
+            REQUIRE(calibrated.get_jacobians()[3].cols() == 7);
+            check_jacobians(calibrated);
         }
     }
 

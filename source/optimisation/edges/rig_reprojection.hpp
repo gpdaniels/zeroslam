@@ -45,11 +45,14 @@ namespace optimisation::edges {
     //
     // The camera point and its derivatives by each parameter block are composed apart from the projection (compose), so a
     // block that is a constant here, the camera's intrinsics, can become a vertex of its own by adding its slot and the
-    // camera model's Jacobian by its parameters, without touching the others.
+    // camera model's Jacobian by its parameters, without touching the others. Made with_intrinsics, the edge takes the
+    // camera's intrinsics (vertices::intrinsics) as a fourth vertex after the extrinsic, projects through that vertex's camera
+    // and gives the Jacobian by its free parameters, as reprojection does.
     class rig_reprojection final {
     public:
         constexpr static const char* name = "rig_reprojection";
         constexpr static const int residual_count = 2;
+        // The vertices without the optional ones, get_vertex_count gives those of an edge.
         constexpr static const int vertex_count = 3;
 
         constexpr static const int pose_slot = 0;
@@ -66,6 +69,8 @@ namespace optimisation::edges {
         landmark_kind landmark;
         math::matrix<double, 3, 3> anchor_rotation;
         math::matrix<double, 3, 1> anchor_translation;
+        // The slot of the intrinsics vertex, -1 when the camera is held fixed.
+        int intrinsics_slot;
 
     private:
         // The point the camera sees, scaled by the inverse depth for an inverse depth landmark (which the projection does not
@@ -74,10 +79,12 @@ namespace optimisation::edges {
 
     public:
         // A world point landmark.
-        explicit rig_reprojection(const sensor::camera::model<double>& camera_model);
+        explicit rig_reprojection(const sensor::camera::model<double>& camera_model, const bool with_intrinsics = false);
 
         // An inverse depth landmark anchored in a frame whose camera to world transform this is, as mapping::point holds it.
-        rig_reprojection(const sensor::camera::model<double>& camera_model, const math::matrix<double, 3, 3>& anchor_rotation_value, const math::matrix<double, 3, 1>& anchor_translation_value);
+        rig_reprojection(const sensor::camera::model<double>& camera_model, const math::matrix<double, 3, 3>& anchor_rotation_value, const math::matrix<double, 3, 1>& anchor_translation_value, const bool with_intrinsics = false);
+
+        int get_vertex_count() const;
 
         // Whether the camera projects the point where the vertices put it, as reprojection::measurable.
         bool measurable(const edge& context) const;

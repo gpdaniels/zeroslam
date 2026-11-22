@@ -20,10 +20,15 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/edges/reprojection.hpp"
 
 namespace optimisation::edges {
-    reprojection_inverse_depth::reprojection_inverse_depth(const sensor::camera::model<double>& camera_model, const math::matrix<double, 3, 3>& anchor_rotation_value, const math::matrix<double, 3, 1>& anchor_translation_value)
+    reprojection_inverse_depth::reprojection_inverse_depth(const sensor::camera::model<double>& camera_model, const math::matrix<double, 3, 3>& anchor_rotation_value, const math::matrix<double, 3, 1>& anchor_translation_value, const bool with_intrinsics)
         : camera(camera_model)
         , anchor_rotation(anchor_rotation_value)
-        , anchor_translation(anchor_translation_value) {
+        , anchor_translation(anchor_translation_value)
+        , intrinsics_slot(with_intrinsics ? reprojection_inverse_depth::vertex_count : -1) {
+    }
+
+    int reprojection_inverse_depth::get_vertex_count() const {
+        return reprojection_inverse_depth::vertex_count + ((this->intrinsics_slot >= 0) ? 1 : 0);
     }
 
     void reprojection_inverse_depth::compute_scaled_point(const edge& context, math::matrix<double, 3, 1>& q, math::matrix<double, 3, 3>& rotation_combined, math::matrix<double, 3, 1>& rho_column, double& rho) const {
@@ -45,7 +50,9 @@ namespace optimisation::edges {
         double rho = 0.0;
         this->compute_scaled_point(context, q, rotation_combined, rho_column, rho);
         math::matrix<double, 2, 1> projected = { { 0.0, 0.0 } };
-        return this->camera.project(q.data(), projected.data());
+        const vertices::intrinsics* const calibration = reprojection::intrinsics_at(context, this->intrinsics_slot);
+        const sensor::camera::model<double>& projection = (calibration != nullptr) ? calibration->get_camera() : this->camera;
+        return projection.project(q.data(), projected.data());
     }
 
     void reprojection_inverse_depth::compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const {
@@ -57,7 +64,9 @@ namespace optimisation::edges {
         // A negative inverse depth projects like any other, as the point beyond infinity it describes, which keeps the cost
         // smooth through infinity; the map clamps it after each adjustment. Penalising it lost tracking on LaMAria.
         math::matrix<double, 2, 1> projected = { { 0.0, 0.0 } };
-        if (!this->camera.project(q.data(), projected.data())) {
+        const vertices::intrinsics* const calibration = reprojection::intrinsics_at(context, this->intrinsics_slot);
+        const sensor::camera::model<double>& projection = (calibration != nullptr) ? calibration->get_camera() : this->camera;
+        if (!projection.project(q.data(), projected.data())) {
             const double penalty = reprojection::behind_camera_residual(q[2]);
             residual[0][0] = penalty;
             residual[1][0] = penalty;
@@ -75,7 +84,11 @@ namespace optimisation::edges {
         this->compute_scaled_point(context, q, rotation_combined, rho_column, rho);
         double projected[2];
         math::matrix<double, 2, 3> jacobian_camera;
-        if (!this->camera.project(q.data(), projected, jacobian_camera.data())) {
+        const vertices::intrinsics* const calibration = reprojection::intrinsics_at(context, this->intrinsics_slot);
+        const sensor::camera::model<double>& projection = (calibration != nullptr) ? calibration->get_camera() : this->camera;
+        double jacobian_parameters[2 * vertex::maximum_parameters];
+        const bool projects = projection.project(q.data(), projected, jacobian_camera.data(), (calibration != nullptr) ? &jacobian_parameters[0] : nullptr);
+        if (!projects) {
             jacobian_camera[0][0] = 0.0;
             jacobian_camera[0][1] = 0.0;
             jacobian_camera[0][2] = reprojection::behind_camera_slope;
@@ -112,5 +125,9 @@ namespace optimisation::edges {
         }
         const math::matrix<double, 2, 3> jacobian_landmark_res = -(jacobian_camera * jacobian_point_landmark);
         edge::set_jacobian(jacobians[1], 2, 3, jacobian_landmark_res.data());
+
+        if (this->intrinsics_slot >= 0) {
+            reprojection::set_intrinsics_jacobian(context, this->intrinsics_slot, projects, &jacobian_parameters[0], jacobians[static_cast<size_t>(this->intrinsics_slot)]);
+        }
     }
 }

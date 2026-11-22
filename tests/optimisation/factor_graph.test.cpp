@@ -23,18 +23,21 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "math/matrix_decomposition_cholesky.hpp"
 #include "optimisation/edge.hpp"
 #include "optimisation/edges/baseline.hpp"
+#include "optimisation/edges/intrinsics_prior.hpp"
 #include "optimisation/edges/line_reprojection.hpp"
 #include "optimisation/edges/relative_similarity.hpp"
 #include "optimisation/edges/reprojection.hpp"
 #include "optimisation/loss.hpp"
 #include "optimisation/losses/huber.hpp"
 #include "optimisation/vertex.hpp"
+#include "optimisation/vertices/intrinsics.hpp"
 #include "optimisation/vertices/line.hpp"
 #include "optimisation/vertices/point.hpp"
 #include "optimisation/vertices/pose.hpp"
 #include "optimisation/vertices/similarity.hpp"
 #include "sensor/camera/model.hpp"
 #include "sensor/camera/pinhole.hpp"
+#include "sensor/camera/pinhole_radial_tangential.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -314,6 +317,94 @@ static void add_lines(problem& built, core::random_pcg& rng, const size_t line_c
             edge.add_vertex(built.lines[i]);
             edge.set_loss(robust_loss);
             REQUIRE(built.graph.add_edge(static_cast<optimisation::edge&&>(edge)) != nullptr);
+        }
+    }
+}
+
+// A calibration problem: a camera of known true intrinsics seen from poses around a cloud of points that fills its view
+// in depth, observed with a little noise, and started from intrinsics, poses and points that are all off.
+class calibration_problem final {
+public:
+    optimisation::factor_graph graph;
+    std::vector<optimisation::vertex*> cameras;
+    std::vector<optimisation::vertex*> landmarks;
+    optimisation::vertex* intrinsics = nullptr;
+    std::vector<optimisation::edge*> edges;
+};
+
+constexpr static const double calibration_truth[12] = { 500.0, 505.0, 320.0, 240.0, -0.12, 0.02, 0.001, -0.0015, 0.0, 0.0, 0.0, 0.0 };
+constexpr static const double calibration_start[12] = { 530.0, 535.0, 326.0, 235.0, -0.08, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+
+static void build_calibration_problem(calibration_problem& built, core::random_pcg& rng, const bool* const mask, const size_t camera_count, const size_t landmark_count, const bool priors) {
+    const sensor::camera::pinhole_radial_tangential<double> truth(&calibration_truth[0], 12);
+    const sensor::camera::model<double> start{ sensor::camera::pinhole_radial_tangential<double>(&calibration_start[0], 12) };
+    const math::matrix<double, 3, 1> target = { { 0.0, 0.0, 6.0 } };
+    std::vector<math::se3<double>> poses;
+    for (size_t i = 0; i < camera_count; ++i) {
+        const double phase = static_cast<double>(i) / static_cast<double>(camera_count - 1);
+        const math::so3<double> turn = math::so3<double>::exp({ { 0.25 * std::sin(6.0 * phase), -0.5 + phase, 0.4 * std::cos(5.0 * phase) } });
+        const math::matrix<double, 3, 1> centre = target - (turn.get_matrix() * math::matrix<double, 3, 1>{ { 0.0, 0.0, 5.0 } });
+        const math::matrix<double, 3, 3> rotation = math::transpose(turn.get_matrix());
+        poses.push_back(math::se3<double>(math::so3<double>(rotation), -(rotation * centre)));
+    }
+    std::vector<math::matrix<double, 3, 1>> points;
+    for (size_t i = 0; i < landmark_count; ++i) {
+        points.push_back(target + math::matrix<double, 3, 1>{ { rng.get_random(-2.5, 2.5), rng.get_random(-2.0, 2.0), rng.get_random(-2.0, 2.0) } });
+    }
+    for (size_t i = 0; i < camera_count; ++i) {
+        const math::se3<double> noisy = math::se3<double>::exp({ { rng.get_random(-0.01, 0.01), rng.get_random(-0.01, 0.01), rng.get_random(-0.01, 0.01), rng.get_random(-0.02, 0.02), rng.get_random(-0.02, 0.02), rng.get_random(-0.02, 0.02) } }) * poses[i];
+        const math::se3<double>& used = (i < 2) ? poses[i] : noisy;
+        optimisation::vertex camera_vertex{ optimisation::vertices::pose() };
+        const double camera_pose[7] = { used.translation()[0], used.translation()[1], used.translation()[2], used.rotation().get_quaternion()[1], used.rotation().get_quaternion()[2], used.rotation().get_quaternion()[3], used.rotation().get_quaternion()[0] };
+        REQUIRE(camera_vertex.set_parameters(&camera_pose[0], 7));
+        camera_vertex.set_fixed(i == 0);
+        built.cameras.push_back(built.graph.add_vertex(static_cast<optimisation::vertex&&>(camera_vertex)));
+    }
+    for (size_t i = 0; i < landmark_count; ++i) {
+        optimisation::vertex landmark_vertex{ optimisation::vertices::point() };
+        const math::matrix<double, 3, 1> noisy = points[i] + math::matrix<double, 3, 1>{ { rng.get_random(-0.05, 0.05), rng.get_random(-0.05, 0.05), rng.get_random(-0.05, 0.05) } };
+        REQUIRE(landmark_vertex.set_parameters(noisy.data(), 3));
+        landmark_vertex.set_marginalised(true);
+        built.landmarks.push_back(built.graph.add_vertex(static_cast<optimisation::vertex&&>(landmark_vertex)));
+    }
+    built.intrinsics = built.graph.add_vertex(optimisation::vertices::intrinsics::make(start, mask, 12));
+    REQUIRE(built.intrinsics != nullptr);
+    const optimisation::loss robust_loss{ optimisation::losses::huber(2.0) };
+    for (size_t c = 0; c < camera_count; ++c) {
+        for (size_t l = 0; l < landmark_count; ++l) {
+            const math::matrix<double, 3, 1> in_camera = poses[c] * points[l];
+            math::matrix<double, 2, 1> pixel;
+            if (!truth.project(in_camera.data(), pixel.data()) || (pixel[0] < 0.0) || (pixel[0] > 640.0) || (pixel[1] < 0.0) || (pixel[1] > 480.0)) {
+                continue;
+            }
+            optimisation::edge edge{ optimisation::edges::reprojection(start, true) };
+            edge.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { pixel[0] + rng.get_random(-0.3, 0.3), pixel[1] + rng.get_random(-0.3, 0.3) } }.data()));
+            edge.add_vertex(built.cameras[c]);
+            edge.add_vertex(built.landmarks[l]);
+            edge.add_vertex(built.intrinsics);
+            edge.set_loss(robust_loss);
+            built.edges.push_back(built.graph.add_edge(static_cast<optimisation::edge&&>(edge)));
+            REQUIRE(built.edges.back() != nullptr);
+        }
+    }
+    // The scale of the map by the distance between the first two poses, as a monocular map holds it.
+    optimisation::edge gauge{ optimisation::edges::baseline(std::sqrt((poses[1].inverse().translation() - poses[0].inverse().translation()).get_length_squared())) };
+    gauge.add_vertex(built.cameras[1]);
+    gauge.add_vertex(built.cameras[0]);
+    gauge.set_information(math::matrix<double, 0, 0>::identity(1, 1) * 1e6);
+    built.edges.push_back(built.graph.add_edge(static_cast<optimisation::edge&&>(gauge)));
+    if (priors) {
+        // Weak priors on the starting calibration, a hundred pixels on the focal lengths and the centre and one on the
+        // distortion, which the observations outweigh.
+        for (int index = 0; index < 12; ++index) {
+            if (!mask[index]) {
+                continue;
+            }
+            const double sigma = (index < 4) ? 100.0 : 1.0;
+            optimisation::edge prior{ optimisation::edges::intrinsics_prior(index, calibration_start[index]) };
+            prior.add_vertex(built.intrinsics);
+            prior.set_information(math::matrix<double, 0, 0>::identity(1, 1) * (1.0 / (sigma * sigma)));
+            built.edges.push_back(built.graph.add_edge(static_cast<optimisation::edge&&>(prior)));
         }
     }
 }
@@ -981,6 +1072,107 @@ int main(int argc, char* argv[]) {
         REQUIRE(added->get_residual()[0][0] == (start[0] - 1.0));
         REQUIRE(added->robust_weight() == 1.0);
         REQUIRE(graph.get_current_chi(false) == ((start[0] - 1.0) * (start[0] - 1.0)));
+    }
+
+    {
+        // The intrinsics vertex shared by every reprojection: with it the Schur complement, whose couplings of the shared
+        // block sum the terms of the landmark's edges, gives the step of the dense solve of the whole system, and the square
+        // root solver the same step.
+        const bool focal_centre_distortion[12] = { true, true, true, true, true, true, false, false, false, false, false, false };
+        core::random_pcg rng(0x5eed0c01ull);
+        calibration_problem built;
+        build_calibration_problem(built, rng, &focal_centre_distortion[0], 8, 60, true);
+        built.graph.set_conjugate_gradient_tolerance(1e-14);
+        built.graph.set_conjugate_gradient_iteration_limit(100000);
+        for (const double lambda : { 1e-6, 1e-2, 1.0 }) {
+            math::matrix<double, 0, 0> step_dense;
+            built.graph.set_strategy(optimisation::factor_graph::strategy::dense_schur);
+            REQUIRE(built.graph.compute_damped_step(lambda, step_dense));
+            REQUIRE(!built.graph.get_diagnostics().used_square_root);
+            REQUIRE(step_dense.rows() == static_cast<size_t>((7 * 6) + 6 + (60 * 3)));
+            const std::vector<double> expected = dense_damped_step(built.edges, step_dense.rows(), lambda);
+            math::matrix<double, 0, 0> step_square_root;
+            built.graph.set_strategy(optimisation::factor_graph::strategy::square_root);
+            REQUIRE(built.graph.compute_damped_step(lambda, step_square_root));
+            REQUIRE(built.graph.get_diagnostics().used_square_root);
+            REQUIRE(built.graph.get_diagnostics().landmark_blocks == 60);
+            REQUIRE(built.graph.get_diagnostics().reduced_failures == 0);
+            double largest = 0.0;
+            for (const double value : expected) {
+                largest = std::max(largest, std::abs(value));
+            }
+            for (size_t i = 0; i < step_dense.rows(); ++i) {
+                REQUIRE(std::abs(step_dense[i][0] - expected[i]) < 1e-8 * largest);
+                REQUIRE(std::abs(step_square_root[i][0] - expected[i]) < 1e-7 * largest);
+            }
+        }
+    }
+
+    {
+        // Started 6% off in focal length, 6 pixels off in the principal point and with the wrong distortion, the adjustment
+        // recovers the camera, with each solver and precision, and gives the same calibration whatever the solver.
+        const bool masks[3][12] = {
+            { true, true, false, false, false, false, false, false, false, false, false, false },
+            { true, true, true, true, false, false, false, false, false, false, false, false },
+            { true, true, true, true, true, true, true, true, false, false, false, false }
+        };
+        for (size_t mask_index = 0; mask_index < 3; ++mask_index) {
+            double recovered_dense[12] = {};
+            for (const int variant : { 0, 1, 2 }) {
+                core::random_pcg rng(0x5eed0c02ull);
+                calibration_problem built;
+                build_calibration_problem(built, rng, &masks[mask_index][0], 10, 150, mask_index == 2);
+                if (mask_index < 2) {
+                    // Held parameters are held at the truth, so the free ones have something to converge to.
+                    double held[12] = {};
+                    for (size_t index = 0; index < 12; ++index) {
+                        held[index] = masks[mask_index][index] ? calibration_start[index] : calibration_truth[index];
+                    }
+                    REQUIRE(built.intrinsics->set_parameters(&held[0], 12));
+                }
+                if (variant > 0) {
+                    built.graph.set_strategy(optimisation::factor_graph::strategy::square_root);
+                    built.graph.set_conjugate_gradient_tolerance(1e-10);
+                }
+                if (variant == 2) {
+                    built.graph.set_precision(optimisation::factor_graph::precision::single_precision);
+                }
+                const double initial_chi = built.graph.get_current_chi();
+                REQUIRE(built.graph.solve(100, true) > 0);
+                REQUIRE(built.graph.get_diagnostics().used_square_root == (variant > 0));
+                REQUIRE(built.graph.get_current_chi() < 1e-2 * initial_chi);
+                const double* const recovered = built.intrinsics->get_parameters();
+                REQUIRE(std::abs(recovered[0] - calibration_truth[0]) < 0.002 * calibration_truth[0]);
+                REQUIRE(std::abs(recovered[1] - calibration_truth[1]) < 0.002 * calibration_truth[1]);
+                if (mask_index > 0) {
+                    REQUIRE(std::abs(recovered[2] - calibration_truth[2]) < 1.0);
+                    REQUIRE(std::abs(recovered[3] - calibration_truth[3]) < 1.0);
+                }
+                if (mask_index > 1) {
+                    REQUIRE(std::abs(recovered[4] - calibration_truth[4]) < 0.01);
+                }
+                for (size_t index = 0; index < 12; ++index) {
+                    if (!masks[mask_index][index]) {
+                        REQUIRE(recovered[index] == ((mask_index < 2) ? calibration_truth[index] : calibration_start[index]));
+                    }
+                }
+                // The edges project through the vertex's camera, which follows its parameters.
+                double model_parameters[12] = {};
+                REQUIRE(built.intrinsics->get_policy<optimisation::vertices::intrinsics>()->get_camera().get_parameters(&model_parameters[0], 12));
+                for (size_t index = 0; index < 12; ++index) {
+                    REQUIRE(model_parameters[index] == recovered[index]);
+                }
+                if (variant == 0) {
+                    for (size_t index = 0; index < 12; ++index) {
+                        recovered_dense[index] = recovered[index];
+                    }
+                }
+                else {
+                    REQUIRE(is_value_approx(recovered[0], recovered_dense[0], (variant == 2) ? 1e-4 : 1e-6));
+                    REQUIRE(is_value_approx(recovered[2], recovered_dense[2], (variant == 2) ? 1e-4 : 1e-6));
+                }
+            }
+        }
     }
 
     return EXIT_SUCCESS;

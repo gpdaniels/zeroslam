@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ZEROSLAM_OPTIMISATION_EDGES_REPROJECTION_HPP
 
 #include "optimisation/edge.hpp"
+#include "optimisation/vertices/intrinsics.hpp"
 #include "sensor/camera/model.hpp"
 
 #if defined(_MSC_VER)
@@ -36,10 +37,17 @@ namespace {
 }
 
 namespace optimisation::edges {
+    // The reprojection of a point landmark (vertices::point) into the frame of a pose (vertices::pose, world to camera).
+    //
+    // The camera is the model the edge is given, held fixed, unless the edge is made with_intrinsics: it then takes a third
+    // vertex, a vertices::intrinsics shared by every edge of that camera, projects through that vertex's model and gives the
+    // jacobian by its free parameters. Optional vertices follow the pose and the landmark, each at the next slot, so that
+    // further optional blocks (a sensor's extrinsic) can follow in the same way.
     class reprojection final {
     public:
         constexpr static const char* name = "reprojection";
         constexpr static const int residual_count = 2;
+        // The vertices without the optional ones, get_vertex_count gives those of an edge.
         constexpr static const int vertex_count = 2;
 
         // Every reprojection edge gives a point it cannot project, such as one behind the camera, the same residual in both
@@ -50,11 +58,23 @@ namespace optimisation::edges {
 
     private:
         sensor::camera::model<double> camera;
+        // The slot of the intrinsics vertex, -1 when the camera is held fixed.
+        int intrinsics_slot;
 
     public:
-        explicit reprojection(const sensor::camera::model<double>& camera_model);
+        explicit reprojection(const sensor::camera::model<double>& camera_model, const bool with_intrinsics = false);
+
+        int get_vertex_count() const;
 
         static double behind_camera_residual(const double depth);
+
+        // The intrinsics vertex at the slot, null for none (a negative slot, or a vertex of another kind there).
+        static const vertices::intrinsics* intrinsics_at(const edge& context, const int slot);
+
+        // Writes the jacobian of a residual observed - projected by the intrinsics vertex: minus the projection's jacobian by
+        // each free parameter, given by every parameter, or zero when the camera did not project the point (the behind camera
+        // residual does not depend on the camera) or there is no such vertex.
+        static void set_intrinsics_jacobian(const edge& context, const int slot, const bool projected, const double* const jacobian_parameters, math::matrix<double, 0, 0>& jacobian);
 
         // Whether the camera projects the point where the vertices put it, so that the residual is a distance in the image and
         // not the behind camera residual.
