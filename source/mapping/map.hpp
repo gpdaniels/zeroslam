@@ -22,6 +22,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "mapping/frame.hpp"
 #include "mapping/intrinsics_refinement.hpp"
 #include "mapping/line.hpp"
+#include "mapping/odometry.hpp"
 #include "mapping/point.hpp"
 #include "mapping/rig.hpp"
 #include "math/lie.hpp"
@@ -89,6 +90,9 @@ namespace mapping {
         // The sensors and their extrinsics. The frames' poses are the reference camera's, and the observations of the other
         // cameras reach the frames through their extrinsics, which adjustments refine where the rig asks for it.
         mapping::rig sensor_rig;
+
+        // The wheel odometry, when the rig has an odometer (mapping::odometry): its edges join the frames of each adjustment.
+        mapping::odometry wheel_odometry;
 
         // Whether the map has a metric scale, which a rig's baseline gives it once the map is initialised across it (a stereo
         // pair): no scale gauge is then held, the measurements hold the scale themselves. The one property the pipeline asks
@@ -1080,6 +1084,7 @@ namespace mapping {
             for (mapping::intrinsics_refinement& view : view_intrinsics) {
                 view.add_priors();
             }
+            const mapping::odometry::graph_vertices odometry_vertices = fix_landmarks ? mapping::odometry::graph_vertices() : this->wheel_odometry.add_to_graph(ba, camera_vertexes, this->sensor_rig);
             // Remove vertexes not attached to any edges.
             const auto remove_unconnected = [&ba](std::unordered_map<int, optimisation::vertex*>& vertexes, int& non_fixed) {
                 for (const int id : map::ordered(vertexes)) {
@@ -1217,6 +1222,7 @@ namespace mapping {
                     this->sensor_rig.read_extrinsic_vertex(this->sensor_rig.camera(camera), *extrinsic_vertexes[camera]);
                 }
             }
+            this->wheel_odometry.read_from_graph(odometry_vertices, this->sensor_rig);
             for (const auto& [landmark_id, vertex] : landmark_vertexes) {
                 mapping::point& landmark = this->landmarks.at(landmark_id);
                 const double* const p = vertex->get_parameters();
@@ -1326,6 +1332,7 @@ namespace mapping {
                         view.restore(this->frames);
                     }
                     this->sensor_rig = rig_before;
+                    this->wheel_odometry.restore(odometry_vertices);
                     return;
                 }
                 std::sort(diverged_frame_ids.begin(), diverged_frame_ids.end());
@@ -1376,6 +1383,7 @@ namespace mapping {
                         view.restore(this->frames);
                     }
                     this->sensor_rig = rig_before;
+                    this->wheel_odometry.restore(odometry_vertices);
                     return;
                 }
             }
