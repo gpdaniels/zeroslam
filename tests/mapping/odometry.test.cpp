@@ -227,8 +227,9 @@ namespace {
     }
 
     // The drive written as a scene in the directory form, into the directory ZEROSLAM_ODOMETRY_SCENE names (its sensor/image_01
-    // directory made beforehand), for `zeroslam dataset collapse` and `zeroslam process --wheel wheel_01`: the frames, the
-    // camera's calibration, the odometer with its parameters and extrinsic, and the ground truth, the camera's pose in the yard.
+    // and sensor/image_02 directories made beforehand), for `zeroslam dataset collapse` and `zeroslam process --wheel wheel_01`:
+    // the frames, the camera's calibration, the odometer with its parameters and extrinsic, and the ground truth, the camera's
+    // pose in the yard; and a second camera looking to the right, 0.3 m to the right of the first, for a rig (--cameras).
     void write_scene(const char* const directory, const simulation::ground_vehicle& vehicle, const std::vector<long long int>& times, const std::vector<math::se3<double>>& truth, const std::vector<image::image>& frames) {
         const std::string root(directory);
         std::FILE* const calibration = std::fopen((root + "/sensor/image_01.txt").c_str(), "wb");
@@ -243,6 +244,21 @@ namespace {
             std::fprintf(image, "P5\n%d %d\n255\n", width, height);
             std::fwrite(frames[i].get_data(), 1, static_cast<size_t>(width * height), image);
             std::fclose(image);
+            const math::se3<double> right_from_camera(math::so3<double>::exp({ { 0.0, -1.5707963267948966, 0.0 } }), { { 0.0, 0.0, 0.0 } });
+            const math::se3<double> camera_from_right = math::se3<double>(math::so3<double>::identity(), { { 0.3, 0.0, 0.0 } }) * right_from_camera.inverse();
+            image::image second(static_cast<size_t>(height), static_cast<size_t>(width));
+            render_yard(camera_from_right.inverse() * truth[i], second);
+            std::snprintf(name, sizeof(name), "/sensor/image_02/%020lld.pnm", times[i]);
+            std::FILE* const second_image = std::fopen((root + name).c_str(), "wb");
+            REQUIRE(second_image != nullptr);
+            std::fprintf(second_image, "P5\n%d %d\n255\n", width, height);
+            std::fwrite(second.get_data(), 1, static_cast<size_t>(width * height), second_image);
+            std::fclose(second_image);
+            std::FILE* const second_calibration = std::fopen((root + "/sensor/image_02.txt").c_str(), (i == 0) ? "wb" : "ab");
+            REQUIRE(second_calibration != nullptr);
+            const math::matrix<double, 4, 1> second_quaternion = camera_from_right.rotation().get_quaternion();
+            std::fprintf(second_calibration, "%lld.%09lld %.17g %.17g %.17g %.17g %.17g %.17g %.17g plumb_bob %.17g %.17g %.17g %.17g\n", times[i] / 1000000000ll, times[i] % 1000000000ll, camera_from_right.translation()[0], camera_from_right.translation()[1], camera_from_right.translation()[2], second_quaternion[1], second_quaternion[2], second_quaternion[3], second_quaternion[0], focal, focal, 0.5 * width, 0.5 * height);
+            std::fclose(second_calibration);
             std::fprintf(calibration, "%lld.%09lld 0 0 0 0 0 0 1 plumb_bob %.17g %.17g %.17g %.17g\n", times[i] / 1000000000ll, times[i] % 1000000000ll, focal, focal, 0.5 * width, 0.5 * height);
             const math::se3<double> camera_to_world = truth[i].inverse();
             const math::matrix<double, 4, 1> quaternion = camera_to_world.rotation().get_quaternion();

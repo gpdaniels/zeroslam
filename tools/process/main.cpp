@@ -21,7 +21,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "metrics.hpp"
 #include "rig.hpp"
 #include "rotation.hpp"
-#include "wheel.hpp"
+#include "wheel_feed.hpp"
 #include "zeroslam/zeroslam.hpp"
 
 #if defined(_MSC_VER)
@@ -413,8 +413,8 @@ int main(int argc, char* argv[]) {
         std::printf("                written, each at its 'ego -> sensor/[name]' extrinsic of /tf.\n");
         std::printf("    --perturb-extrinsics - Optional turn and shift (degrees,metres) of every camera's extrinsic but the primary's, to start\n");
         std::printf("                the extrinsic refinement (--config extrinsics=refine) off the calibration.\n");
-        std::printf("    --wheel   - Optional wheel odometer of the scene run with the camera, e.g. wheel_01; its refined calibration is written\n");
-        std::printf("                to odometry.txt.\n");
+        std::printf("    --wheel   - Optional wheel odometer of the scene run with the camera or the rig, e.g. wheel_01; its refined calibration\n");
+        std::printf("                is written to odometry.txt.\n");
         return EXIT_SUCCESS;
     }
 
@@ -444,16 +444,13 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    process_wheel::feeder wheel_feed;
+    wheel_feed::feeder odometer_feed;
     if (!wheel_name.empty()) {
-        if (camera_names.size() > 1) {
-            std::fprintf(stderr, "--wheel runs with a single camera.\n");
-            return EXIT_FAILURE;
-        }
-        if (!wheel_feed.open(reader, wheel_name, error)) {
+        if (!odometer_feed.open(reader, wheel_name, error)) {
             std::fprintf(stderr, "Invalid wheel odometer: %s.\n", error.c_str());
             return EXIT_FAILURE;
         }
+        wheel_feed::registered() = &odometer_feed;
     }
 
     log(4, "Loading slam system...");
@@ -534,8 +531,8 @@ int main(int argc, char* argv[]) {
                 rig.parameters_length = static_cast<int>(sizeof(camera));
                 rig.parameters_data = &camera;
                 std::vector<zeroslam_sensor_rig_struct> rig_entries(1, rig);
-                wheel_feed.declare(rig_entries);
-                if ((slam.set_sensor_rig(rig_entries.data(), static_cast<int>(rig_entries.size())) != zeroslam_return_success) || !wheel_feed.set_extrinsic(slam, false)) {
+                odometer_feed.declare(rig_entries);
+                if ((slam.set_sensor_rig(rig_entries.data(), static_cast<int>(rig_entries.size())) != zeroslam_return_success) || !odometer_feed.set_extrinsic(slam, false)) {
                     std::fprintf(stderr, "The library rejected the camera rig.\n");
                     return false;
                 }
@@ -555,7 +552,7 @@ int main(int argc, char* argv[]) {
             timestamps.push_back(static_cast<long long>(img_msg->log_time));
             log(4, "Starting frame %zu", frames + 1);
             std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-            if (!wheel_feed.feed_until(slam, timestamps.back())) {
+            if (!odometer_feed.feed_until(slam, timestamps.back())) {
                 std::fprintf(stderr, "The library rejected the wheel samples before frame %zu.\n", frames + 1);
                 return false;
             }
@@ -668,7 +665,7 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    if (!wheel_feed.feed_until(slam, (timestamps.empty() ? 0 : timestamps.back()) + 1000000000ll)) {
+    if (!odometer_feed.feed_until(slam, (timestamps.empty() ? 0 : timestamps.back()) + 1000000000ll)) {
         std::fprintf(stderr, "The library rejected the last wheel samples.\n");
         return EXIT_FAILURE;
     }
@@ -682,7 +679,7 @@ int main(int argc, char* argv[]) {
     if (camera_names.size() > 1) {
         process_rig::report_extrinsics(slam);
     }
-    if (!wheel_feed.write_calibration(slam, "odometry.txt")) {
+    if (!odometer_feed.write_calibration(slam, "odometry.txt")) {
         std::fprintf(stderr, "Failed to write the odometry calibration.\n");
     }
     log(4, "Saving map and camera trajectory...");

@@ -15,12 +15,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
-#ifndef ZEROSLAM_TOOLS_PROCESS_WHEEL_HPP
-#define ZEROSLAM_TOOLS_PROCESS_WHEEL_HPP
+#ifndef ZEROSLAM_TOOLS_COMMON_WHEEL_FEED_HPP
+#define ZEROSLAM_TOOLS_COMMON_WHEEL_FEED_HPP
 
-// Summary: A scene's wheel odometer through the process tool (--wheel wheel_01): declared beside the camera with its scene
-// parameters and extrinsic, its samples fed up to each frame's time before the frame, and its refined calibration written
-// at the end (odometry.txt).
+// Summary: A scene's wheel odometer fed to the library by the process and gui tools (--wheel wheel_01): declared beside the
+// cameras with its scene parameters and extrinsic, its samples fed up to each frame's time before the frame, and its refined
+// calibration written at the end (odometry.txt).
 
 #include "mcap.hpp"
 #include "wheel.hpp"
@@ -40,7 +40,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(pop)
 #endif
 
-namespace process_wheel {
+namespace wheel_feed {
     // Reads up to count numbers separated by spaces.
     inline bool parse_numbers(const std::string& text, double* const values, const std::size_t count) {
         const char* cursor = text.c_str();
@@ -108,7 +108,8 @@ namespace process_wheel {
     class feeder final {
     private:
         bool active = false;
-        int sensor_id = 2;
+        // Clear of the cameras' ids, which the tools number from one, a rig having at most sixteen.
+        int sensor_id = 100;
         wheel::odometer odometer;
         zeroslam_sensor_parameters_wheel_odometry_struct parameters = {};
         std::size_t next = 0;
@@ -116,6 +117,17 @@ namespace process_wheel {
     public:
         bool is_active() const {
             return this->active;
+        }
+
+        // Reads the named odometer of the scene at a path.
+        bool open_path(const std::string& path, const std::string& name, std::string& error) {
+            mcap reader;
+            return reader.open(path, error) && this->open(reader, name, error);
+        }
+
+        // Feeds the samples again from the first, for a system started again.
+        void rewind() {
+            this->next = 0;
         }
 
         // Reads the named odometer of a scene.
@@ -212,6 +224,26 @@ namespace process_wheel {
             return (std::fclose(file) == 0) && written;
         }
     };
+
+    // The feeder a rig's feed (the process tool's rig.hpp) declares and feeds, when an odometer runs with the rig.
+    inline feeder*& registered() {
+        static feeder* value = nullptr;
+        return value;
+    }
+
+    inline void declare_registered(std::vector<zeroslam_sensor_rig_struct>& rig) {
+        if (registered() != nullptr) {
+            registered()->declare(rig);
+        }
+    }
+
+    inline bool set_registered_extrinsic(const zeroslam::system& slam) {
+        return (registered() == nullptr) || registered()->set_extrinsic(slam, false);
+    }
+
+    inline bool feed_registered(const zeroslam::system& slam, const long long time) {
+        return (registered() == nullptr) || registered()->feed_until(slam, time);
+    }
 }
 
-#endif // ZEROSLAM_TOOLS_PROCESS_WHEEL_HPP
+#endif // ZEROSLAM_TOOLS_COMMON_WHEEL_FEED_HPP

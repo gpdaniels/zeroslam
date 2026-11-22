@@ -21,6 +21,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "cdr.hpp"
 #include "dataset.hpp"
 #include "mcap.hpp"
+#include "wheel_feed.hpp"
 #include "zeroslam/zeroslam.hpp"
 
 #if defined(_MSC_VER)
@@ -156,12 +157,17 @@ namespace process_rig {
                 std::printf("Camera %s (sensor %d): %dx%d, extrinsic [%.6f %.6f %.6f] [%.6f %.6f %.6f %.6f].\n", entry.name.c_str(), rig[index].sensor_id, entry.parameters.width, entry.parameters.height, extrinsics[index].pose[0], extrinsics[index].pose[1], extrinsics[index].pose[2], extrinsics[index].pose[3], extrinsics[index].pose[4], extrinsics[index].pose[5], extrinsics[index].pose[6]);
             }
         }
+        wheel_feed::declare_registered(rig);
         if (slam.set_sensor_rig(rig.data(), static_cast<int>(rig.size())) != zeroslam_return_success) {
             std::fprintf(stderr, "The library rejected the camera rig.\n");
             return false;
         }
         if (slam.set_sensor_extrinsics(extrinsics.data(), static_cast<int>(extrinsics.size())) != zeroslam_return_success) {
             std::fprintf(stderr, "The library rejected the cameras' extrinsics.\n");
+            return false;
+        }
+        if (!wheel_feed::set_registered_extrinsic(slam)) {
+            std::fprintf(stderr, "The library rejected the wheel odometer's extrinsic.\n");
             return false;
         }
         return true;
@@ -280,6 +286,10 @@ namespace process_rig {
             }
             timestamps.push_back(current_timestamp);
             const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+            if (!wheel_feed::feed_registered(slam, current_timestamp)) {
+                std::fprintf(stderr, "The library rejected the wheel samples before frame %zu.\n", frames + 1);
+                return false;
+            }
             const zeroslam_return_enum result = slam.set_sensor_data(data.data(), static_cast<int>(data.size()));
             if (result != zeroslam_return_success) {
                 std::fprintf(stderr, "The library rejected frame %zu: %s.\n", frames + 1, zeroslam_return_enum_to_string(result));
