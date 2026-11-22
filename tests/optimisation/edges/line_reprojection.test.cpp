@@ -20,10 +20,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "math/lie.hpp"
 #include "optimisation/edge.hpp"
 #include "optimisation/vertex.hpp"
+#include "optimisation/vertices/intrinsics.hpp"
 #include "optimisation/vertices/line.hpp"
 #include "optimisation/vertices/pose.hpp"
 #include "sensor/camera/model.hpp"
 #include "sensor/camera/pinhole.hpp"
+#include "sensor/camera/pinhole_radial_tangential.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -188,6 +190,74 @@ int main(int argc, char* argv[]) {
         REQUIRE(edge.get_residual()[1][0] == 0.0);
         for (size_t column = 0; column < 4; ++column) {
             REQUIRE(edge.get_jacobians()[1][0][column] == 0.0);
+        }
+    }
+
+    {
+        // With the camera's intrinsics as a third vertex the segment is measured through the vertex's camera: at the camera
+        // the edge was made with it measures what the edge holding the camera does, and every block's Jacobian, the
+        // intrinsics' by the focal lengths moving together, the principal point and the leading distortion, is the derivative
+        // through its vertex.
+        const double distorted_parameters[12] = { 510.0, 505.0, 322.0, 238.0, -0.2, 0.05, 0.001, -0.002, 0.0, 0.0, 0.0, 0.0 };
+        const sensor::camera::model<double> distorted{ sensor::camera::pinhole_radial_tangential<double>(&distorted_parameters[0], 12) };
+        const int locals[12] = { 0, 0, 1, 2, 3, 4, 5, 6, -1, -1, -1, -1 };
+        geometry::plucker perturbed = line;
+        REQUIRE(perturbed.oplus(0.02, -0.03, 0.01, 0.02));
+        optimisation::vertex pose_vertex{ optimisation::vertices::pose() };
+        set_pose(pose_vertex, pose);
+        optimisation::vertex line_vertex{ optimisation::vertices::line() };
+        set_line(line_vertex, perturbed);
+        optimisation::vertex intrinsics_vertex = optimisation::vertices::intrinsics::make(distorted, &locals[0], 12);
+        REQUIRE(intrinsics_vertex.is_valid());
+        optimisation::edges::line_reprojection held_policy{ distorted };
+        optimisation::edges::line_reprojection calibrated_policy{ distorted, true };
+        REQUIRE(held_policy.get_vertex_count() == 2);
+        REQUIRE(calibrated_policy.get_vertex_count() == 3);
+        REQUIRE(held_policy.set_measured_segment(250.0, 200.0, 420.0, 260.0));
+        REQUIRE(calibrated_policy.set_measured_segment(250.0, 200.0, 420.0, 260.0));
+        optimisation::edge held{ held_policy };
+        optimisation::edge calibrated{ calibrated_policy };
+        REQUIRE(held.add_vertex(&pose_vertex));
+        REQUIRE(held.add_vertex(&line_vertex));
+        REQUIRE(calibrated.add_vertex(&pose_vertex));
+        REQUIRE(calibrated.add_vertex(&line_vertex));
+        REQUIRE(calibrated.add_vertex(&intrinsics_vertex));
+        held.compute_residual();
+        calibrated.compute_residual();
+        held.compute_jacobians();
+        calibrated.compute_jacobians();
+        for (size_t r = 0; r < 2; ++r) {
+            REQUIRE(calibrated.get_residual()[r][0] == held.get_residual()[r][0]);
+            for (size_t c = 0; c < 6; ++c) {
+                REQUIRE(calibrated.get_jacobians()[0][r][c] == held.get_jacobians()[0][r][c]);
+            }
+            for (size_t c = 0; c < 4; ++c) {
+                REQUIRE(calibrated.get_jacobians()[1][r][c] == held.get_jacobians()[1][r][c]);
+            }
+        }
+        REQUIRE(std::abs(calibrated.get_residual()[0][0]) > 1.0);
+        const math::matrix<double, 0, 0> analytic = calibrated.get_jacobians()[2];
+        REQUIRE(analytic.rows() == 2);
+        REQUIRE(analytic.cols() == 7);
+        double backup[12] = {};
+        REQUIRE(intrinsics_vertex.get_parameters(&backup[0], 12));
+        for (size_t column = 0; column < 7; ++column) {
+            const double step = (column < 3) ? 1.0e-4 : 1.0e-7;
+            double delta[7] = {};
+            delta[column] = step;
+            intrinsics_vertex.plus(&delta[0]);
+            calibrated.compute_residual();
+            const double plus[2] = { calibrated.get_residual()[0][0], calibrated.get_residual()[1][0] };
+            REQUIRE(intrinsics_vertex.set_parameters(&backup[0], 12));
+            delta[column] = -step;
+            intrinsics_vertex.plus(&delta[0]);
+            calibrated.compute_residual();
+            const double minus[2] = { calibrated.get_residual()[0][0], calibrated.get_residual()[1][0] };
+            REQUIRE(intrinsics_vertex.set_parameters(&backup[0], 12));
+            for (size_t r = 0; r < 2; ++r) {
+                const double numeric = (plus[r] - minus[r]) / (2.0 * step);
+                REQUIRE(std::abs(analytic[r][column] - numeric) < 1.0e-5 * (1.0 + std::abs(numeric)));
+            }
         }
     }
 

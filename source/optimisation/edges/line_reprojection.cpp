@@ -19,10 +19,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "geometry/plucker.hpp"
 #include "math/lie.hpp"
 #include "math/math.hpp"
+#include "optimisation/edges/reprojection.hpp"
+#include "optimisation/vertices/intrinsics.hpp"
 #include "sensor/camera.hpp"
 
 namespace optimisation::edges {
-    line_reprojection::line_reprojection(const sensor::camera::model<double>& camera_model)
+    line_reprojection::line_reprojection(const sensor::camera::model<double>& camera_model, const bool with_intrinsics)
         : camera(camera_model) {
         // Residuals are distances on the image plane scaled to pixels by the focal lengths of the camera's pinhole.
         double pinhole[4] = {};
@@ -30,6 +32,36 @@ namespace optimisation::edges {
             this->focal_x = pinhole[0];
             this->focal_y = pinhole[1];
         }
+        this->intrinsics_slot = with_intrinsics ? line_reprojection::vertex_count : -1;
+    }
+
+    int line_reprojection::get_vertex_count() const {
+        return line_reprojection::vertex_count + ((this->intrinsics_slot >= 0) ? 1 : 0);
+    }
+
+    bool line_reprojection::measurement(const edge& context, double (&normalised)[2][2], double& fx, double& fy) const {
+        const vertices::intrinsics* const calibration = reprojection::intrinsics_at(context, this->intrinsics_slot);
+        fx = this->focal_x;
+        fy = this->focal_y;
+        if (calibration == nullptr) {
+            for (int i = 0; i < 2; ++i) {
+                normalised[i][0] = this->measured_normalised[i][0];
+                normalised[i][1] = this->measured_normalised[i][1];
+            }
+            return this->measured_valid;
+        }
+        if (!this->measured_valid) {
+            return false;
+        }
+        for (int i = 0; i < 2; ++i) {
+            double ray[3];
+            if (!calibration->get_camera().unproject(&this->measured_pixels[i][0], &ray[0]) || !(ray[2] > 1.0e-12)) {
+                return false;
+            }
+            normalised[i][0] = ray[0] / ray[2];
+            normalised[i][1] = ray[1] / ray[2];
+        }
+        return true;
     }
 
     bool line_reprojection::set_measured_segment(const double x1, const double y1, const double x2, const double y2) {
@@ -42,6 +74,8 @@ namespace optimisation::edges {
             }
             this->measured_normalised[i][0] = ray[0] / ray[2];
             this->measured_normalised[i][1] = ray[1] / ray[2];
+            this->measured_pixels[i][0] = pixels[i][0];
+            this->measured_pixels[i][1] = pixels[i][1];
         }
         this->measured_valid = true;
         return true;
@@ -65,18 +99,22 @@ namespace optimisation::edges {
         math::matrix<double, 3, 3> rotation;
         math::matrix<double, 3, 1> translation;
         this->compute_camera_line(context, moment_camera, direction_camera, rotation, translation);
+        double normalised[2][2];
+        double fx = 1.0;
+        double fy = 1.0;
+        const bool valid = this->measurement(context, normalised, fx, fy);
         const double line_norm = math::sqrt((moment_camera[0] * moment_camera[0]) + (moment_camera[1] * moment_camera[1]));
-        if (!this->measured_valid || (line_norm < line_reprojection::minimum_line_norm)) {
+        if (!valid || (line_norm < line_reprojection::minimum_line_norm)) {
             residual[0][0] = 0.0;
             residual[1][0] = 0.0;
             return;
         }
         // The distance in pixels to the image line (m0 / fx, m1 / fy, ...) of the camera line m0 x + m1 y + m2 = 0.
-        const double pixel_x = moment_camera[0] / this->focal_x;
-        const double pixel_y = moment_camera[1] / this->focal_y;
+        const double pixel_x = moment_camera[0] / fx;
+        const double pixel_y = moment_camera[1] / fy;
         const double pixel_norm = math::sqrt((pixel_x * pixel_x) + (pixel_y * pixel_y));
         for (size_t i = 0; i < 2; ++i) {
-            const double alignment = (moment_camera[0] * this->measured_normalised[i][0]) + (moment_camera[1] * this->measured_normalised[i][1]) + moment_camera[2];
+            const double alignment = (moment_camera[0] * normalised[i][0]) + (moment_camera[1] * normalised[i][1]) + moment_camera[2];
             residual[i][0] = alignment / pixel_norm;
         }
     }
@@ -87,25 +125,32 @@ namespace optimisation::edges {
         math::matrix<double, 3, 3> rotation;
         math::matrix<double, 3, 1> translation;
         this->compute_camera_line(context, moment_camera, direction_camera, rotation, translation);
+        double normalised[2][2];
+        double fx = 1.0;
+        double fy = 1.0;
+        const bool valid = this->measurement(context, normalised, fx, fy);
         const double line_norm_squared = (moment_camera[0] * moment_camera[0]) + (moment_camera[1] * moment_camera[1]);
         const double line_norm = math::sqrt(line_norm_squared);
-        if (!this->measured_valid || (line_norm < line_reprojection::minimum_line_norm)) {
+        if (!valid || (line_norm < line_reprojection::minimum_line_norm)) {
             const double zeros[12] = {};
             edge::set_jacobian(jacobians[0], 2, 6, &zeros[0]);
             edge::set_jacobian(jacobians[1], 2, 4, &zeros[0]);
+            if (this->intrinsics_slot >= 0) {
+                reprojection::set_intrinsics_jacobian(context, this->intrinsics_slot, false, nullptr, jacobians[static_cast<size_t>(this->intrinsics_slot)]);
+            }
             return;
         }
-        const double pixel_x = moment_camera[0] / this->focal_x;
-        const double pixel_y = moment_camera[1] / this->focal_y;
+        const double pixel_x = moment_camera[0] / fx;
+        const double pixel_y = moment_camera[1] / fy;
         const double pixel_norm_squared = (pixel_x * pixel_x) + (pixel_y * pixel_y);
         const double pixel_norm = math::sqrt(pixel_norm_squared);
         math::matrix<double, 2, 3> jacobian_residual_line;
         for (size_t i = 0; i < 2; ++i) {
-            const double x[3] = { this->measured_normalised[i][0], this->measured_normalised[i][1], 1.0 };
+            const double x[3] = { normalised[i][0], normalised[i][1], 1.0 };
             const double alignment = (moment_camera[0] * x[0]) + (moment_camera[1] * x[1]) + moment_camera[2];
             const double alignment_over_cubed = alignment / (pixel_norm_squared * pixel_norm);
-            jacobian_residual_line[i][0] = (x[0] / pixel_norm) - ((pixel_x / this->focal_x) * alignment_over_cubed);
-            jacobian_residual_line[i][1] = (x[1] / pixel_norm) - ((pixel_y / this->focal_y) * alignment_over_cubed);
+            jacobian_residual_line[i][0] = (x[0] / pixel_norm) - ((pixel_x / fx) * alignment_over_cubed);
+            jacobian_residual_line[i][1] = (x[1] / pixel_norm) - ((pixel_y / fy) * alignment_over_cubed);
             jacobian_residual_line[i][2] = x[2] / pixel_norm;
         }
         math::matrix<double, 3, 6> jacobian_line_pose;
@@ -154,5 +199,41 @@ namespace optimisation::edges {
             }
         }
         edge::set_jacobian(jacobians[1], 2, 4, jacobian_landmark_res.data());
+
+        if (this->intrinsics_slot >= 0) {
+            // Each endpoint's normalised coordinates n hold project((n, 1), parameters) at the measured pixel, so they move by
+            // -A^-1 J_parameters with A the projection's Jacobian by n. The scale to pixels is the pinhole of the camera the edge
+            // was made with, a weight held through the adjustment.
+            const vertices::intrinsics* const calibration = reprojection::intrinsics_at(context, this->intrinsics_slot);
+            const size_t count = (calibration != nullptr) ? static_cast<size_t>(calibration->get_parameter_count()) : 0;
+            double jacobian_full[2 * vertex::maximum_parameters] = {};
+            bool measured = calibration != nullptr;
+            for (size_t i = 0; measured && (i < 2); ++i) {
+                const double point[3] = { normalised[i][0], normalised[i][1], 1.0 };
+                double pixel[2];
+                double jacobian_point[2 * 3];
+                double jacobian_parameters[2 * vertex::maximum_parameters];
+                measured = calibration->get_camera().project(&point[0], &pixel[0], &jacobian_point[0], &jacobian_parameters[0]);
+                const double determinant = (jacobian_point[0] * jacobian_point[4]) - (jacobian_point[1] * jacobian_point[3]);
+                measured = measured && ((determinant > 1.0e-12) || (determinant < -1.0e-12));
+                if (!measured) {
+                    break;
+                }
+                for (size_t k = 0; k < count; ++k) {
+                    const double parameter_x = jacobian_parameters[k];
+                    const double parameter_y = jacobian_parameters[count + k];
+                    const double moved_x = -((jacobian_point[4] * parameter_x) - (jacobian_point[1] * parameter_y)) / determinant;
+                    const double moved_y = -((jacobian_point[0] * parameter_y) - (jacobian_point[3] * parameter_x)) / determinant;
+                    const double value = ((moment_camera[0] * moved_x) + (moment_camera[1] * moved_y)) / pixel_norm;
+                    jacobian_full[(i * count) + k] = value;
+                }
+            }
+            const size_t columns = static_cast<size_t>(context.get_vertex(this->intrinsics_slot)->get_local_dimensions());
+            double jacobian_local[2 * vertex::maximum_parameters] = {};
+            if (measured) {
+                calibration->select_free_columns(&jacobian_full[0], 2, 1.0, &jacobian_local[0]);
+            }
+            edge::set_jacobian(jacobians[static_cast<size_t>(this->intrinsics_slot)], 2, columns, &jacobian_local[0]);
+        }
     }
 }
