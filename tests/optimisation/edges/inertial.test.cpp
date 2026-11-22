@@ -309,8 +309,8 @@ int main(int argc, char* argv[]) {
 
     // A visual inertial bundle adjustment of a few keyframes and landmarks: a visual estimate of the right shape at the wrong scale,
     // with the velocities and the biases unknown, is brought to the metric trajectory and the biases by the imu, with gravity known
-    // and the first pose fixed. Every solver strategy and precision gives the same result, the graph holding vertices other than
-    // poses and landmarks taking the dense path.
+    // and the first pose fixed. The square root solver, which takes blocks of any size, solves it as well in double and single
+    // precision, to within its conjugate gradient tolerance of the dense solution.
     {
         const int keyframe_count = 9;
         const double keyframe_period = 0.5;
@@ -418,8 +418,8 @@ int main(int argc, char* argv[]) {
             REQUIRE(observation_count > 200);
 
             REQUIRE(graph.solve(100, true) > 0);
-            REQUIRE(!graph.get_diagnostics().used_square_root);
-            REQUIRE(!graph.get_diagnostics().used_single_precision);
+            REQUIRE(graph.get_diagnostics().used_square_root == (strategy != 0));
+            REQUIRE(graph.get_diagnostics().used_single_precision == (strategy == 2));
             for (int k = 0; k < keyframe_count; ++k) {
                 solutions[strategy][k] = read_pose(*pose_vertices[static_cast<size_t>(k)]);
             }
@@ -432,7 +432,8 @@ int main(int argc, char* argv[]) {
         for (int k = 0; k < keyframe_count; ++k) {
             largest_position_error = std::fmax(largest_position_error, norm(solutions[0][k].inverse().translation() - poses[static_cast<size_t>(k)].inverse().translation()));
             for (int strategy = 1; strategy < 3; ++strategy) {
-                REQUIRE(solutions[strategy][k] == solutions[0][k]);
+                const double apart = norm(solutions[strategy][k].inverse().translation() - solutions[0][k].inverse().translation());
+                REQUIRE(apart < ((strategy == 1) ? 5e-4 : 2e-3));
             }
         }
         const double true_length = norm(poses.back().inverse().translation() - poses.front().inverse().translation());
@@ -443,7 +444,8 @@ int main(int argc, char* argv[]) {
             REQUIRE(std::abs(bias_solutions[0][i] - true_bias.gyroscope[i]) < 1e-3);
             REQUIRE(std::abs(bias_solutions[0][3 + i] - true_bias.accelerometer[i]) < 0.03);
             for (int strategy = 1; strategy < 3; ++strategy) {
-                REQUIRE(bias_solutions[strategy][i] == bias_solutions[0][i]);
+                REQUIRE(std::abs(bias_solutions[strategy][i] - bias_solutions[0][i]) < 1e-4);
+                REQUIRE(std::abs(bias_solutions[strategy][3 + i] - bias_solutions[0][3 + i]) < 1e-2);
             }
         }
     }
