@@ -234,6 +234,50 @@ int main(int argc, char* argv[]) {
     REQUIRE(moved.is_valid());
     REQUIRE(system.get_timestamp(&timestamp) == zeroslam_return_failure_invalid_system);
     REQUIRE(moved.get_timestamp(&timestamp) == zeroslam_return_success);
+
+    {
+        // A depth camera registered to the camera makes the map metric: the depth frames go with the camera frames.
+        zeroslam::system rgbd;
+        REQUIRE(rgbd.is_valid());
+        constexpr static const int depth_sensor_id = 2;
+        zeroslam_sensor_parameters_depth_struct depth_parameters = zeroslam::registered_depth(sensor_id, zeroslam_depth_encoding_float_32, 1.0);
+        zeroslam_sensor_rig_struct sensors[2] = { rig, {} };
+        sensors[1].type = zeroslam_sensor_depth;
+        sensors[1].sensor_id = depth_sensor_id;
+        sensors[1].parameters_length = static_cast<int>(sizeof(depth_parameters));
+        sensors[1].parameters_data = &depth_parameters;
+        zeroslam_return_enum rgbd_result = rgbd.set_sensor_rig(&sensors[0], 2);
+        std::printf("set_sensor_rig (rgb-d): %s\n", zeroslam_return_enum_to_string(rgbd_result));
+        REQUIRE(rgbd_result == zeroslam_return_success);
+        std::vector<unsigned char> frame_pixels(static_cast<size_t>(width * height));
+        std::vector<float> metres(static_cast<size_t>(width * height));
+        for (int row = 0; row < height; ++row) {
+            const double ray_y = ((static_cast<double>(row) + 0.5) - camera_parameters.centre_y) / camera_parameters.focal_y;
+            const double depth = ((std::abs(ray_y) * 6.0) <= 1.0) ? 6.0 : (1.0 / std::abs(ray_y));
+            for (int column = 0; column < width; ++column) {
+                metres[static_cast<size_t>((row * width) + column)] = static_cast<float>(depth);
+            }
+        }
+        for (int frame_index = 0; frame_index < frame_count; ++frame_index) {
+            render_corridor(frame_pixels, width, height, camera_parameters, 0.05 * frame_index);
+            zeroslam_sensor_data_struct data[2]{};
+            data[0].timestamp = 1000000000ll + (frame_interval * frame_index);
+            data[0].sensor_id = depth_sensor_id;
+            data[0].measurement_length = width * height * static_cast<int>(sizeof(float));
+            data[0].measurement_data = metres.data();
+            data[1].timestamp = data[0].timestamp;
+            data[1].sensor_id = sensor_id;
+            data[1].measurement_length = width * height;
+            data[1].measurement_data = frame_pixels.data();
+            REQUIRE(rgbd.set_sensor_data(&data[0], 2) == zeroslam_return_success);
+        }
+        zeroslam_pose_struct pose{};
+        rgbd_result = rgbd.get_pose(&pose);
+        std::printf("get_pose (rgb-d): %s\n", zeroslam_return_enum_to_string(rgbd_result));
+        REQUIRE(rgbd_result == zeroslam_return_success);
+        print_pose("newest pose, metres", pose);
+        REQUIRE((pose.pose[0] > 0.85) && (pose.pose[0] < 1.05));
+    }
     std::printf("destroy: on scope exit\n");
 
     return EXIT_SUCCESS;

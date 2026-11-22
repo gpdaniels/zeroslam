@@ -58,6 +58,19 @@ static void render_corridor(const double camera_x, const int width, const int he
     }
 }
 
+// The corridor's depth along the optical axis, which is the depth the ray of unit z reaches.
+static void render_corridor_depth(const int width, const int height, const zeroslam_sensor_parameters_camera_struct& camera, float* const metres) {
+    constexpr static const double wall_depth = 6.0;
+    for (int row = 0; row < height; ++row) {
+        const double ray_y = (static_cast<double>(row) + 0.5 - camera.centre_y) / camera.focal_y;
+        const bool wall = (math::abs(ray_y) * wall_depth) <= 1.0;
+        const double depth = wall ? wall_depth : (1.0 / math::abs(ray_y));
+        for (int column = 0; column < width; ++column) {
+            metres[static_cast<size_t>((row * width) + column)] = static_cast<float>(depth);
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
@@ -808,6 +821,218 @@ int main(int argc, char* argv[]) {
         REQUIRE(math::abs(last.pose[0] - travelled) < 0.05 * travelled);
         REQUIRE(math::abs(last.pose[1]) < 0.02);
         REQUIRE(math::abs(last.pose[2]) < 0.02);
+    }
+
+    {
+        // A depth camera in the rig: validated against its camera, and its frames paired with the camera's by time.
+        zeroslam_system* system = nullptr;
+        REQUIRE(zeroslam_create(&system) == zeroslam_return_success);
+
+        constexpr static const int width = 320;
+        constexpr static const int height = 240;
+        zeroslam_sensor_parameters_camera_struct camera_parameters{};
+        camera_parameters.width = width;
+        camera_parameters.height = height;
+        camera_parameters.focal_x = 262.5;
+        camera_parameters.focal_y = 262.5;
+        camera_parameters.centre_x = 160.0;
+        camera_parameters.centre_y = 120.0;
+        zeroslam_sensor_parameters_depth_struct depth_parameters{};
+        depth_parameters.camera_id = 3;
+        depth_parameters.encoding = zeroslam_depth_encoding_float_32;
+        depth_parameters.measure = zeroslam_depth_measure_axial;
+        depth_parameters.registration = zeroslam_depth_registration_camera;
+        depth_parameters.scale = 1.0;
+        depth_parameters.minimum_depth = 0.1;
+        depth_parameters.maximum_depth = 10.0;
+        depth_parameters.noise_quadratic = 1.425e-3;
+        depth_parameters.pairing_tolerance = 400;
+        zeroslam_sensor_rig_struct rig[2]{};
+        rig[0].type = zeroslam_sensor_camera;
+        rig[0].sensor_id = 3;
+        rig[0].parameters_length = static_cast<int>(sizeof(camera_parameters));
+        rig[0].parameters_data = &camera_parameters;
+        rig[1].type = zeroslam_sensor_depth;
+        rig[1].sensor_id = 4;
+        rig[1].parameters_length = static_cast<int>(sizeof(depth_parameters));
+        rig[1].parameters_data = &depth_parameters;
+
+        const auto rejected = [&](zeroslam_sensor_parameters_depth_struct changed) {
+            const zeroslam_sensor_parameters_depth_struct kept = depth_parameters;
+            depth_parameters = changed;
+            const bool result = zeroslam_set_sensor_rig(system, &rig[0], 2) == zeroslam_return_failure_invalid_rig_sensor;
+            depth_parameters = kept;
+            return result;
+        };
+        zeroslam_sensor_parameters_depth_struct changed = depth_parameters;
+        changed.camera_id = 9;
+        REQUIRE(rejected(changed));
+        changed = depth_parameters;
+        changed.encoding = 7;
+        REQUIRE(rejected(changed));
+        changed = depth_parameters;
+        changed.measure = 2;
+        REQUIRE(rejected(changed));
+        changed = depth_parameters;
+        changed.registration = 1;
+        REQUIRE(rejected(changed));
+        changed = depth_parameters;
+        changed.encoding = zeroslam_depth_encoding_unsigned_16;
+        changed.scale = 0.0;
+        REQUIRE(rejected(changed));
+        changed = depth_parameters;
+        changed.maximum_depth = changed.minimum_depth;
+        REQUIRE(rejected(changed));
+        changed = depth_parameters;
+        changed.noise_quadratic = 0.0;
+        REQUIRE(rejected(changed));
+        changed = depth_parameters;
+        changed.noise_linear = -1.0;
+        REQUIRE(rejected(changed));
+        changed = depth_parameters;
+        changed.pairing_tolerance = -1;
+        REQUIRE(rejected(changed));
+        rig[1].parameters_length = 8;
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig[0], 2) == zeroslam_return_failure_invalid_rig_sensor);
+        rig[1].parameters_length = static_cast<int>(sizeof(depth_parameters));
+        rig[1].sensor_id = 3;
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig[0], 2) == zeroslam_return_failure_invalid_rig_sensor);
+        rig[1].sensor_id = 4;
+        // A depth camera alone is no rig, and two depth cameras on one camera are one too many.
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig[1], 1) == zeroslam_return_failure_invalid_rig_sensor);
+        zeroslam_sensor_rig_struct three[3] = { rig[0], rig[1], rig[1] };
+        three[2].sensor_id = 5;
+        REQUIRE(zeroslam_set_sensor_rig(system, &three[0], 3) == zeroslam_return_failure_invalid_rig_sensor);
+        // A depth camera goes with a single camera: a rig of several cameras does not take one yet.
+        zeroslam_sensor_rig_struct stereo[3] = { rig[0], rig[0], rig[1] };
+        stereo[1].sensor_id = 6;
+        REQUIRE(zeroslam_set_sensor_rig(system, &stereo[0], 3) == zeroslam_return_failure_invalid_rig_sensor);
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig[0], 2) == zeroslam_return_success);
+
+        constexpr static const int frame_count = 20;
+        std::vector<unsigned char> pixels(static_cast<size_t>(width * height));
+        std::vector<float> metres(static_cast<size_t>(width * height));
+        render_corridor_depth(width, height, camera_parameters, metres.data());
+        zeroslam_sensor_data_struct data[2]{};
+        data[0].sensor_id = 4;
+        data[0].measurement_length = width * height * static_cast<int>(sizeof(float));
+        data[0].measurement_data = metres.data();
+        data[1].sensor_id = 3;
+        data[1].measurement_length = width * height;
+        data[1].measurement_data = pixels.data();
+
+        // A depth frame is the camera's size in its encoding.
+        data[0].timestamp = 1000;
+        data[1].timestamp = 1000;
+        data[0].measurement_length = width * height;
+        REQUIRE(zeroslam_set_sensor_data(system, &data[0], 2) == zeroslam_return_failure_invalid_sensor_data);
+        data[0].measurement_length = width * height * static_cast<int>(sizeof(float));
+
+        for (int frame = 0; frame < frame_count; ++frame) {
+            render_corridor(0.05 * static_cast<double>(frame), width, height, camera_parameters, pixels.data());
+            // The depth frames come a little before or after their camera frames, within the pairing tolerance; given with
+            // the camera frame, either order pairs.
+            data[0].timestamp = (1000 * (frame + 1)) + (((frame % 2) == 0) ? 150 : -150);
+            data[1].timestamp = 1000 * (frame + 1);
+            if ((frame % 3) == 0) {
+                const zeroslam_sensor_data_struct swapped[2] = { data[1], data[0] };
+                REQUIRE(zeroslam_set_sensor_data(system, &swapped[0], 2) == zeroslam_return_success);
+            }
+            else {
+                REQUIRE(zeroslam_set_sensor_data(system, &data[0], 2) == zeroslam_return_success);
+            }
+        }
+        // Each sensor's timestamps increase on their own: a depth frame cannot repeat one.
+        data[0].timestamp = (1000 * frame_count) - 150;
+        REQUIRE(zeroslam_set_sensor_data(system, &data[0], 1) == zeroslam_return_failure_invalid_sensor_data);
+
+        long long int timestamp = 0;
+        REQUIRE(zeroslam_get_timestamp(system, &timestamp) == zeroslam_return_success);
+        REQUIRE(timestamp == 1000 * frame_count);
+
+        // The depth gives the map metric scale: the camera moved 5 cm a frame along x, and the map has it there.
+        zeroslam_pose_struct pose{};
+        REQUIRE(zeroslam_get_pose_at_timestamp(system, &pose, 1000) == zeroslam_return_success);
+        REQUIRE((pose.pose[0] == 0.0) && (pose.pose[1] == 0.0) && (pose.pose[2] == 0.0));
+        REQUIRE(zeroslam_get_pose(system, &pose) == zeroslam_return_success);
+        REQUIRE(pose.timestamp == 1000 * frame_count);
+        const double travelled = 0.05 * static_cast<double>(frame_count - 1);
+        std::fprintf(stdout, "RGB-D corridor: the last frame at (%.4f, %.4f, %.4f), the camera at (%.4f, 0, 0).\n", pose.pose[0], pose.pose[1], pose.pose[2], travelled);
+        REQUIRE(math::abs(pose.pose[0] - travelled) < 0.02);
+        REQUIRE(math::abs(pose.pose[1]) < 0.02);
+        REQUIRE(math::abs(pose.pose[2]) < 0.02);
+
+        REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
+    }
+
+    {
+        // Sixteen bit depth, and depth frames given ahead of their camera frames: the nearest within the tolerance pairs,
+        // and a camera frame with no depth frame near it is processed without one.
+        zeroslam_system* system = nullptr;
+        REQUIRE(zeroslam_create(&system) == zeroslam_return_success);
+
+        constexpr static const int width = 320;
+        constexpr static const int height = 240;
+        zeroslam_sensor_parameters_camera_struct camera_parameters{};
+        camera_parameters.width = width;
+        camera_parameters.height = height;
+        camera_parameters.focal_x = 262.5;
+        camera_parameters.focal_y = 262.5;
+        camera_parameters.centre_x = 160.0;
+        camera_parameters.centre_y = 120.0;
+        zeroslam_sensor_parameters_depth_struct depth_parameters{};
+        depth_parameters.camera_id = 3;
+        depth_parameters.encoding = zeroslam_depth_encoding_unsigned_16;
+        depth_parameters.measure = zeroslam_depth_measure_axial;
+        depth_parameters.registration = zeroslam_depth_registration_camera;
+        depth_parameters.scale = 1.0 / 5000.0;
+        depth_parameters.minimum_depth = 0.1;
+        depth_parameters.maximum_depth = 10.0;
+        depth_parameters.noise_quadratic = 1.425e-3;
+        depth_parameters.pairing_tolerance = 200;
+        zeroslam_sensor_rig_struct rig[2]{};
+        rig[0].type = zeroslam_sensor_camera;
+        rig[0].sensor_id = 3;
+        rig[0].parameters_length = static_cast<int>(sizeof(camera_parameters));
+        rig[0].parameters_data = &camera_parameters;
+        rig[1].type = zeroslam_sensor_depth;
+        rig[1].sensor_id = 4;
+        rig[1].parameters_length = static_cast<int>(sizeof(depth_parameters));
+        rig[1].parameters_data = &depth_parameters;
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig[0], 2) == zeroslam_return_success);
+
+        std::vector<float> metres(static_cast<size_t>(width * height));
+        render_corridor_depth(width, height, camera_parameters, metres.data());
+        std::vector<unsigned short> values(metres.size());
+        for (size_t index = 0; index < values.size(); ++index) {
+            values[index] = static_cast<unsigned short>((5000.0 * static_cast<double>(metres[index])) + 0.5);
+        }
+        std::vector<unsigned char> pixels(static_cast<size_t>(width * height));
+        constexpr static const int frame_count = 20;
+        for (int frame = 0; frame < frame_count; ++frame) {
+            render_corridor(0.05 * static_cast<double>(frame), width, height, camera_parameters, pixels.data());
+            // Two depth frames come ahead of each camera frame, the second nearer it; the fifth camera frame has none near.
+            zeroslam_sensor_data_struct depth_data[2]{};
+            for (int copy = 0; copy < 2; ++copy) {
+                depth_data[copy].sensor_id = 4;
+                depth_data[copy].timestamp = (1000 * (frame + 1)) - ((frame == 4) ? 700 : 0) - ((copy == 0) ? 300 : 100);
+                depth_data[copy].measurement_length = width * height * static_cast<int>(sizeof(unsigned short));
+                depth_data[copy].measurement_data = values.data();
+            }
+            REQUIRE(zeroslam_set_sensor_data(system, &depth_data[0], 2) == zeroslam_return_success);
+            zeroslam_sensor_data_struct data{};
+            data.sensor_id = 3;
+            data.timestamp = 1000 * (frame + 1);
+            data.measurement_length = width * height;
+            data.measurement_data = pixels.data();
+            REQUIRE(zeroslam_set_sensor_data(system, &data, 1) == zeroslam_return_success);
+        }
+        zeroslam_pose_struct pose{};
+        REQUIRE(zeroslam_get_pose(system, &pose) == zeroslam_return_success);
+        const double travelled = 0.05 * static_cast<double>(frame_count - 1);
+        REQUIRE(math::abs(pose.pose[0] - travelled) < 0.02);
+
+        REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
     }
 
     return EXIT_SUCCESS;

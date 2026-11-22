@@ -21,6 +21,25 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "zeroslam/zeroslam.h"
 
 namespace zeroslam {
+    // The parameters of a depth camera registered to the rig's camera camera_id (on its pixel grid, as aligned depth comes),
+    // measuring the depth along the optical axis between 0.1 and 10 m with the Kinect's noise model, 1.425e-3 d^2 metres,
+    // its frames paired with the camera's within half a 30 Hz frame. Any field can be changed after.
+    inline zeroslam_sensor_parameters_depth_struct registered_depth(const int camera_id, const zeroslam_depth_encoding_enum encoding, const double scale) {
+        zeroslam_sensor_parameters_depth_struct parameters{};
+        parameters.camera_id = camera_id;
+        parameters.encoding = encoding;
+        parameters.measure = zeroslam_depth_measure_axial;
+        parameters.registration = zeroslam_depth_registration_camera;
+        parameters.scale = scale;
+        parameters.minimum_depth = 0.1;
+        parameters.maximum_depth = 10.0;
+        parameters.noise_constant = 0.0;
+        parameters.noise_linear = 0.0;
+        parameters.noise_quadratic = 1.425e-3;
+        parameters.pairing_tolerance = 16000000;
+        return parameters;
+    }
+
     class system final {
     private:
         zeroslam_system* handle = nullptr;

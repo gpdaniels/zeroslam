@@ -199,6 +199,46 @@ def main():
     require(not system.is_valid(), "closed system is invalid")
     require(system.get_timestamp(timestamp) == zeroslam.zeroslam_return_enum.zeroslam_return_failure_invalid_system, "closed system rejects calls")
     print("destroy: on with block exit")
+
+    # A depth camera registered to the camera makes the map metric: the depth frames go with the camera frames.
+    with zeroslam.system() as rgbd:
+        require(rgbd.is_valid(), "create (rgb-d)")
+        depth_sensor_id = 2
+        depth_parameters = zeroslam.registered_depth(sensor_id, zeroslam.zeroslam_depth_encoding_enum.zeroslam_depth_encoding_float_32, 1.0)
+        sensors = (zeroslam.zeroslam_sensor_rig_struct * 2)()
+        sensors[0] = rig
+        sensors[1].type = zeroslam.zeroslam_sensor_enum.zeroslam_sensor_depth
+        sensors[1].sensor_id = depth_sensor_id
+        sensors[1].parameters_length = ctypes.sizeof(depth_parameters)
+        sensors[1].parameters_data = ctypes.cast(ctypes.pointer(depth_parameters), ctypes.c_void_p)
+        result = rgbd.set_sensor_rig(sensors, 2)
+        print("set_sensor_rig (rgb-d): {}".format(result.name))
+        require(result == success, "set_sensor_rig (rgb-d)")
+        metres = (ctypes.c_float * (width * height))()
+        for row in range(height):
+            ray_y = ((row + 0.5) - camera_parameters.centre_y) / camera_parameters.focal_y
+            depth = 6.0 if (abs(ray_y) * 6.0) <= 1.0 else (1.0 / abs(ray_y))
+            for column in range(width):
+                metres[(row * width) + column] = depth
+        for frame_index in range(frame_count):
+            pixels = render_corridor(width, height, camera_parameters, 0.05 * frame_index)
+            buffer = (ctypes.c_ubyte * len(pixels)).from_buffer(pixels)
+            data = (zeroslam.zeroslam_sensor_data_struct * 2)()
+            data[0].timestamp = 1000000000 + (frame_interval * frame_index)
+            data[0].sensor_id = depth_sensor_id
+            data[0].measurement_length = width * height * ctypes.sizeof(ctypes.c_float)
+            data[0].measurement_data = ctypes.cast(metres, ctypes.c_void_p)
+            data[1].timestamp = data[0].timestamp
+            data[1].sensor_id = sensor_id
+            data[1].measurement_length = width * height
+            data[1].measurement_data = ctypes.cast(buffer, ctypes.c_void_p)
+            require(rgbd.set_sensor_data(data, 2) == success, "set_sensor_data (rgb-d)")
+        pose = zeroslam.zeroslam_pose_struct()
+        result = rgbd.get_pose(pose)
+        print("get_pose (rgb-d): {}".format(result.name))
+        require(result == success, "get_pose (rgb-d)")
+        print_pose("newest pose, metres", pose)
+        require(0.85 < pose.pose[0] < 1.05, "the rgb-d map is metric")
     return 0
 
 

@@ -3702,8 +3702,13 @@ public:
 
     // A frame with the depth image registered to its camera, empty when it came without one (see slam_depth.hpp).
     void process_frame(const sensor::model& camera_intrinsics, const image::image& image_grey, sensor::depth&& frame_depth) {
-        this->next_depth_ = static_cast<sensor::depth&&>(frame_depth);
+        this->set_frame_depth(static_cast<sensor::depth&&>(frame_depth));
         this->process(camera_intrinsics, image_grey, nullptr, nullptr, 0);
+    }
+
+    // The depth image registered to the camera of the next frame processed.
+    void set_frame_depth(sensor::depth&& frame_depth) {
+        this->next_depth_ = static_cast<sensor::depth&&>(frame_depth);
     }
 
 private:
