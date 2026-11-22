@@ -152,6 +152,49 @@ static void exercise() {
     }
 
     {
+        // The pinhole of a pinhole model is its own parameters, of an empty model there is none.
+        const model empty;
+        type pinhole[4] = { type(7), type(7), type(7), type(7) };
+        REQUIRE(!empty.get_pinhole(pinhole, 4));
+        REQUIRE(pinhole[0] == type(7));
+        const model erased = sensor::camera::pinhole_radial_tangential<type>(radial_parameters, 12);
+        REQUIRE(!erased.get_pinhole(pinhole, 3));
+        REQUIRE(!erased.get_pinhole(nullptr, 4));
+        REQUIRE(erased.get_pinhole(pinhole, 4));
+        for (size_t i = 0; i < 4; ++i) {
+            REQUIRE(pinhole[i] == radial_parameters[i]);
+        }
+        const model plain = sensor::camera::pinhole<type>(pinhole_parameters, 4);
+        REQUIRE(plain.get_pinhole(pinhole, 4));
+        for (size_t i = 0; i < 4; ++i) {
+            REQUIRE(pinhole[i] == pinhole_parameters[i]);
+        }
+    }
+
+    {
+        // Equal is the same model with the same parameters.
+        const model empty;
+        const model other_empty;
+        const model plain = sensor::camera::pinhole<type>(pinhole_parameters, 4);
+        const model distorted = sensor::camera::pinhole_radial_tangential<type>(radial_parameters, 12);
+        model changed = distorted;
+        REQUIRE(empty.is_equal(other_empty));
+        REQUIRE(!empty.is_equal(plain));
+        REQUIRE(!plain.is_equal(empty));
+        REQUIRE(plain.is_equal(plain));
+        REQUIRE(distorted.is_equal(changed));
+        REQUIRE(!plain.is_equal(distorted));
+        type parameters[12] = {};
+        REQUIRE(changed.get_parameters(parameters, 12));
+        parameters[11] = type(0.001);
+        REQUIRE(changed.set_parameters(parameters, 12));
+        REQUIRE(!distorted.is_equal(changed));
+        // A pinhole and a radial tangential model with no distortion project alike, but are different models.
+        const type zero_distortion[12] = { type(0.8), type(0.8), type(0.5), type(0.375), type(0), type(0), type(0), type(0), type(0), type(0), type(0), type(0) };
+        REQUIRE(!plain.is_equal(model(sensor::camera::pinhole_radial_tangential<type>(zero_distortion, 12))));
+    }
+
+    {
         const type zero_distortion[12] = { type(0.8), type(0.8), type(0.5), type(0.375), type(0), type(0), type(0), type(0), type(0), type(0), type(0), type(0) };
         const model models[2] = { model(sensor::camera::pinhole<type>(pinhole_parameters, 4)), model(sensor::camera::pinhole_radial_tangential<type>(zero_distortion, 12)) };
         for (int i = -5; i <= 5; ++i) {

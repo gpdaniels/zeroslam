@@ -45,6 +45,8 @@ namespace sensor::camera {
 
         bool get_parameters(type* const parameters, const size_t parameters_length) const;
 
+        bool get_pinhole(type* const pinhole_parameters, const size_t pinhole_parameters_length) const;
+
         bool project(
             const type* const point_xyz,
             type* const point_xy,

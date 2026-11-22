@@ -57,6 +57,8 @@ namespace sensor::camera {
     public:
         constexpr static const size_t maximum_size = 256;
         constexpr static const size_t maximum_alignment = 16;
+        // No model has more parameters than this, so a caller can size a buffer for any of them.
+        constexpr static const size_t maximum_parameter_count = 32;
 
     private:
         template <typename value_type>
@@ -70,7 +72,7 @@ namespace sensor::camera {
         template <typename model_type>
         struct is_model<
             model_type,
-            decltype(static_cast<void>(model_type::name), static_cast<void>(model::reference<const model_type>().get_parameter_count()), static_cast<void>(model::reference<model_type>().set_parameters(static_cast<const type*>(nullptr), size_t(0))), static_cast<void>(model::reference<const model_type>().get_parameters(static_cast<type*>(nullptr), size_t(0))), static_cast<void>(model::reference<const model_type>().project(static_cast<const type*>(nullptr), static_cast<type*>(nullptr), static_cast<type*>(nullptr), static_cast<type*>(nullptr))), static_cast<void>(model::reference<const model_type>().unproject(static_cast<const type*>(nullptr), static_cast<type*>(nullptr), static_cast<type*>(nullptr))))
+            decltype(static_cast<void>(model_type::name), static_cast<void>(model::reference<const model_type>().get_parameter_count()), static_cast<void>(model::reference<model_type>().set_parameters(static_cast<const type*>(nullptr), size_t(0))), static_cast<void>(model::reference<const model_type>().get_parameters(static_cast<type*>(nullptr), size_t(0))), static_cast<void>(model::reference<const model_type>().get_pinhole(static_cast<type*>(nullptr), size_t(0))), static_cast<void>(model::reference<const model_type>().project(static_cast<const type*>(nullptr), static_cast<type*>(nullptr), static_cast<type*>(nullptr), static_cast<type*>(nullptr))), static_cast<void>(model::reference<const model_type>().unproject(static_cast<const type*>(nullptr), static_cast<type*>(nullptr), static_cast<type*>(nullptr))))
         > {
             constexpr static const bool value = true;
         };
@@ -81,6 +83,7 @@ namespace sensor::camera {
             size_t (*parameter_count)(const void* storage);
             bool (*set_parameters)(void* storage, const type* const parameters, const size_t parameters_length);
             bool (*get_parameters)(const void* storage, type* const parameters, const size_t parameters_length);
+            bool (*get_pinhole)(const void* storage, type* const pinhole_parameters, const size_t pinhole_parameters_length);
             bool (*project)(const void* storage, const type* const point_xyz, type* const point_xy, type* const jacobian_projection, type* const jacobian_parameters);
             bool (*unproject)(const void* storage, const type* const point_xy, type* const ray_xyz, type* const jacobian_unprojection);
             void (*copy)(const void* from, void* to);
@@ -99,6 +102,9 @@ namespace sensor::camera {
                 },
                 [](const void* object, type* const parameters, const size_t parameters_length) -> bool {
                     return static_cast<const model_type*>(object)->get_parameters(parameters, parameters_length);
+                },
+                [](const void* object, type* const pinhole_parameters, const size_t pinhole_parameters_length) -> bool {
+                    return static_cast<const model_type*>(object)->get_pinhole(pinhole_parameters, pinhole_parameters_length);
                 },
                 [](const void* object, const type* const point_xyz, type* const point_xy, type* const jacobian_projection, type* const jacobian_parameters) -> bool {
                     return static_cast<const model_type*>(object)->project(point_xyz, point_xy, jacobian_projection, jacobian_parameters);
@@ -130,9 +136,10 @@ namespace sensor::camera {
         model(const model_type& camera_model)
             : storage{}
             , functions(model::table_for<model_type>()) {
-            static_assert(model::is_model<model_type>::value, "A camera model provides name, get_parameter_count, set_parameters, get_parameters, project and unproject.");
+            static_assert(model::is_model<model_type>::value, "A camera model provides name, get_parameter_count, set_parameters, get_parameters, get_pinhole, project and unproject.");
             static_assert(sizeof(model_type) <= model::maximum_size, "The camera model must fit the storage of the erased model.");
             static_assert(alignof(model_type) <= model::maximum_alignment, "The camera model must not need more alignment than the erased model provides.");
+            static_assert(model_type::parameter_count <= model::maximum_parameter_count, "The camera model must not have more parameters than the erased model allows.");
             new (static_cast<void*>(this->storage), static_cast<model*>(nullptr)) model_type(camera_model);
         }
 
@@ -195,6 +202,40 @@ namespace sensor::camera {
             return (this->functions != nullptr) && this->functions->get_parameters(this->storage, parameters, parameters_length);
         }
 
+        // The pinhole [fx fy cx cy] that agrees with the model to first order at its principal point: the pixels per unit of
+        // the image plane there, and the pixel the optical axis projects to. It is what the parts of the system that need a
+        // pinhole camera take (resampling to a pinhole, the scale of the pixel noise), and it is exact for the pinhole models.
+        bool get_pinhole(type* const pinhole_parameters, const size_t pinhole_parameters_length) const {
+            return (this->functions != nullptr) && this->functions->get_pinhole(this->storage, pinhole_parameters, pinhole_parameters_length);
+        }
+
+        // Whether both are the same model with the same parameters, two empty models included.
+        bool is_equal(const model& other) const {
+            if (this->functions != other.functions) {
+                return false;
+            }
+            if (this->functions == nullptr) {
+                return true;
+            }
+            const size_t count = this->get_parameter_count();
+            if ((count != other.get_parameter_count()) || (count > model::maximum_parameter_count)) {
+                return false;
+            }
+            type parameters[model::maximum_parameter_count];
+            type other_parameters[model::maximum_parameter_count];
+            if (!this->get_parameters(&parameters[0], count) || !other.get_parameters(&other_parameters[0], count)) {
+                return false;
+            }
+            for (size_t index = 0; index < count; ++index) {
+                if (!(parameters[index] == other_parameters[index])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // The pixel (pixel-centre frame) of a camera-frame point, false outside the model's valid region, with the row major 2x3
+        // jacobian with respect to the point and the 2xN jacobian with respect to the N parameters when they are asked for.
         bool project(
             const type* const point_xyz,
             type* const point_xy,
@@ -204,6 +245,9 @@ namespace sensor::camera {
             return (this->functions != nullptr) && this->functions->project(this->storage, point_xyz, point_xy, jacobian_projection, jacobian_parameters);
         }
 
+        // The ray of a pixel, false outside the model's valid region, with the row major 3x2 jacobian when it is asked for. The
+        // ray is a direction, of no particular length: the pinhole models give it at unit depth (z = 1), the wide angle models
+        // as a unit vector, whose z is zero or negative past ninety degrees from the optical axis.
         bool unproject(
             const type* const point_xy,
             type* const ray_xyz,

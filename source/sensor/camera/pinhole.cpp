@@ -66,6 +66,18 @@ namespace sensor::camera {
     }
 
     template <typename type>
+    bool pinhole<type>::get_pinhole(type* const pinhole_parameters, const size_t pinhole_parameters_length) const {
+        if ((pinhole_parameters == nullptr) || (pinhole_parameters_length != 4)) {
+            return false;
+        }
+        pinhole_parameters[0] = this->focal_lengths[0];
+        pinhole_parameters[1] = this->focal_lengths[1];
+        pinhole_parameters[2] = this->centre_points[0];
+        pinhole_parameters[3] = this->centre_points[1];
+        return true;
+    }
+
+    template <typename type>
     bool pinhole<type>::project(
         const type* const point_xyz,
         type* const point_xy,

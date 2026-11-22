@@ -18,81 +18,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "core/assert.hpp"
 #include "math/math.hpp"
+#include "math/polynomial.hpp"
 
 namespace {
-    double evaluate_polynomial(const double* const coefficients, const size_t degree, const double value) {
-        double result = coefficients[degree];
-        for (size_t index = degree; index > 0; --index) {
-            result = (result * value) + coefficients[index - 1];
-        }
-        return result;
-    }
-
-    // The roots above lower and up to upper where the polynomial changes sign or reaches zero, in increasing order.
-    // The roots of the derivative split the range into monotonic pieces, each holds at most one root, found by bisection.
-    size_t polynomial_roots(const double* const coefficients, size_t degree, const double lower, const double upper, double* const roots) {
-        while ((degree > 0) && (coefficients[degree] == 0.0)) {
-            --degree;
-        }
-        if (degree == 0) {
-            return 0;
-        }
-        double bounds[8];
-        size_t bounds_count = 0;
-        bounds[bounds_count++] = lower;
-        if (degree > 1) {
-            double derivative[6];
-            for (size_t index = 1; index <= degree; ++index) {
-                derivative[index - 1] = static_cast<double>(index) * coefficients[index];
-            }
-            double critical[6];
-            const size_t critical_count = polynomial_roots(&derivative[0], degree - 1, lower, upper, &critical[0]);
-            for (size_t index = 0; index < critical_count; ++index) {
-                if (critical[index] < upper) {
-                    bounds[bounds_count++] = critical[index];
-                }
-            }
-        }
-        bounds[bounds_count++] = upper;
-        size_t count = 0;
-        for (size_t index = 1; index < bounds_count; ++index) {
-            double below = bounds[index - 1];
-            double above = bounds[index];
-            const double value_below = evaluate_polynomial(coefficients, degree, below);
-            const double value_above = evaluate_polynomial(coefficients, degree, above);
-            if (value_above == 0.0) {
-                roots[count++] = above;
-                continue;
-            }
-            if ((value_below == 0.0) || ((value_below < 0.0) == (value_above < 0.0))) {
-                continue;
-            }
-            const bool rising = (value_above > 0.0);
-            for (size_t iteration = 0; iteration < 256; ++iteration) {
-                const double middle = 0.5 * (below + above);
-                if (!(middle > below) || !(middle < above)) {
-                    break;
-                }
-                if ((evaluate_polynomial(coefficients, degree, middle) > 0.0) == rising) {
-                    above = middle;
-                }
-                else {
-                    below = middle;
-                }
-            }
-            roots[count++] = above;
-        }
-        return count;
-    }
-
-    // The first u past zero where the polynomial, one at zero, stops being positive, infinite when it never does.
-    double first_non_positive(const double* const coefficients, const size_t degree) {
-        // A radius of a million is within a microradian of ninety degrees, so any fold further out is never seen.
-        const double search_limit = 1.0e12;
-        double roots[6];
-        const size_t count = polynomial_roots(coefficients, degree, 0.0, search_limit, &roots[0]);
-        return (count > 0) ? roots[0] : math::inf<double>();
-    }
+    // A radius of a million is within a microradian of ninety degrees, so any fold further out is never seen.
+    constexpr static const double fold_search_limit = 1.0e12;
 
     // The squared radius u = r * r where the radial distortion r * N(u) / D(u) first stops increasing, infinite when it never does.
     // Its derivative has the sign of N * D + 2 * u * (N' * D - N * D'), and it also ends at a pole, where D reaches zero.
@@ -105,7 +35,7 @@ namespace {
                 derivative[i + j] += (1.0 + (2.0 * static_cast<double>(i)) - (2.0 * static_cast<double>(j))) * numerator[i] * denominator[j];
             }
         }
-        return math::min(first_non_positive(&derivative[0], 6), first_non_positive(&denominator[0], 3));
+        return math::min(math::polynomial::first_non_positive(&derivative[0], 6, fold_search_limit), math::polynomial::first_non_positive(&denominator[0], 3, fold_search_limit));
     }
 }
 
@@ -181,6 +111,18 @@ namespace sensor::camera {
         parameters[9] = this->radial_k[3];
         parameters[10] = this->radial_k[4];
         parameters[11] = this->radial_k[5];
+        return true;
+    }
+
+    template <typename type>
+    bool pinhole_radial_tangential<type>::get_pinhole(type* const pinhole_parameters, const size_t pinhole_parameters_length) const {
+        if ((pinhole_parameters == nullptr) || (pinhole_parameters_length != 4)) {
+            return false;
+        }
+        pinhole_parameters[0] = this->focal_lengths[0];
+        pinhole_parameters[1] = this->focal_lengths[1];
+        pinhole_parameters[2] = this->centre_points[0];
+        pinhole_parameters[3] = this->centre_points[1];
         return true;
     }
 
