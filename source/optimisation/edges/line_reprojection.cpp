@@ -19,15 +19,16 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "geometry/plucker.hpp"
 #include "math/lie.hpp"
 #include "math/math.hpp"
+#include "sensor/camera.hpp"
 
 namespace optimisation::edges {
     line_reprojection::line_reprojection(const sensor::camera::model<double>& camera_model)
         : camera(camera_model) {
-        double parameters[32] = {};
-        const size_t count = math::min<size_t>(this->camera.get_parameter_count(), 32);
-        if ((count >= 2) && this->camera.get_parameters(parameters, count)) {
-            this->focal_x = parameters[0];
-            this->focal_y = parameters[1];
+        // Residuals are distances on the image plane scaled to pixels by the focal lengths of the camera's pinhole.
+        double pinhole[4] = {};
+        if (this->camera.get_pinhole(&pinhole[0], 4)) {
+            this->focal_x = pinhole[0];
+            this->focal_y = pinhole[1];
         }
     }
 
@@ -35,7 +36,7 @@ namespace optimisation::edges {
         const double pixels[2][2] = { { x1, y1 }, { x2, y2 } };
         for (int i = 0; i < 2; ++i) {
             double ray[3];
-            if (!this->camera.unproject(&pixels[i][0], &ray[0]) || !(ray[2] > 1.0e-12)) {
+            if (!this->camera.unproject(&pixels[i][0], &ray[0]) || !sensor::camera::on_image_plane(&ray[0])) {
                 this->measured_valid = false;
                 return false;
             }

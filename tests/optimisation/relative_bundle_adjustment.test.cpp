@@ -126,8 +126,8 @@ namespace {
     // Six frames on an arc around a cloud of points, chained by rigid transforms 0-4 and closed by the similarity 5.
     scene make_scene() {
         scene result;
-        const double parameters[sensor::model::parameter_count] = { 450.0, 455.0, 320.0, 240.0, -0.05, 0.01, 0.001, -0.0005, 0.0, 0.0, 0.0, 0.0 };
-        result.problem.cameras.push_back(sensor::model(&parameters[0], sensor::model::parameter_count));
+        const double parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = { 450.0, 455.0, 320.0, 240.0, -0.05, 0.01, 0.001, -0.0005, 0.0, 0.0, 0.0, 0.0 };
+        result.problem.cameras.push_back(sensor::model(sensor::camera::pinhole_radial_tangential<double>(&parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count)));
         const int frames = 6;
         for (int index = 0; index < frames; ++index) {
             const double angle = -0.6 + (0.24 * static_cast<double>(index));

@@ -46,8 +46,8 @@ static inline bool is_value_approx(double lhs, double rhs, double epsilon = 1e-8
 }
 
 static const sensor::model& test_camera() {
-    static const double parameters[sensor::model::parameter_count] = { 525.0, 525.0, 320.0, 240.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
-    static const sensor::model camera(&parameters[0], sensor::model::parameter_count);
+    static const double parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = { 525.0, 525.0, 320.0, 240.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    static const sensor::model camera(sensor::camera::pinhole_radial_tangential<double>(&parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
     return camera;
 }
 

@@ -210,10 +210,10 @@ int main(int argc, char* argv[]) {
 
     // A line's error is the mean pixel distance of the observed endpoints from its projection, also when fx differs from fy.
     {
-        const double parameters[sensor::model::parameter_count] = { 400.0, 600.0, 320.0, 240.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        const double parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = { 400.0, 600.0, 320.0, 240.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
         mapping::frame f;
         f.id = 7;
-        f.camera = sensor::model(&parameters[0], sensor::model::parameter_count);
+        f.camera = sensor::model(sensor::camera::pinhole_radial_tangential<double>(&parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
         f.rotation = math::matrix<double, 3, 3>::identity();
         f.translation = math::matrix<double, 3, 1>::zero();
         const math::matrix<double, 3, 1> a = { { -1.0, 0.5, 5.0 } };
@@ -244,8 +244,8 @@ int main(int argc, char* argv[]) {
         // sixty one has been left somewhere absurd, in front of every camera and 89 degrees off their axes, where the distorted
         // camera puts it some 1e19 pixels from each of its observations. With that in the solve the first pass is spent on it
         // and the adjustment is undone or takes good observations with it, so the rest of the map is never adjusted.
-        const double parameters[sensor::model::parameter_count] = { 517.3, 516.5, 318.6, 255.3, 0.2624, -0.9531, -0.0054, 0.0026, 1.1633, 0.0, 0.0, 0.0 };
-        const sensor::model camera(&parameters[0], sensor::model::parameter_count);
+        const double parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = { 517.3, 516.5, 318.6, 255.3, 0.2624, -0.9531, -0.0054, 0.0026, 1.1633, 0.0, 0.0, 0.0 };
+        const sensor::model camera(sensor::camera::pinhole_radial_tangential<double>(&parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
         constexpr static const int frame_count = 6;
         constexpr static const int landmark_count = 60;
         constexpr static const int absurd_id = landmark_count;
@@ -316,10 +316,10 @@ int main(int argc, char* argv[]) {
         // Each frame is adjusted with its own camera, as each is given one when it is processed. The adjustment took the camera
         // of whichever frame came first in its table for every observation, so with two cameras in a map the observations of
         // one of them were some eighty pixels from where its landmarks project.
-        const double narrow_parameters[sensor::model::parameter_count] = { 517.3, 516.5, 318.6, 255.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
-        const double wide_parameters[sensor::model::parameter_count] = { 380.0, 381.0, 322.0, 238.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
-        const sensor::model narrow(&narrow_parameters[0], sensor::model::parameter_count);
-        const sensor::model wide(&wide_parameters[0], sensor::model::parameter_count);
+        const double narrow_parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = { 517.3, 516.5, 318.6, 255.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        const double wide_parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = { 380.0, 381.0, 322.0, 238.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        const sensor::model narrow(sensor::camera::pinhole_radial_tangential<double>(&narrow_parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
+        const sensor::model wide(sensor::camera::pinhole_radial_tangential<double>(&wide_parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
         constexpr static const int frame_count = 6;
         constexpr static const int landmark_count = 60;
         mapping::map m;

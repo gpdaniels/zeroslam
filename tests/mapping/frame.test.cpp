@@ -43,7 +43,7 @@ int main(int argc, char* argv[]) {
     }
     {
         const math::matrix<double, 3, 3> intrinsics = { { { 1.0, 0.0, 0.5 }, { 0.0, 1.0, 0.5 }, { 0.0, 0.0, 1.0 } } };
-        sensor::model camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12);
+        sensor::model camera(sensor::camera::pinhole_radial_tangential<double>(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12));
         image::image image(256, 256);
         for (size_t i = 0; i < image.get_rows(); ++i) {
             for (size_t j = 0; j < image.get_cols(); ++j) {
@@ -95,7 +95,7 @@ int main(int argc, char* argv[]) {
     // must still cover the bottom of the image rather than stop where a buffer filled.
     {
         const math::matrix<double, 3, 3> intrinsics = { { { 320.0, 0.0, 320.0 }, { 0.0, 320.0, 240.0 }, { 0.0, 0.0, 1.0 } } };
-        sensor::model camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12);
+        sensor::model camera(sensor::camera::pinhole_radial_tangential<double>(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12));
         image::image noise(480, 640);
         unsigned int state = 77u;
         for (size_t i = 0; i < noise.get_rows() * noise.get_cols(); ++i) {
@@ -116,7 +116,7 @@ int main(int argc, char* argv[]) {
 
     {
         const math::matrix<double, 3, 3> intrinsics = { { { 1.0, 0.0, 0.5 }, { 0.0, 1.0, 0.5 }, { 0.0, 0.0, 1.0 } } };
-        sensor::model camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12);
+        sensor::model camera(sensor::camera::pinhole_radial_tangential<double>(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12));
 
         image::image tiny(16, 16);
         for (size_t i = 0; i < tiny.get_rows(); ++i) {
@@ -143,7 +143,7 @@ int main(int argc, char* argv[]) {
 
     {
         const math::matrix<double, 3, 3> intrinsics = { { { 320.0, 0.0, 320.0 }, { 0.0, 320.0, 240.0 }, { 0.0, 0.0, 1.0 } } };
-        sensor::model camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12);
+        sensor::model camera(sensor::camera::pinhole_radial_tangential<double>(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12));
         image::image textured(480, 640);
         unsigned int state = 12345u;
         for (size_t i = 0; i < textured.get_rows(); ++i) {
@@ -174,7 +174,7 @@ int main(int argc, char* argv[]) {
 
     {
         const math::matrix<double, 3, 3> intrinsics = { { { 320.0, 0.0, 320.0 }, { 0.0, 320.0, 240.0 }, { 0.0, 0.0, 1.0 } } };
-        sensor::model camera(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12);
+        sensor::model camera(sensor::camera::pinhole_radial_tangential<double>(std::vector<double>{ intrinsics[0][0], intrinsics[1][1], intrinsics[0][2], intrinsics[1][2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }.data(), 12));
 
         image::image textured(480, 640);
         unsigned int state = 12345u;

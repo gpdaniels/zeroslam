@@ -124,7 +124,8 @@ static inline const char* zeroslam_sensor_enum_to_string(zeroslam_sensor_enum se
     return "unknown";
 }
 
-// Intrinsics in pixels with the centre of pixel i at i + 0.5, distortion is [k1 k2 p1 p2 k3 k4 k5 k6].
+// Intrinsics in pixels with the centre of pixel i at i + 0.5, distortion is [k1 k2 p1 p2 k3 k4 k5 k6] (the radial
+// tangential camera model; zeroslam_sensor_parameters_camera_model_struct takes any model).
 typedef struct zeroslam_sensor_parameters_camera_struct {
     int width;
     int height;
@@ -135,6 +136,86 @@ typedef struct zeroslam_sensor_parameters_camera_struct {
     double distortion[8];
 } zeroslam_sensor_parameters_camera_struct;
 ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_parameters_camera_struct) == 104, "For ABI compatibility the sizeof(zeroslam_sensor_parameters_camera_struct) must be 104 bytes.")
+
+// The camera models, and the parameters each takes. Every model starts with the focal lengths and the principal point
+// [fx fy cx cy], in pixels with the centre of pixel i at i + 0.5, see README.md "Camera models".
+typedef enum zeroslam_camera_model_enum {
+    zeroslam_camera_model_pinhole = 0,           // [fx fy cx cy]
+    zeroslam_camera_model_radial_tangential = 1, // [fx fy cx cy k1 k2 p1 p2 k3 k4 k5 k6], OpenCV's rational model.
+    zeroslam_camera_model_opencv = 2,            // [fx fy cx cy k1 k2 p1 p2 k3 k4 k5 k6 s1 s2 s3 s4 tau_x tau_y], with thin prism and tilt.
+    zeroslam_camera_model_kannala_brandt = 3,    // [fx fy cx cy k1 k2 k3 k4], OpenCV's fisheye.
+    zeroslam_camera_model_field_of_view = 4,     // [fx fy cx cy w], PTAM's arctangent model.
+    zeroslam_camera_model_unified = 5,           // [fx fy cx cy xi]
+    zeroslam_camera_model_extended_unified = 6,  // [fx fy cx cy alpha beta]
+    zeroslam_camera_model_double_sphere = 7,     // [fx fy cx cy xi alpha]
+    zeroslam_camera_model_fisheye_624 = 8,       // [fx fy cx cy k0 k1 k2 k3 k4 k5 p0 p1 s0 s1 s2 s3], Project Aria's.
+    zeroslam_camera_model_invalid = -1
+} zeroslam_camera_model_enum;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_camera_model_enum) == 4, "For ABI compatibility the sizeof(zeroslam_camera_model_enum) must be 4 bytes.")
+
+static inline const char* zeroslam_camera_model_enum_to_string(zeroslam_camera_model_enum camera_model_enum) {
+    switch (camera_model_enum) {
+        case zeroslam_camera_model_pinhole:
+            return "pinhole";
+        case zeroslam_camera_model_radial_tangential:
+            return "radial tangential";
+        case zeroslam_camera_model_opencv:
+            return "opencv";
+        case zeroslam_camera_model_kannala_brandt:
+            return "kannala brandt";
+        case zeroslam_camera_model_field_of_view:
+            return "field of view";
+        case zeroslam_camera_model_unified:
+            return "unified";
+        case zeroslam_camera_model_extended_unified:
+            return "extended unified";
+        case zeroslam_camera_model_double_sphere:
+            return "double sphere";
+        case zeroslam_camera_model_fisheye_624:
+            return "fisheye 624";
+        case zeroslam_camera_model_invalid:
+            return "invalid";
+    }
+    return "unknown";
+}
+
+// How many parameters a camera model takes, zero for one that is not a model.
+static inline int zeroslam_camera_model_parameter_count(zeroslam_camera_model_enum camera_model_enum) {
+    switch (camera_model_enum) {
+        case zeroslam_camera_model_pinhole:
+            return 4;
+        case zeroslam_camera_model_radial_tangential:
+            return 12;
+        case zeroslam_camera_model_opencv:
+            return 18;
+        case zeroslam_camera_model_kannala_brandt:
+            return 8;
+        case zeroslam_camera_model_field_of_view:
+            return 5;
+        case zeroslam_camera_model_unified:
+            return 5;
+        case zeroslam_camera_model_extended_unified:
+            return 6;
+        case zeroslam_camera_model_double_sphere:
+            return 6;
+        case zeroslam_camera_model_fisheye_624:
+            return 16;
+        case zeroslam_camera_model_invalid:
+            return 0;
+    }
+    return 0;
+}
+
+// A camera of any model, taken in place of zeroslam_sensor_parameters_camera_struct when a rig entry's parameters_length
+// is this struct's size: the image size, the model, and parameters_length of its parameters (the rest unused).
+typedef struct zeroslam_sensor_parameters_camera_model_struct {
+    int width;
+    int height;
+    zeroslam_camera_model_enum model;
+    int parameters_length;
+    double parameters[32];
+} zeroslam_sensor_parameters_camera_model_struct;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_parameters_camera_model_struct) == 272, "For ABI compatibility the sizeof(zeroslam_sensor_parameters_camera_model_struct) must be 272 bytes.")
 
 typedef struct zeroslam_sensor_rig_struct {
     zeroslam_sensor_enum type;

@@ -53,7 +53,9 @@ struct zeroslam_system final {
 
     struct camera_entry final {
         int sensor_id;
-        zeroslam_sensor_parameters_camera_struct parameters;
+        int width;
+        int height;
+        sensor::model intrinsics;
     };
 
     std::vector<camera_entry> cameras;
@@ -67,6 +69,94 @@ struct zeroslam_system final {
     long long int latest_timestamp = 0;
     bool any_data = false;
 };
+
+namespace {
+    // The camera of the fixed struct: the radial tangential model of its intrinsics and distortion.
+    bool make_camera(const zeroslam_sensor_parameters_camera_struct& input, zeroslam_system::camera_entry& camera) {
+        zeroslam_sensor_parameters_camera_struct parameters;
+        std::memcpy(&parameters, &input, sizeof(parameters));
+        if ((parameters.width <= 0) || (parameters.height <= 0) || !(parameters.focal_x > 0.0) || !(parameters.focal_y > 0.0)) {
+            return false;
+        }
+        bool finite = math::isfinite(parameters.focal_x) && math::isfinite(parameters.focal_y) && math::isfinite(parameters.centre_x) && math::isfinite(parameters.centre_y);
+        for (const double coefficient : parameters.distortion) {
+            finite = finite && math::isfinite(coefficient);
+        }
+        if (!finite) {
+            return false;
+        }
+        const double camera_parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = {
+            parameters.focal_x,
+            parameters.focal_y,
+            parameters.centre_x,
+            parameters.centre_y,
+            parameters.distortion[0],
+            parameters.distortion[1],
+            parameters.distortion[2],
+            parameters.distortion[3],
+            parameters.distortion[4],
+            parameters.distortion[5],
+            parameters.distortion[6],
+            parameters.distortion[7]
+        };
+        camera.width = parameters.width;
+        camera.height = parameters.height;
+        return sensor::camera::make_model(sensor::camera::pinhole_radial_tangential<double>::name, &camera_parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count, camera.intrinsics);
+    }
+
+    // The camera of a model and its parameters, each model checking its own.
+    bool make_camera(const zeroslam_sensor_parameters_camera_model_struct& input, zeroslam_system::camera_entry& camera) {
+        zeroslam_sensor_parameters_camera_model_struct parameters;
+        std::memcpy(&parameters, &input, sizeof(parameters));
+        if ((parameters.width <= 0) || (parameters.height <= 0)) {
+            return false;
+        }
+        const char* name = nullptr;
+        switch (parameters.model) {
+            case zeroslam_camera_model_pinhole:
+                name = sensor::camera::pinhole<double>::name;
+                break;
+            case zeroslam_camera_model_radial_tangential:
+                name = sensor::camera::pinhole_radial_tangential<double>::name;
+                break;
+            case zeroslam_camera_model_opencv:
+                name = sensor::camera::pinhole_opencv<double>::name;
+                break;
+            case zeroslam_camera_model_kannala_brandt:
+                name = sensor::camera::kannala_brandt<double>::name;
+                break;
+            case zeroslam_camera_model_field_of_view:
+                name = sensor::camera::field_of_view<double>::name;
+                break;
+            case zeroslam_camera_model_unified:
+                name = sensor::camera::unified<double>::name;
+                break;
+            case zeroslam_camera_model_extended_unified:
+                name = sensor::camera::extended_unified<double>::name;
+                break;
+            case zeroslam_camera_model_double_sphere:
+                name = sensor::camera::double_sphere<double>::name;
+                break;
+            case zeroslam_camera_model_fisheye_624:
+                name = sensor::camera::fisheye_624<double>::name;
+                break;
+            case zeroslam_camera_model_invalid:
+                break;
+        }
+        const int count = zeroslam_camera_model_parameter_count(parameters.model);
+        if ((name == nullptr) || (count <= 0) || (parameters.parameters_length != count)) {
+            return false;
+        }
+        for (int index = 0; index < count; ++index) {
+            if (!math::isfinite(parameters.parameters[index])) {
+                return false;
+            }
+        }
+        camera.width = parameters.width;
+        camera.height = parameters.height;
+        return sensor::camera::make_model(name, &parameters.parameters[0], static_cast<size_t>(count), camera.intrinsics);
+    }
+}
 
 extern "C" {
 
@@ -853,19 +943,22 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_rig(zeroslam_system* 
         if (entry.type != zeroslam_sensor_camera) {
             return zeroslam_return_failure_invalid_rig_sensor;
         }
-        if ((entry.parameters_length != static_cast<int>(sizeof(zeroslam_sensor_parameters_camera_struct))) || (entry.parameters_data == nullptr)) {
+        if (entry.parameters_data == nullptr) {
             return zeroslam_return_failure_invalid_rig_sensor;
         }
-        zeroslam_sensor_parameters_camera_struct parameters;
-        std::memcpy(&parameters, entry.parameters_data, sizeof(parameters));
-        if ((parameters.width <= 0) || (parameters.height <= 0) || !(parameters.focal_x > 0.0) || !(parameters.focal_y > 0.0)) {
-            return zeroslam_return_failure_invalid_rig_sensor;
+        zeroslam_system::camera_entry camera;
+        camera.sensor_id = entry.sensor_id;
+        if (entry.parameters_length == static_cast<int>(sizeof(zeroslam_sensor_parameters_camera_struct))) {
+            if (!make_camera(*static_cast<const zeroslam_sensor_parameters_camera_struct*>(entry.parameters_data), camera)) {
+                return zeroslam_return_failure_invalid_rig_sensor;
+            }
         }
-        bool finite = math::isfinite(parameters.focal_x) && math::isfinite(parameters.focal_y) && math::isfinite(parameters.centre_x) && math::isfinite(parameters.centre_y);
-        for (const double coefficient : parameters.distortion) {
-            finite = finite && math::isfinite(coefficient);
+        else if (entry.parameters_length == static_cast<int>(sizeof(zeroslam_sensor_parameters_camera_model_struct))) {
+            if (!make_camera(*static_cast<const zeroslam_sensor_parameters_camera_model_struct*>(entry.parameters_data), camera)) {
+                return zeroslam_return_failure_invalid_rig_sensor;
+            }
         }
-        if (!finite) {
+        else {
             return zeroslam_return_failure_invalid_rig_sensor;
         }
         for (const zeroslam_system::camera_entry& existing : cameras) {
@@ -873,7 +966,7 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_rig(zeroslam_system* 
                 return zeroslam_return_failure_invalid_rig_sensor;
             }
         }
-        cameras.push_back({ entry.sensor_id, parameters });
+        cameras.push_back(camera);
     }
     if (cameras.size() != 1) {
         return zeroslam_return_failure_invalid_rig_sensor;
@@ -909,7 +1002,7 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
         if (camera == nullptr) {
             return zeroslam_return_failure_invalid_sensor_data;
         }
-        const size_t expected_length = static_cast<size_t>(camera->parameters.width) * static_cast<size_t>(camera->parameters.height);
+        const size_t expected_length = static_cast<size_t>(camera->width) * static_cast<size_t>(camera->height);
         if ((entry.measurement_data == nullptr) || (static_cast<size_t>(entry.measurement_length) != expected_length)) {
             return zeroslam_return_failure_invalid_sensor_data;
         }
@@ -918,23 +1011,8 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
     for (int i = 0; i < length; ++i) {
         const zeroslam_sensor_data_struct& entry = data[i];
         const zeroslam_system::camera_entry* const camera = cameras[static_cast<size_t>(i)];
-        const image::image frame_image(static_cast<size_t>(camera->parameters.height), static_cast<size_t>(camera->parameters.width), static_cast<unsigned char*>(entry.measurement_data));
-        const double camera_parameters[sensor::model::parameter_count] = {
-            camera->parameters.focal_x,
-            camera->parameters.focal_y,
-            camera->parameters.centre_x,
-            camera->parameters.centre_y,
-            camera->parameters.distortion[0],
-            camera->parameters.distortion[1],
-            camera->parameters.distortion[2],
-            camera->parameters.distortion[3],
-            camera->parameters.distortion[4],
-            camera->parameters.distortion[5],
-            camera->parameters.distortion[6],
-            camera->parameters.distortion[7]
-        };
-        const sensor::model intrinsics(&camera_parameters[0], sensor::model::parameter_count);
-        system->slam_instance.process_frame(intrinsics, frame_image);
+        const image::image frame_image(static_cast<size_t>(camera->height), static_cast<size_t>(camera->width), static_cast<unsigned char*>(entry.measurement_data));
+        system->slam_instance.process_frame(camera->intrinsics, frame_image);
         system->frames.push_back({ entry.timestamp, system->slam_instance.reconstruction.next_frame_id - 1 });
         system->latest_timestamp = entry.timestamp;
         system->any_data = true;

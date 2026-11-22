@@ -186,24 +186,15 @@ private:
     // straight edge stays straight. Line tracks hold those rectified pixels, which convert to the frame's own pixels
     // wherever a line is measured through the camera model (the map's line observations and the pose's line edges).
     image::remap line_rectification_;
-    double line_rectification_parameters_[sensor::model::parameter_count] = {};
+    sensor::model line_rectification_camera_;
     size_t line_rectification_columns_ = 0;
     size_t line_rectification_rows_ = 0;
     int line_previous_frame_id_ = -1;
     std::vector<int> local_line_ids_;
 
-    // The focal lengths and principal point; the model only hands its parameters out all at once.
+    // The focal lengths and principal point of the pinhole the camera model agrees with at its centre.
     static void pinhole_intrinsics(const mapping::frame& frame, double (&intrinsics)[4]) {
-        double parameters[sensor::model::parameter_count] = { 1.0, 1.0, 0.0, 0.0 };
-        if (!frame.camera.get_parameters(&parameters[0], sensor::model::parameter_count)) {
-            parameters[0] = 1.0;
-            parameters[1] = 1.0;
-            parameters[2] = 0.0;
-            parameters[3] = 0.0;
-        }
-        for (size_t i = 0; i < 4; ++i) {
-            intrinsics[i] = parameters[i];
-        }
+        sensor::camera::pinhole_of(frame.camera, intrinsics);
     }
 
     static math::matrix<double, 3, 1> rectified_ray(const mapping::frame& frame, const double x, const double y) {
@@ -220,7 +211,7 @@ private:
     static bool pixel_to_rectified(const mapping::frame& frame, const double x, const double y, double (&rectified)[2]) {
         const double pixel[2] = { x, y };
         double ray[3] = { 0.0, 0.0, 0.0 };
-        if (!frame.camera.unproject(&pixel[0], &ray[0]) || !(ray[2] > 1.0e-12)) {
+        if (!frame.camera.unproject(&pixel[0], &ray[0]) || !sensor::camera::on_image_plane(&ray[0])) {
             return false;
         }
         double intrinsics[4];
@@ -244,14 +235,9 @@ private:
     }
 
     void prepare_line_rectification(const mapping::frame& frame) {
-        double parameters[sensor::model::parameter_count] = {};
-        frame.camera.get_parameters(&parameters[0], sensor::model::parameter_count);
         const size_t columns = frame.image_pyramid[0].get_cols();
         const size_t rows = frame.image_pyramid[0].get_rows();
-        bool same = !this->line_rectification_.empty() && (columns == this->line_rectification_columns_) && (rows == this->line_rectification_rows_);
-        for (size_t i = 0; i < sensor::model::parameter_count; ++i) {
-            same = same && (parameters[i] == this->line_rectification_parameters_[i]);
-        }
+        const bool same = !this->line_rectification_.empty() && (columns == this->line_rectification_columns_) && (rows == this->line_rectification_rows_) && frame.camera.is_equal(this->line_rectification_camera_);
         if (same) {
             return;
         }
@@ -272,9 +258,7 @@ private:
             }
         }
         this->line_rectification_ = image::remap(columns, rows, source_x.data(), source_y.data(), columns, rows);
-        for (size_t i = 0; i < sensor::model::parameter_count; ++i) {
-            this->line_rectification_parameters_[i] = parameters[i];
-        }
+        this->line_rectification_camera_ = frame.camera;
         this->line_rectification_columns_ = columns;
         this->line_rectification_rows_ = rows;
     }
@@ -1016,7 +1000,9 @@ private:
         const double image_rows = static_cast<double>(frame.image_pyramid[0].get_rows());
         const math::matrix<double, 3, 1> seen = (frame.rotation * location) + frame.translation;
         if (seen[2] <= 1.0e-6) {
-            return false;
+            // Off the image plane only a wide angle camera sees it, through its own model; a pinhole one projects nothing there.
+            double pixel[2];
+            return frame.camera.project(seen.data(), &pixel[0]) && (pixel[0] >= -0.5 * image_columns) && (pixel[0] <= 1.5 * image_columns) && (pixel[1] >= -0.5 * image_rows) && (pixel[1] <= 1.5 * image_rows);
         }
         const double pinhole_x = (intrinsics[0] * seen[0] / seen[2]) + intrinsics[2];
         const double pinhole_y = (intrinsics[1] * seen[1] / seen[2]) + intrinsics[3];
@@ -1204,7 +1190,7 @@ private:
             }
             const math::matrix<double, 3, 1> mapped = (rotation * match.location) + translation;
             double projected[2];
-            if ((mapped[2] <= 0.0) || !frame_current.camera.project(mapped.data(), &projected[0])) {
+            if (!frame_current.camera.project(mapped.data(), &projected[0])) {
                 continue;
             }
             const double dx = projected[0] - match.pixel[0];
@@ -1230,7 +1216,7 @@ private:
                 bool agrees = true;
                 for (int end = 0; end < 2; ++end) {
                     double ray[3] = { 0.0, 0.0, 0.0 };
-                    if (!frame_current.camera.unproject(&match.pixel[end][0], &ray[0], nullptr) || (ray[2] <= 0.0)) {
+                    if (!frame_current.camera.unproject(&match.pixel[end][0], &ray[0], nullptr) || !sensor::camera::on_image_plane(&ray[0])) {
                         agrees = false;
                         break;
                     }
@@ -1368,7 +1354,7 @@ private:
             if (!frame_current.camera.unproject(&pixel_before[0], ray_before.data()) || !frame_current.camera.unproject(&pixel_after[0], ray_after.data())) {
                 continue;
             }
-            if (!(ray_before[2] > 0.0) || !(ray_after[2] > 0.0)) {
+            if (!sensor::camera::on_image_plane(ray_before.data()) || !sensor::camera::on_image_plane(ray_after.data())) {
                 continue;
             }
             before.push_back(ray_before * (1.0 / math::sqrt(ray_before.get_length_squared())));
@@ -1604,7 +1590,7 @@ private:
                 }
                 const double lhs_point[2] = { static_cast<double>(t->x), static_cast<double>(t->y) };
                 double lhs_ray[3];
-                if (!frame_current.camera.unproject(&lhs_point[0], &lhs_ray[0]) || !(lhs_ray[2] > 0.0)) {
+                if (!frame_current.camera.unproject(&lhs_point[0], &lhs_ray[0]) || !sensor::camera::on_image_plane(&lhs_ray[0])) {
                     continue;
                 }
                 estimation::correspondence_2d_3d<double> corr;
@@ -1738,7 +1724,7 @@ private:
                 const feature::point& keypoint = frame_current.keypoints[best.lhs_index];
                 const double pixel[2] = { static_cast<double>(keypoint.x), static_cast<double>(keypoint.y) };
                 double ray[3];
-                if (!frame_current.camera.unproject(&pixel[0], &ray[0]) || !(ray[2] > 1.0e-12)) {
+                if (!frame_current.camera.unproject(&pixel[0], &ray[0]) || !sensor::camera::on_image_plane(&ray[0])) {
                     continue;
                 }
                 estimation::correspondence_2d_3d<double> correspondence;
@@ -2198,7 +2184,7 @@ private:
         for (const pose_correspondence& match : correspondences) {
             const math::matrix<double, 3, 1> mapped = (frame.rotation * match.location) + frame.translation;
             double projected[2];
-            if ((mapped[2] <= 0.0) || !frame.camera.project(mapped.data(), &projected[0])) {
+            if (!frame.camera.project(mapped.data(), &projected[0])) {
                 continue;
             }
             const double dx = projected[0] - match.pixel[0];
@@ -2349,7 +2335,7 @@ private:
     bool voxel_map_valid_ = false;
     int voxel_keyframe_id_ = -1;
     std::vector<math::matrix<double, 3, 1>> voxel_rays_;
-    double voxel_ray_parameters_[sensor::model::parameter_count] = {};
+    sensor::model voxel_ray_camera_;
     size_t voxel_ray_columns_ = 0;
     size_t voxel_ray_rows_ = 0;
     static constexpr double voxel_depth_fraction = 0.25;
@@ -2382,14 +2368,9 @@ private:
     }
 
     void prepare_voxel_rays(const mapping::frame& frame) {
-        double parameters[sensor::model::parameter_count] = {};
-        frame.camera.get_parameters(&parameters[0], sensor::model::parameter_count);
         const size_t columns = frame.image_pyramid[0].get_cols();
         const size_t rows = frame.image_pyramid[0].get_rows();
-        bool same = !this->voxel_rays_.empty() && (columns == this->voxel_ray_columns_) && (rows == this->voxel_ray_rows_);
-        for (size_t i = 0; i < sensor::model::parameter_count; ++i) {
-            same = same && (parameters[i] == this->voxel_ray_parameters_[i]);
-        }
+        const bool same = !this->voxel_rays_.empty() && (columns == this->voxel_ray_columns_) && (rows == this->voxel_ray_rows_) && frame.camera.is_equal(this->voxel_ray_camera_);
         if (same) {
             return;
         }
@@ -2398,16 +2379,17 @@ private:
             for (size_t u = static_cast<size_t>(slam::voxel_ray_spacing / 2); u < columns; u += static_cast<size_t>(slam::voxel_ray_spacing)) {
                 const double pixel[2] = { static_cast<double>(core::to_pixel_centre(static_cast<float>(u))), static_cast<double>(core::to_pixel_centre(static_cast<float>(v))) };
                 double ray[3] = { 0.0, 0.0, 0.0 };
-                if (!frame.camera.unproject(&pixel[0], &ray[0]) || !(ray[2] > 0.0)) {
+                if (!frame.camera.unproject(&pixel[0], &ray[0])) {
                     continue;
                 }
                 const double length = math::sqrt((ray[0] * ray[0]) + (ray[1] * ray[1]) + (ray[2] * ray[2]));
+                if (!(length > 0.0) || !math::isfinite(length)) {
+                    continue;
+                }
                 this->voxel_rays_.push_back(math::matrix<double, 3, 1>({ ray[0] / length, ray[1] / length, ray[2] / length }));
             }
         }
-        for (size_t i = 0; i < sensor::model::parameter_count; ++i) {
-            this->voxel_ray_parameters_[i] = parameters[i];
-        }
+        this->voxel_ray_camera_ = frame.camera;
         this->voxel_ray_columns_ = columns;
         this->voxel_ray_rows_ = rows;
     }
@@ -3105,8 +3087,9 @@ private:
             t->landmark_id = landmark_record.id;
         };
         size_t reacquired_epipolar_now = 0;
-        double camera_parameters[sensor::model::parameter_count];
-        frame_current.camera.get_parameters(&camera_parameters[0], sensor::model::parameter_count);
+        // The tracks and the landmarks' observations are matched on the image of the current camera's pinhole.
+        double camera_parameters[4];
+        slam::pinhole_intrinsics(frame_current, camera_parameters);
         const double focal_x = camera_parameters[0];
         const double focal_y = camera_parameters[1];
         const double centre_x = camera_parameters[2];
@@ -3117,7 +3100,7 @@ private:
             if (!camera_model.unproject(&pixel[0], &ray[0])) {
                 return false;
             }
-            if (!(ray[2] > 1.0e-12)) {
+            if (!sensor::camera::on_image_plane(&ray[0])) {
                 return false;
             }
             virtual_x = static_cast<float>(focal_x * (ray[0] / ray[2]) + centre_x);
@@ -3215,7 +3198,7 @@ private:
                 }
                 const double source_pixel[2] = { last_observation.point[0], last_observation.point[1] };
                 math::matrix<double, 3, 1> source_ray;
-                if (!frame_source.camera.unproject(&source_pixel[0], source_ray.data()) || !(source_ray[2] > 1.0e-12)) {
+                if (!frame_source.camera.unproject(&source_pixel[0], source_ray.data()) || !sensor::camera::on_image_plane(source_ray.data())) {
                     continue;
                 }
                 lhs_rays.push_back(source_ray * (1.0 / source_ray[2]));
@@ -3319,9 +3302,10 @@ public:
     static constexpr double two_view_noise_pixels = 0.85;
     static constexpr double pose_tolerance_pixels = 1.3125;
 
+    // The pixels per radian at the camera's centre, the mean of its pinhole's focal lengths.
     static double focal_length(const sensor::model& camera) {
-        double parameters[sensor::model::parameter_count];
-        camera.get_parameters(&parameters[0], sensor::model::parameter_count);
+        double parameters[4];
+        sensor::camera::pinhole_of(camera, parameters);
         return 0.5 * (parameters[0] + parameters[1]);
     }
 
@@ -3542,7 +3526,7 @@ public:
     }
 
     void process_frame(const math::matrix<double, 3, 3>& intrinsics, const image::image& image_grey) {
-        const double parameters[sensor::model::parameter_count] = {
+        const double parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = {
             intrinsics[0][0],
             intrinsics[1][1],
             intrinsics[0][2],
@@ -3556,7 +3540,7 @@ public:
             0.0,
             0.0
         };
-        this->process_frame(sensor::model(&parameters[0], sensor::model::parameter_count), image_grey);
+        this->process_frame(sensor::model(sensor::camera::pinhole_radial_tangential<double>(&parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count)), image_grey);
     }
 
     void process_frame(const sensor::model& camera_intrinsics, const image::image& image_grey) {
@@ -3778,12 +3762,12 @@ public:
                     }
                     const double lhs_point[2] = { static_cast<double>(t->x), static_cast<double>(t->y) };
                     double lhs_ray[3];
-                    if (!frame_current.camera.unproject(&lhs_point[0], &lhs_ray[0]) || !(lhs_ray[2] > 0.0)) {
+                    if (!frame_current.camera.unproject(&lhs_point[0], &lhs_ray[0]) || !sensor::camera::on_image_plane(&lhs_ray[0])) {
                         continue;
                     }
                     const double rhs_point[2] = { static_cast<double>(anchor_observation->x), static_cast<double>(anchor_observation->y) };
                     double rhs_ray[3];
-                    if (!frame_anchor.camera.unproject(&rhs_point[0], &rhs_ray[0]) || !(rhs_ray[2] > 0.0)) {
+                    if (!frame_anchor.camera.unproject(&rhs_point[0], &rhs_ray[0]) || !sensor::camera::on_image_plane(&rhs_ray[0])) {
                         continue;
                     }
                     init_correspondences.push_back({ { { lhs_ray[0] / lhs_ray[2], lhs_ray[1] / lhs_ray[2] } }, { { rhs_ray[0] / rhs_ray[2], rhs_ray[1] / rhs_ray[2] } } });
@@ -4213,13 +4197,13 @@ public:
                     continue;
                 }
                 const auto admit_at_infinity = [&]() {
-                    if (!this->frontend.inverse_depth) {
+                    if (!this->frontend.inverse_depth || !sensor::camera::on_image_plane(ray_ref.data())) {
                         return;
                     }
                     const math::matrix<double, 3, 1> direction_world = math::transpose(frame_ref.rotation) * ray_ref;
                     const math::matrix<double, 3, 1> direction_cur = frame_current.rotation * direction_world;
                     math::matrix<double, 2, 1> reprojected_cur;
-                    if ((direction_cur[2] <= 0.0) || !frame_current.camera.project(direction_cur.data(), reprojected_cur.data())) {
+                    if (!frame_current.camera.project(direction_cur.data(), reprojected_cur.data())) {
                         return;
                     }
                     const math::matrix<double, 2, 1> measured_cur = { { static_cast<double>(t->x), static_cast<double>(t->y) } };
@@ -4255,16 +4239,9 @@ public:
                     admit_at_infinity();
                     continue;
                 }
+                // Whether the point is in front of both cameras is their models' valid region, which the projections test.
                 const math::matrix<double, 3, 1> mapped_cur = (frame_current.rotation * point) + frame_current.translation;
-                if (mapped_cur[2] < 0) {
-                    ++failed_gates;
-                    continue;
-                }
                 const math::matrix<double, 3, 1> mapped_ref = (frame_ref.rotation * point) + frame_ref.translation;
-                if (mapped_ref[2] < 0) {
-                    ++failed_gates;
-                    continue;
-                }
                 math::matrix<double, 2, 1> reprojected_cur;
                 if (!frame_current.camera.project(mapped_cur.data(), reprojected_cur.data())) {
                     ++failed_gates;

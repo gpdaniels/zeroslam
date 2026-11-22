@@ -595,8 +595,8 @@ namespace mapping {
                         const mapping::frame& observing_frame = this->frames.at(obs.frame_id);
                         std::unordered_map<int, double>::const_iterator bound_it = bound_squared_of_frame.find(obs.frame_id);
                         if (bound_it == bound_squared_of_frame.end()) {
-                            double parameters[sensor::model::parameter_count] = {};
-                            static_cast<void>(observing_frame.camera.get_parameters(&parameters[0], sensor::model::parameter_count));
+                            double parameters[4];
+                            sensor::camera::pinhole_of(observing_frame.camera, parameters);
                             const double bound = map::usable_focal_lengths * math::max(parameters[0], parameters[1]);
                             bound_it = bound_squared_of_frame.emplace(obs.frame_id, bound * bound).first;
                         }
@@ -1163,7 +1163,8 @@ namespace mapping {
             else {
                 mapped = (rotation * landmark.location) + translation;
             }
-            return (mapped[2] > 0.0) && camera.project(mapped.data(), pixel.data());
+            // Whether the point is in front of the camera is the camera model's valid region, which project tests.
+            return camera.project(mapped.data(), pixel.data());
         }
 
         static bool project_landmark(const mapping::frame& frame, const mapping::point& landmark, math::matrix<double, 2, 1>& pixel) {
@@ -1230,9 +1231,10 @@ namespace mapping {
 
         static bool line_reprojection_error(const mapping::frame& frame, const mapping::line& landmark, const line_observation& obs, double& error) {
             const geometry::plucker line_camera = landmark.plucker_line.transformed(frame.rotation, frame.translation);
-            double camera_parameters[sensor::model::parameter_count];
-            frame.camera.get_parameters(camera_parameters, sensor::model::parameter_count);
-            // The distance in pixels from the normalised line, which is only a multiple of the normalised distance when fx equals fy.
+            double camera_parameters[4];
+            sensor::camera::pinhole_of(frame.camera, camera_parameters);
+            // The distance in pixels from the normalised line, which is only a multiple of the normalised distance when fx equals fy,
+            // at the scale of the camera's pinhole: a wide angle camera's lines curve, and are measured on its image plane.
             const double scaled_x = line_camera.moment[0] / camera_parameters[0];
             const double scaled_y = line_camera.moment[1] / camera_parameters[1];
             const double line_norm = math::sqrt((scaled_x * scaled_x) + (scaled_y * scaled_y));
@@ -1243,7 +1245,7 @@ namespace mapping {
             error = 0.0;
             for (int i = 0; i < 2; ++i) {
                 double ray[3];
-                if (!frame.camera.unproject(&pixels[i][0], &ray[0]) || !(ray[2] > 1.0e-12)) {
+                if (!frame.camera.unproject(&pixels[i][0], &ray[0]) || !sensor::camera::on_image_plane(&ray[0])) {
                     return false;
                 }
                 const double alignment = (line_camera.moment[0] * ray[0] / ray[2]) + (line_camera.moment[1] * ray[1] / ray[2]) + line_camera.moment[2];

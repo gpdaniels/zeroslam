@@ -248,6 +248,70 @@ private:
     }
 
 public:
+    // As render_frame, but with the triangles clipped to the near plane rather than dropped when a corner is behind it, so a
+    // face of a cube map has no holes where the floor passes under the camera.
+    void render_frame_clipped(const math::se3<double>& pose, const math::matrix<double, 3, 3>& intrinsics, image::image& img) {
+        constexpr static const double near_plane = 0.02;
+        const math::se3<double> camera_to_world = pose.inverse();
+        unsigned char* data = img.get_data();
+        std::fill(data, data + image_width * image_height, static_cast<unsigned char>(0));
+        std::vector<double> depth_buffer(static_cast<size_t>(image_width * image_height), std::numeric_limits<double>::max());
+        for (const triangle& face : scene) {
+            const math::matrix<double, 3, 1> corners[3] = { pose * face.v0, pose * face.v1, pose * face.v2 };
+            math::matrix<double, 3, 1> polygon[4];
+            size_t count = 0;
+            for (size_t index = 0; index < 3; ++index) {
+                const math::matrix<double, 3, 1>& current = corners[index];
+                const math::matrix<double, 3, 1>& next = corners[(index + 1) % 3];
+                const bool current_in = current[2] > near_plane;
+                const bool next_in = next[2] > near_plane;
+                if (current_in) {
+                    polygon[count++] = current;
+                }
+                if (current_in != next_in) {
+                    const double t = (near_plane - current[2]) / (next[2] - current[2]);
+                    polygon[count++] = current + ((next - current) * t);
+                }
+            }
+            if (count < 3) {
+                continue;
+            }
+            const math::matrix<double, 3, 1> edge_a = corners[1] - corners[0];
+            const math::matrix<double, 3, 1> edge_b = corners[2] - corners[0];
+            const math::matrix<double, 3, 1> normal = { { (edge_a[1] * edge_b[2]) - (edge_a[2] * edge_b[1]), (edge_a[2] * edge_b[0]) - (edge_a[0] * edge_b[2]), (edge_a[0] * edge_b[1]) - (edge_a[1] * edge_b[0]) } };
+            const double plane_offset = (normal[0] * corners[0][0]) + (normal[1] * corners[0][1]) + (normal[2] * corners[0][2]);
+            const auto shade = [&](const int x, const int y) {
+                const math::matrix<double, 3, 1> ray = { { (static_cast<double>(x) + 0.5 - intrinsics[0][2]) / intrinsics[0][0], (static_cast<double>(y) + 0.5 - intrinsics[1][2]) / intrinsics[1][1], 1.0 } };
+                const double facing = (normal[0] * ray[0]) + (normal[1] * ray[1]) + (normal[2] * ray[2]);
+                if (std::abs(facing) < 1.0e-12) {
+                    return face.intensity;
+                }
+                const double distance = plane_offset / facing;
+                const math::matrix<double, 3, 1> surface = camera_to_world * math::matrix<double, 3, 1>{ { distance * ray[0], distance * ray[1], distance * ray[2] } };
+                unsigned int hash = 2166136261u;
+                for (size_t axis = 0; axis < 3; ++axis) {
+                    hash = (hash ^ static_cast<unsigned int>(static_cast<int>(std::floor((4.0 * surface[axis]) + 0.125)))) * 16777619u;
+                }
+                hash ^= hash >> 15;
+                hash *= 0x2c1b3c6du;
+                hash ^= hash >> 12;
+                return static_cast<unsigned char>((static_cast<unsigned int>(face.intensity) + (hash % 256u)) / 2u);
+            };
+            double u[4];
+            double v[4];
+            bool projected = true;
+            for (size_t index = 0; index < count; ++index) {
+                projected = projected && project_point(intrinsics, polygon[index], u[index], v[index]);
+            }
+            if (!projected) {
+                continue;
+            }
+            for (size_t index = 1; index + 1 < count; ++index) {
+                fill_triangle(data, depth_buffer.data(), static_cast<int>(std::floor(u[0])), static_cast<int>(std::floor(v[0])), polygon[0][2], static_cast<int>(std::floor(u[index])), static_cast<int>(std::floor(v[index])), polygon[index][2], static_cast<int>(std::floor(u[index + 1])), static_cast<int>(std::floor(v[index + 1])), polygon[index + 1][2], shade);
+            }
+        }
+    }
+
     void render_frame(const math::se3<double>& pose, const math::matrix<double, 3, 3>& intrinsics, image::image& img) {
         const math::se3<double> camera_to_world = pose.inverse();
         unsigned char* data = img.get_data();
@@ -1269,6 +1333,181 @@ static void test_dead_reckoning(const int width, const int height, const math::m
     REQUIRE(step_reckoned < (3.0 * step_posed));
 }
 
+// A camera of any model seeing the world: the six faces of a cube map are rendered as pinhole cameras of 90 degrees, and
+// each pixel of the camera samples the face its ray goes through, bilinearly. Pixels without a ray are black.
+static void render_through(world& faces, const int face_size, const math::se3<double>& pose, const sensor::model& camera, image::image& frame) {
+    // Each face's axes in the camera's frame, the rows of its rotation from the camera: +z, +x, -x, +y, -y, -z.
+    constexpr static const double axes[6][3][3] = {
+        { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } },
+        { { 0, 0, -1 }, { 0, 1, 0 }, { 1, 0, 0 } },
+        { { 0, 0, 1 }, { 0, 1, 0 }, { -1, 0, 0 } },
+        { { 1, 0, 0 }, { 0, 0, -1 }, { 0, 1, 0 } },
+        { { 1, 0, 0 }, { 0, 0, 1 }, { 0, -1, 0 } },
+        { { -1, 0, 0 }, { 0, 1, 0 }, { 0, 0, -1 } }
+    };
+    const double half = 0.5 * static_cast<double>(face_size);
+    math::matrix<double, 3, 3> face_intrinsics = math::matrix<double, 3, 3>::identity();
+    face_intrinsics[0][0] = half;
+    face_intrinsics[1][1] = half;
+    face_intrinsics[0][2] = half;
+    face_intrinsics[1][2] = half;
+    std::vector<image::image> rendered;
+    for (const auto& face : axes) {
+        const math::matrix<double, 3, 3> rotation({ { face[0][0], face[0][1], face[0][2] }, { face[1][0], face[1][1], face[1][2] }, { face[2][0], face[2][1], face[2][2] } });
+        const math::se3<double> face_pose = math::se3<double>(rotation, math::matrix<double, 3, 1>::zero()) * pose;
+        rendered.emplace_back(static_cast<size_t>(face_size), static_cast<size_t>(face_size));
+        faces.render_frame_clipped(face_pose, face_intrinsics, rendered.back());
+    }
+    unsigned char* data = frame.get_data();
+    for (size_t row = 0; row < frame.get_rows(); ++row) {
+        for (size_t column = 0; column < frame.get_cols(); ++column) {
+            const double pixel[2] = { static_cast<double>(column) + 0.5, static_cast<double>(row) + 0.5 };
+            double ray[3];
+            data[(row * frame.get_cols()) + column] = 0;
+            if (!camera.unproject(&pixel[0], &ray[0])) {
+                continue;
+            }
+            size_t best = 0;
+            double best_depth = -1.0;
+            double in_face[3] = {};
+            for (size_t face = 0; face < 6; ++face) {
+                const double depth = (axes[face][2][0] * ray[0]) + (axes[face][2][1] * ray[1]) + (axes[face][2][2] * ray[2]);
+                if (depth > best_depth) {
+                    best_depth = depth;
+                    best = face;
+                }
+            }
+            for (size_t axis = 0; axis < 3; ++axis) {
+                in_face[axis] = (axes[best][axis][0] * ray[0]) + (axes[best][axis][1] * ray[1]) + (axes[best][axis][2] * ray[2]);
+            }
+            const double u = std::min(std::max((half * in_face[0] / in_face[2]) + half - 0.5, 0.0), static_cast<double>(face_size) - 1.001);
+            const double v = std::min(std::max((half * in_face[1] / in_face[2]) + half - 0.5, 0.0), static_cast<double>(face_size) - 1.001);
+            const size_t u0 = static_cast<size_t>(u);
+            const size_t v0 = static_cast<size_t>(v);
+            const double fu = u - static_cast<double>(u0);
+            const double fv = v - static_cast<double>(v0);
+            const unsigned char* const source = rendered[best].get_data();
+            const size_t stride = static_cast<size_t>(face_size);
+            const double value = ((1.0 - fu) * (1.0 - fv) * source[(v0 * stride) + u0]) + (fu * (1.0 - fv) * source[(v0 * stride) + u0 + 1]) + ((1.0 - fu) * fv * source[((v0 + 1) * stride) + u0]) + (fu * fv * source[((v0 + 1) * stride) + u0 + 1]);
+            data[(row * frame.get_cols()) + column] = static_cast<unsigned char>(std::min(255.0, std::max(0.0, std::floor(value + 0.5))));
+        }
+    }
+}
+
+// The camera centres of a run against the true ones, after the similarity that best fits them (Umeyama): the root mean
+// square error as a fraction of the true trajectory's root mean square distance from its centroid.
+static double aligned_centre_error(const slam& system, const std::vector<math::se3<double>>& truth) {
+    std::vector<math::matrix<double, 3, 1>> estimated;
+    std::vector<math::matrix<double, 3, 1>> expected;
+    for (const auto& [frame_id, frame_record] : system.reconstruction.frames) {
+        estimated.push_back(-math::transpose(frame_record.rotation) * frame_record.translation);
+        expected.push_back(-(math::transpose(truth[static_cast<size_t>(frame_id)].rotation().get_matrix()) * truth[static_cast<size_t>(frame_id)].translation()));
+    }
+    const double count = static_cast<double>(estimated.size());
+    math::matrix<double, 3, 1> mean_estimated = math::matrix<double, 3, 1>::zero();
+    math::matrix<double, 3, 1> mean_expected = math::matrix<double, 3, 1>::zero();
+    for (size_t index = 0; index < estimated.size(); ++index) {
+        mean_estimated = mean_estimated + (estimated[index] * (1.0 / count));
+        mean_expected = mean_expected + (expected[index] * (1.0 / count));
+    }
+    double correlation[3][3] = {};
+    double spread_estimated = 0.0;
+    double spread_expected = 0.0;
+    for (size_t index = 0; index < estimated.size(); ++index) {
+        const math::matrix<double, 3, 1> a = estimated[index] - mean_estimated;
+        const math::matrix<double, 3, 1> b = expected[index] - mean_expected;
+        spread_estimated += a.get_length_squared() / count;
+        spread_expected += b.get_length_squared() / count;
+        for (size_t row = 0; row < 3; ++row) {
+            for (size_t column = 0; column < 3; ++column) {
+                correlation[row][column] += b[row] * a[column] / count;
+            }
+        }
+    }
+    double u[3][3];
+    double singular[3][3];
+    double vt[3][3];
+    REQUIRE(math::decompose_singular_value(&correlation[0][0], 3, 3, &u[0][0], &singular[0][0], &vt[0][0]));
+    const math::matrix<double, 3, 3> left({ { u[0][0], u[0][1], u[0][2] }, { u[1][0], u[1][1], u[1][2] }, { u[2][0], u[2][1], u[2][2] } });
+    const math::matrix<double, 3, 3> right({ { vt[0][0], vt[0][1], vt[0][2] }, { vt[1][0], vt[1][1], vt[1][2] }, { vt[2][0], vt[2][1], vt[2][2] } });
+    math::matrix<double, 3, 3> reflection = math::matrix<double, 3, 3>::identity();
+    const math::matrix<double, 3, 3> product = left * right;
+    const double determinant = (product[0][0] * ((product[1][1] * product[2][2]) - (product[1][2] * product[2][1]))) - (product[0][1] * ((product[1][0] * product[2][2]) - (product[1][2] * product[2][0]))) + (product[0][2] * ((product[1][0] * product[2][1]) - (product[1][1] * product[2][0])));
+    if (determinant < 0.0) {
+        reflection[2][2] = -1.0;
+    }
+    const math::matrix<double, 3, 3> rotation = left * reflection * right;
+    const double scale = (singular[0][0] + singular[1][1] + (reflection[2][2] * singular[2][2])) / spread_estimated;
+    double error = 0.0;
+    for (size_t index = 0; index < estimated.size(); ++index) {
+        const math::matrix<double, 3, 1> aligned = (rotation * (estimated[index] - mean_estimated)) * scale + mean_expected;
+        error += (aligned - expected[index]).get_length_squared() / count;
+    }
+    return std::sqrt(error / spread_expected);
+}
+
+// The loop of test_loop_closure through a double sphere lens that sees 97 degrees either side of its axis: tracking, and the
+// trajectory against the truth, 0.7% of its spread off with inverse depth landmarks and 1.5% with xyz ones (the image plane
+// gates it once had, dropping every point behind it, gave 0.8% and 1.8%). Landmarks are observed behind the image plane of
+// the frame that sees them, through the camera's model: the inverse depth ones within 90 degrees of their anchor
+// keyframe's axis, the xyz ones anywhere the camera sees.
+static void test_wide_angle_camera(const int width, const int height, world& faces, const int face_size, const bool inverse_depth) {
+    constexpr static const int approach_frames = 8;
+    constexpr static const int circle_frames = 72;
+    constexpr static const int overlap_frames = 18;
+    constexpr static const double radius = 3.0;
+    std::vector<math::se3<double>> trajectory;
+    for (int i = 0; i < approach_frames; i++) {
+        const math::matrix<double, 3, 1> centre = { { (i - approach_frames) * 0.25, 0.0, 6.0 - radius } };
+        trajectory.push_back({ math::so3<double>::identity(), -centre });
+    }
+    for (int i = 0; i <= circle_frames + overlap_frames; i++) {
+        const double angle = 2.0 * 3.14159265358979323846 * static_cast<double>(i) / static_cast<double>(circle_frames);
+        const math::so3<double> rotation = math::so3<double>::rotation(0, angle, 0);
+        const math::matrix<double, 3, 1> centre = { { radius * std::sin(angle), 0.0, 6.0 - (radius * std::cos(angle)) } };
+        trajectory.push_back({ rotation, -(rotation * centre) });
+    }
+
+    const double parameters[6] = { 130.0, 130.0, 0.5 * width, 0.5 * height, -0.2, 0.6 };
+    sensor::model camera;
+    REQUIRE(sensor::camera::make_model(sensor::camera::double_sphere<double>::name, &parameters[0], 6, camera));
+    const double edge[2] = { 40.5, 0.5 * height };
+    double edge_ray[3];
+    REQUIRE(camera.unproject(&edge[0], &edge_ray[0]));
+    REQUIRE(edge_ray[2] < 0.0);
+
+    slam system;
+    system.frontend.inverse_depth = inverse_depth;
+    for (const math::se3<double>& pose : trajectory) {
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
+        render_through(faces, face_size, pose, camera, frame);
+        system.process_frame(camera, frame);
+    }
+    REQUIRE(system.state() == slam::tracking_state::tracking);
+    system.finalise();
+
+    const int last_frame_id = static_cast<int>(trajectory.size()) - 1;
+    REQUIRE(system.reconstruction.frames.count(last_frame_id) != 0);
+    REQUIRE(system.reconstruction.frames.size() > trajectory.size() - 8);
+    const double error = aligned_centre_error(system, trajectory);
+    std::printf("Wide angle camera (%s): %zu frames posed, %zu landmarks, aligned centre error %.4f of the trajectory's spread.\n", inverse_depth ? "inverse depth" : "xyz", system.reconstruction.frames.size(), system.reconstruction.landmarks.size(), error);
+    std::fflush(stdout);
+    REQUIRE(error < 0.05);
+
+    // Observations of landmarks behind the image plane of the frame that saw them: only landmarks in xyz have them.
+    size_t behind = 0;
+    for (const auto& [landmark_id, landmark_observations] : system.reconstruction.observations) {
+        const mapping::point& landmark = system.reconstruction.landmarks.at(landmark_id);
+        for (const mapping::map::observation& obs : landmark_observations) {
+            const mapping::frame& observer = system.reconstruction.frames.at(obs.frame_id);
+            behind += (((observer.rotation * landmark.location) + observer.translation)[2] < 0.0) ? 1u : 0u;
+        }
+    }
+    std::printf("Wide angle camera (%s): %zu observations behind the image plane.\n", inverse_depth ? "inverse depth" : "xyz", behind);
+    std::fflush(stdout);
+    REQUIRE(behind > 0);
+}
+
 static void test_rotation_only(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& renderer) {
     std::vector<math::se3<double>> trajectory;
     for (int i = 0; i < 10; i++) {
@@ -1636,6 +1875,9 @@ int main(int argc, char* argv[]) {
     test_submap_join(width, height, intrinsics, renderer, mapping::frame::settings::adjustment_kind::relative);
     test_lines(width, height, intrinsics, renderer);
     test_rotation_only(width, height, intrinsics, renderer);
+    constexpr static const int face_size = 512;
+    world faces(face_size, face_size, true);
+    test_wide_angle_camera(width, height, faces, face_size, true);
 
     return EXIT_SUCCESS;
 }

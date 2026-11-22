@@ -60,6 +60,43 @@ class zeroslam_sensor_parameters_camera_struct(_ctypes.Structure):
         ("distortion", _ctypes.c_double * 8)
     ]
 
+class zeroslam_camera_model_enum(_enum.IntEnum):
+    zeroslam_camera_model_pinhole = 0
+    zeroslam_camera_model_radial_tangential = 1
+    zeroslam_camera_model_opencv = 2
+    zeroslam_camera_model_kannala_brandt = 3
+    zeroslam_camera_model_field_of_view = 4
+    zeroslam_camera_model_unified = 5
+    zeroslam_camera_model_extended_unified = 6
+    zeroslam_camera_model_double_sphere = 7
+    zeroslam_camera_model_fisheye_624 = 8
+    zeroslam_camera_model_invalid = -1
+
+_camera_model_parameter_counts = {
+    zeroslam_camera_model_enum.zeroslam_camera_model_pinhole: 4,
+    zeroslam_camera_model_enum.zeroslam_camera_model_radial_tangential: 12,
+    zeroslam_camera_model_enum.zeroslam_camera_model_opencv: 18,
+    zeroslam_camera_model_enum.zeroslam_camera_model_kannala_brandt: 8,
+    zeroslam_camera_model_enum.zeroslam_camera_model_field_of_view: 5,
+    zeroslam_camera_model_enum.zeroslam_camera_model_unified: 5,
+    zeroslam_camera_model_enum.zeroslam_camera_model_extended_unified: 6,
+    zeroslam_camera_model_enum.zeroslam_camera_model_double_sphere: 6,
+    zeroslam_camera_model_enum.zeroslam_camera_model_fisheye_624: 16
+}
+
+def zeroslam_camera_model_parameter_count(camera_model):
+    return _camera_model_parameter_counts.get(camera_model, 0)
+
+class zeroslam_sensor_parameters_camera_model_struct(_ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("width", _ctypes.c_int),
+        ("height", _ctypes.c_int),
+        ("model", _ctypes.c_int),
+        ("parameters_length", _ctypes.c_int),
+        ("parameters", _ctypes.c_double * 32)
+    ]
+
 class zeroslam_sensor_rig_struct(_ctypes.Structure):
     _pack_ = 1
     _fields_ = [
@@ -188,6 +225,7 @@ class zeroslam_map_edges_struct(_ctypes.Structure):
     ]
 
 assert _ctypes.sizeof(zeroslam_sensor_parameters_camera_struct) == 104
+assert _ctypes.sizeof(zeroslam_sensor_parameters_camera_model_struct) == 272
 assert _ctypes.sizeof(zeroslam_sensor_rig_struct) == 12 + _ctypes.sizeof(_ctypes.c_void_p)
 assert _ctypes.sizeof(zeroslam_sensor_data_struct) == 16 + _ctypes.sizeof(_ctypes.c_void_p)
 assert _ctypes.sizeof(zeroslam_pose_struct) == 456
@@ -387,6 +425,9 @@ __all__ = [
     "zeroslam_return_enum",
     "zeroslam_sensor_enum",
     "zeroslam_sensor_parameters_camera_struct",
+    "zeroslam_camera_model_enum",
+    "zeroslam_camera_model_parameter_count",
+    "zeroslam_sensor_parameters_camera_model_struct",
     "zeroslam_sensor_rig_struct",
     "zeroslam_sensor_data_struct",
     "zeroslam_pose_struct",

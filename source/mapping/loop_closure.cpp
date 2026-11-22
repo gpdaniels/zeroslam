@@ -307,7 +307,7 @@ namespace mapping {
                 const math::matrix<double, 3, 1> in_current = pose * ((rotation_inverse * (correspondences[i].rhs - translation_vector)) * (1.0 / hypothesis_scale));
                 double projected_in_loop[2] = {};
                 double projected_in_current[2] = {};
-                if (!(in_loop[2] > 0.0) || !(in_current[2] > 0.0) || !candidate.camera.project(in_loop.data(), &projected_in_loop[0]) || !camera.project(in_current.data(), &projected_in_current[0])) {
+                if (!candidate.camera.project(in_loop.data(), &projected_in_loop[0]) || !camera.project(in_current.data(), &projected_in_current[0])) {
                     continue;
                 }
                 const double loop_x = projected_in_loop[0] - static_cast<double>(recorded_record.pixel_x);

@@ -70,8 +70,8 @@ namespace {
     // Keyframes moving sideways past a wall of points, the first six in one submap and the last two in another.
     scene make_scene(const int frames = 8) {
         scene result;
-        const double parameters[sensor::model::parameter_count] = { 500.0, 500.0, 320.0, 240.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
-        const sensor::model camera(&parameters[0], sensor::model::parameter_count);
+        const double parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = { 500.0, 500.0, 320.0, 240.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        const sensor::model camera(sensor::camera::pinhole_radial_tangential<double>(&parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
         for (int index = 0; index < frames; ++index) {
             const math::matrix<double, 3, 1> centre = { { 0.3 * static_cast<double>(index), 0.05 * static_cast<double>(index % 3), 0.0 } };
             const math::so3<double> rotation = math::so3<double>::exp({ { 0.01 * static_cast<double>(index % 2), -0.03 * static_cast<double>(index), 0.005 * static_cast<double>(index) } });
