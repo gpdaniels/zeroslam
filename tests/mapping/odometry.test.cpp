@@ -36,6 +36,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -225,6 +226,39 @@ namespace {
         REQUIRE(odometry.add_to_graph(graph, frames, no_odometer).edges == 0);
     }
 
+    // The drive written as a scene in the directory form, into the directory ZEROSLAM_ODOMETRY_SCENE names (its sensor/image_01
+    // directory made beforehand), for `zeroslam dataset collapse` and `zeroslam process --wheel wheel_01`: the frames, the
+    // camera's calibration, the odometer with its parameters and extrinsic, and the ground truth, the camera's pose in the yard.
+    void write_scene(const char* const directory, const simulation::ground_vehicle& vehicle, const std::vector<long long int>& times, const std::vector<math::se3<double>>& truth, const std::vector<image::image>& frames) {
+        const std::string root(directory);
+        std::FILE* const calibration = std::fopen((root + "/sensor/image_01.txt").c_str(), "wb");
+        std::FILE* const trajectory = std::fopen((root + "/trajectory.txt").c_str(), "wb");
+        std::FILE* const odometer = std::fopen((root + "/sensor/wheel_01.txt").c_str(), "wb");
+        REQUIRE((calibration != nullptr) && (trajectory != nullptr) && (odometer != nullptr));
+        for (size_t i = 0; i < times.size(); ++i) {
+            char name[64];
+            std::snprintf(name, sizeof(name), "/sensor/image_01/%020lld.pnm", times[i]);
+            std::FILE* const image = std::fopen((root + name).c_str(), "wb");
+            REQUIRE(image != nullptr);
+            std::fprintf(image, "P5\n%d %d\n255\n", width, height);
+            std::fwrite(frames[i].get_data(), 1, static_cast<size_t>(width * height), image);
+            std::fclose(image);
+            std::fprintf(calibration, "%lld.%09lld 0 0 0 0 0 0 1 plumb_bob %.17g %.17g %.17g %.17g\n", times[i] / 1000000000ll, times[i] % 1000000000ll, focal, focal, 0.5 * width, 0.5 * height);
+            const math::se3<double> camera_to_world = truth[i].inverse();
+            const math::matrix<double, 4, 1> quaternion = camera_to_world.rotation().get_quaternion();
+            std::fprintf(trajectory, "%lld.%09lld %.17g %.17g %.17g %.17g %.17g %.17g %.17g\n", times[i] / 1000000000ll, times[i] % 1000000000ll, camera_to_world.translation()[0], camera_to_world.translation()[1], camera_to_world.translation()[2], quaternion[1], quaternion[2], quaternion[3], quaternion[0]);
+        }
+        const math::se3<double> camera_from_odometry = odometry_from_camera().inverse();
+        const math::matrix<double, 4, 1> quaternion = camera_from_odometry.rotation().get_quaternion();
+        std::fprintf(odometer, "# model=ackermann_rear_axle parameters=0.30,2.7,1.0,0.0 free_mask=9 parameter_deviations=0.05,0,0,0.1 extrinsic_deviations=0,0,0,0,0,0.01\n");
+        for (const sensor::odometry::sample& sample : vehicle.samples) {
+            std::fprintf(odometer, "%lld.%09lld %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g\n", sample.timestamp / 1000000000ll, sample.timestamp % 1000000000ll, camera_from_odometry.translation()[0], camera_from_odometry.translation()[1], camera_from_odometry.translation()[2], quaternion[1], quaternion[2], quaternion[3], quaternion[0], sample.rotation[0], sample.rotation[1], sample.steering);
+        }
+        std::fclose(calibration);
+        std::fclose(trajectory);
+        std::fclose(odometer);
+    }
+
     // A ground vehicle driving the yard through the whole system, a camera and the wheel odometer: the map is in metres, and the
     // wheel radius, declared 6% small, and the steering offset, declared zero, are recovered.
     void test_drive(const bool refined) {
@@ -246,6 +280,9 @@ namespace {
 
         constexpr static const long long int frame_period = 66666667ll;
         std::vector<math::se3<double>> truth;
+        std::vector<long long int> times;
+        std::vector<image::image> frames;
+        const char* const scene_directory = refined ? nullptr : std::getenv("ZEROSLAM_ODOMETRY_SCENE");
         size_t next_sample = 0;
         for (long long int time = options.start_time; time <= vehicle.end_time(); time += frame_period) {
             while ((next_sample < vehicle.samples.size()) && (vehicle.samples[next_sample].timestamp <= time)) {
@@ -255,6 +292,10 @@ namespace {
             truth.push_back((vehicle.pose_at(time) * odometry_from_camera()).inverse());
             image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
             render_yard(truth.back(), frame);
+            if (scene_directory != nullptr) {
+                times.push_back(time);
+                frames.push_back(frame);
+            }
             system.reconstruction.wheel_odometry.set_frame_time(system.reconstruction.next_frame_id, time);
             system.process_frame(camera, frame);
         }
@@ -263,6 +304,9 @@ namespace {
             ++next_sample;
         }
         system.finalise();
+        if (scene_directory != nullptr) {
+            write_scene(scene_directory, vehicle, times, truth, frames);
+        }
 
         REQUIRE(system.reconstruction.metric_scale);
         int first_id = -1;
