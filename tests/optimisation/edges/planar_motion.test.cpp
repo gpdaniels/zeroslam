@@ -22,6 +22,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/edges/odometry.hpp"
 #include "optimisation/factor_graph.hpp"
 #include "optimisation/vertex.hpp"
+#include "optimisation/vertices/extrinsic.hpp"
 #include "optimisation/vertices/pose.hpp"
 
 #if defined(_MSC_VER)
@@ -49,6 +50,16 @@ static optimisation::vertex make_pose(const math::se3<double>& pose, const bool 
     optimisation::vertex vertex{ optimisation::vertices::pose() };
     double parameters[7] = {};
     optimisation::edges::odometry::write_pose(pose, &parameters[0]);
+    REQUIRE(vertex.set_parameters(&parameters[0], 7));
+    vertex.set_fixed(fixed);
+    return vertex;
+}
+
+// The rig's extrinsic vertex of the odometry frame, which holds it as sensor to body, from the body to odometry transform.
+static optimisation::vertex make_extrinsic(const math::se3<double>& odometry_from_body, const bool fixed) {
+    optimisation::vertex vertex{ optimisation::vertices::extrinsic() };
+    double parameters[7] = {};
+    optimisation::vertices::extrinsic::to_parameters(odometry_from_body.inverse(), parameters);
     REQUIRE(vertex.set_parameters(&parameters[0], 7));
     vertex.set_fixed(fixed);
     return vertex;
@@ -83,7 +94,7 @@ int main(int argc, char* argv[]) {
     {
         optimisation::vertex first_vertex = make_pose(first, false);
         optimisation::vertex second_vertex = make_pose(second, false);
-        optimisation::vertex extrinsic_vertex = make_pose(extrinsic, false);
+        optimisation::vertex extrinsic_vertex = make_extrinsic(extrinsic, false);
         optimisation::edge edge{ optimisation::edges::planar_motion() };
         REQUIRE(edge.add_vertex(&first_vertex));
         REQUIRE(edge.add_vertex(&second_vertex));
@@ -107,7 +118,7 @@ int main(int argc, char* argv[]) {
 
         // The analytic Jacobians against central differences, off the plane and with every vertex.
         const math::se3<double> tilted_extrinsic(math::so3<double>::exp({ { 0.1, -0.05, 0.2 } }) * extrinsic.rotation(), extrinsic.translation());
-        REQUIRE(extrinsic_vertex.set_parameters(make_pose(tilted_extrinsic, false).get_parameters(), 7));
+        REQUIRE(extrinsic_vertex.set_parameters(make_extrinsic(tilted_extrinsic, false).get_parameters(), 7));
         lifted_edge.compute_residual();
         lifted_edge.compute_jacobians();
         optimisation::vertex* const vertices[3] = { &first_vertex, &lifted_vertex, &extrinsic_vertex };
@@ -142,7 +153,7 @@ int main(int argc, char* argv[]) {
         optimisation::vertex* const first_vertex = graph.add_vertex(make_pose(first, true));
         const math::se3<double> lifted(math::so3<double>::exp({ { 0.02, 0.03, 1.1 } }), { { 7.0, 1.0, 0.2 } });
         optimisation::vertex* const second_vertex = graph.add_vertex(make_pose((lifted * extrinsic).inverse(), false));
-        optimisation::vertex* const extrinsic_vertex = graph.add_vertex(make_pose(extrinsic, true));
+        optimisation::vertex* const extrinsic_vertex = graph.add_vertex(make_extrinsic(extrinsic, true));
         optimisation::edge edge{ optimisation::edges::planar_motion() };
         edge.set_information(optimisation::edges::planar_motion::information(5.0, 0.01, 0.01, 0.001, 0.001));
         REQUIRE(edge.add_vertex(first_vertex));

@@ -41,12 +41,12 @@ namespace optimisation::edges {
     // A preintegrated wheel odometry measurement between two body poses. The vertices are, in order:
     // - the body poses at the start and at the end of the interval, pose vertices holding the world to body transform T_bw (the
     //   convention of the camera poses, so that with a single camera the body is the camera);
-    // - the odometry extrinsic, a pose vertex holding the body to odometry frame transform T_ob (p_odometry = T_ob * p_body), the
-    //   sensor from body convention a camera's extrinsic takes too, updated on the left like a pose, so that its local dimensions
-    //   are a rotation and a translation in the odometry frame; it is fixed when the extrinsic is not estimated;
+    // - the odometry extrinsic, the rig's shared extrinsic vertex (vertices::extrinsic) holding the odometry frame's pose on the
+    //   body, sensor to body T_bo (p_body = T_bo * p_odometry), updated on the left in the body's frame; it is fixed when the
+    //   extrinsic is not estimated;
     // - the calibration, a calibration vertex holding the model's parameters with a mask of the free ones.
     //
-    // The odometry frame moves from T_oo = T_ob * T_bw(start) * T_bw(end)^-1 * T_ob^-1 over the interval. The measurement is the
+    // The odometry frame moves by T_oo = T_ob * T_bw(start) * T_bw(end)^-1 * T_ob^-1 over the interval, T_ob = T_bo^-1. The measurement is the
     // planar motion (x, y, theta) at the current calibration, to first order from the parameters it was integrated with, lifted to
     // the rotation Rz(theta) and the translation (x, y, 0). The residual is the rotation error Log(Rz(theta)^T * R_oo) followed by
     // the translation error t_oo - (x, y, 0) in the start's odometry frame, so that its planar part, the third rotation and the
@@ -58,8 +58,10 @@ namespace optimisation::edges {
     // integrated again with set_observation and set_information.
     //
     // The planar motion of an odometer leaves the extrinsic's height above the plane unobservable: a translation of the odometry
-    // frame along its z axis commutes with every rotation about that axis, so no planar motion moves it, and it needs a prior
-    // (edges::extrinsic_prior), as does any extrinsic component a trajectory with too little turning leaves unseen.
+    // frame along its z axis commutes with every rotation about that axis, so no planar motion moves it. The extrinsic vertex
+    // steps in the body's frame, where that direction is R_bo * e_z, so it is held by a prior whose residual is in the odometry
+    // frame (edges::extrinsic_prior), where it is the third translation row alone, as is any extrinsic component a trajectory
+    // with too little turning leaves unseen.
     class odometry final {
     public:
         constexpr static const char* name = "odometry";
@@ -90,12 +92,12 @@ namespace optimisation::edges {
         static math::matrix<double, 6, 6> adjoint(const math::se3<double>& pose);
         static math::matrix<double, 3, 3> skew(const math::matrix<double, 3, 1>& vector);
 
-        // The motion of the odometry frame between two body poses (world to body) through the extrinsic (body to odometry).
-        static math::se3<double> relative(const math::se3<double>& first_pose, const math::se3<double>& second_pose, const math::se3<double>& extrinsic);
+        // The motion of the odometry frame between two body poses (world to body) through the extrinsic (odometry to body).
+        static math::se3<double> relative(const math::se3<double>& first_pose, const math::se3<double>& second_pose, const math::se3<double>& body_from_odometry);
         // A planar motion as a transform, the rotation Rz(theta) and the translation (x, y, 0).
         static math::se3<double> lift(const math::matrix<double, 3, 1>& planar);
         // The body pose (world to body) that follows a body pose by a planar motion of the odometry frame, for a prediction.
-        static math::se3<double> predict(const math::se3<double>& first_pose, const math::se3<double>& extrinsic, const math::matrix<double, 3, 1>& planar);
+        static math::se3<double> predict(const math::se3<double>& first_pose, const math::se3<double>& body_from_odometry, const math::matrix<double, 3, 1>& planar);
 
         void compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const;
         void compute_jacobians(const edge& context, std::vector<math::matrix<double, 0, 0>>& jacobians) const;

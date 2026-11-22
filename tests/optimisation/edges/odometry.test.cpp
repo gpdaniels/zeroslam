@@ -25,6 +25,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/factor_graph.hpp"
 #include "optimisation/vertex.hpp"
 #include "optimisation/vertices/calibration.hpp"
+#include "optimisation/vertices/extrinsic.hpp"
 #include "optimisation/vertices/point.hpp"
 #include "optimisation/vertices/pose.hpp"
 #include "sensor/camera.hpp"
@@ -61,6 +62,16 @@ static optimisation::vertex make_pose(const math::se3<double>& pose, const bool 
     optimisation::vertex vertex{ optimisation::vertices::pose() };
     double parameters[7] = {};
     optimisation::edges::odometry::write_pose(pose, &parameters[0]);
+    REQUIRE(vertex.set_parameters(&parameters[0], 7));
+    vertex.set_fixed(fixed);
+    return vertex;
+}
+
+// The rig's extrinsic vertex of the odometry frame, which holds it as sensor to body, from the body to odometry transform.
+static optimisation::vertex make_extrinsic(const math::se3<double>& odometry_from_body, const bool fixed) {
+    optimisation::vertex vertex{ optimisation::vertices::extrinsic() };
+    double parameters[7] = {};
+    optimisation::vertices::extrinsic::to_parameters(odometry_from_body.inverse(), parameters);
     REQUIRE(vertex.set_parameters(&parameters[0], 7));
     vertex.set_fixed(fixed);
     return vertex;
@@ -250,11 +261,11 @@ static adjustment_result adjust(const drive& scene, const double start_scale, co
     // The extrinsic, turned by a few degrees and shifted 20 cm in the plane, with a tight prior on its height and loose ones on the
     // rest about where it starts.
     const math::se3<double> extrinsic_start(math::so3<double>::exp({ { 0.03, -0.02, 0.04 } }) * scene.extrinsic.rotation(), scene.extrinsic.translation() + math::matrix<double, 3, 1>({ 0.2, -0.15, 0.0 }));
-    optimisation::vertex* const extrinsic = graph.add_vertex(make_pose(free_extrinsic ? extrinsic_start : scene.extrinsic, !free_extrinsic));
+    optimisation::vertex* const extrinsic = graph.add_vertex(make_extrinsic(free_extrinsic ? extrinsic_start : scene.extrinsic, !free_extrinsic));
     if (free_extrinsic) {
         optimisation::edge prior{ optimisation::edges::extrinsic_prior() };
         double parameters[7] = {};
-        optimisation::edges::odometry::write_pose(extrinsic_start, &parameters[0]);
+        optimisation::vertices::extrinsic::to_parameters(extrinsic_start.inverse(), parameters);
         prior.set_observation(optimisation::edges::extrinsic_prior::observation(&parameters[0]));
         const double deviations[6] = { 0.2, 0.2, 0.2, 1.0, 1.0, 0.005 };
         prior.set_information(optimisation::edges::extrinsic_prior::information(deviations));
@@ -318,7 +329,7 @@ static adjustment_result adjust(const drive& scene, const double start_scale, co
         result.position_error = std::max(result.position_error, std::sqrt((estimate - truth).get_length_squared()));
     }
     result.scale = estimated_length / true_length;
-    const math::se3<double> extrinsic_estimate = optimisation::edges::odometry::read_pose(extrinsic->get_parameters());
+    const math::se3<double> extrinsic_estimate = optimisation::vertices::extrinsic::from_parameters(extrinsic->get_parameters()).inverse();
     result.extrinsic_rotation_error = std::sqrt((extrinsic_estimate.rotation() * scene.extrinsic.rotation().inverse()).log().get_length_squared());
     for (size_t i = 0; i < 3; ++i) {
         result.extrinsic_translation_error[i] = extrinsic_estimate.translation()[i] - scene.extrinsic.translation()[i];
@@ -354,8 +365,8 @@ int main(int argc, char* argv[]) {
         REQUIRE(is_value_approx(lifted.translation()[0], 2.0) && is_value_approx(lifted.translation()[1], 0.5) && (lifted.translation()[2] == 0.0));
         REQUIRE(is_value_approx(lifted.rotation().log()[2], 0.3));
         const math::se3<double> first = (math::se3<double>(math::so3<double>::exp({ { 0.0, 0.0, 0.4 } }), { { 3.0, -2.0, 0.0 } }) * extrinsic).inverse();
-        const math::se3<double> second = optimisation::edges::odometry::predict(first, extrinsic, planar);
-        const math::se3<double> motion = optimisation::edges::odometry::relative(first, second, extrinsic);
+        const math::se3<double> second = optimisation::edges::odometry::predict(first, extrinsic.inverse(), planar);
+        const math::se3<double> motion = optimisation::edges::odometry::relative(first, second, extrinsic.inverse());
         REQUIRE((motion.inverse() * lifted).log().get_length_squared() < 1e-24);
 
         double parameters[7] = {};
@@ -408,7 +419,7 @@ int main(int argc, char* argv[]) {
 
         optimisation::vertex first = make_pose(math::se3<double>::identity(), false);
         optimisation::vertex second = make_pose(math::se3<double>::identity(), false);
-        optimisation::vertex extrinsic_vertex = make_pose(extrinsic, false);
+        optimisation::vertex extrinsic_vertex = make_extrinsic(extrinsic, false);
         const double moved[4] = { 0.301, 2.7, 1.0, 0.012 };
         optimisation::vertex calibration = optimisation::vertices::calibration::make(&moved[0], 4, 0xFu);
         optimisation::edge edge = make_odometry(motion, &first, &second, &extrinsic_vertex, &calibration);
@@ -431,10 +442,10 @@ int main(int argc, char* argv[]) {
         REQUIRE(motion.integrate(vehicle.samples.data(), vehicle.samples.size(), options.start_time, vehicle.end_time()));
 
         const math::se3<double> first_pose = (math::se3<double>(math::so3<double>::exp({ { 0.0, 0.0, 0.4 } }), { { 3.0, -2.0, 0.0 } }) * extrinsic).inverse();
-        const math::se3<double> second_pose = optimisation::edges::odometry::predict(first_pose, extrinsic, motion.get_delta());
+        const math::se3<double> second_pose = optimisation::edges::odometry::predict(first_pose, extrinsic.inverse(), motion.get_delta());
         optimisation::vertex first = make_pose(first_pose, false);
         optimisation::vertex second = make_pose(second_pose, false);
-        optimisation::vertex extrinsic_vertex = make_pose(extrinsic, false);
+        optimisation::vertex extrinsic_vertex = make_extrinsic(extrinsic, false);
         optimisation::vertex calibration = optimisation::vertices::calibration::make(&parameters[0], 4, 0xFu);
         optimisation::edge edge = make_odometry(motion, &first, &second, &extrinsic_vertex, &calibration);
         edge.compute_residual();
@@ -447,7 +458,7 @@ int main(int argc, char* argv[]) {
         const math::se3<double> off = math::se3<double>(math::so3<double>::exp({ { 0.05, -0.04, 0.1 } }), { { 0.3, -0.2, 0.15 } }) * second_pose;
         REQUIRE(second.set_parameters(make_pose(off, false).get_parameters(), 7));
         const math::se3<double> turned(math::so3<double>::exp({ { 0.1, 0.05, -0.2 } }) * extrinsic.rotation(), extrinsic.translation() + math::matrix<double, 3, 1>({ 0.1, 0.2, -0.3 }));
-        REQUIRE(extrinsic_vertex.set_parameters(make_pose(turned, false).get_parameters(), 7));
+        REQUIRE(extrinsic_vertex.set_parameters(make_extrinsic(turned, false).get_parameters(), 7));
         const double moved[4] = { 0.31, 2.65, 1.05, 0.03 };
         optimisation::vertex partial = optimisation::vertices::calibration::make(&moved[0], 4, 0xBu);
         optimisation::edge off_edge = make_odometry(motion, &first, &second, &extrinsic_vertex, &partial);

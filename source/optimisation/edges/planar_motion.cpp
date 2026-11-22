@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "math/lie.hpp"
 #include "math/math.hpp"
 #include "optimisation/edges/odometry.hpp"
+#include "optimisation/vertices/extrinsic.hpp"
 
 namespace optimisation::edges {
     math::matrix<double, 0, 0> planar_motion::information(const double distance, const double tilt_density, const double vertical_density, const double minimum_tilt, const double minimum_vertical) {
@@ -35,8 +36,8 @@ namespace optimisation::edges {
     void planar_motion::compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const {
         const math::se3<double> first = odometry::read_pose(context.get_vertex(0)->get_parameters());
         const math::se3<double> second = odometry::read_pose(context.get_vertex(1)->get_parameters());
-        const math::se3<double> extrinsic = odometry::read_pose(context.get_vertex(2)->get_parameters());
-        const math::se3<double> motion = odometry::relative(first, second, extrinsic);
+        const math::se3<double> body_from_odometry = vertices::extrinsic::from_parameters(context.get_vertex(2)->get_parameters());
+        const math::se3<double> motion = odometry::relative(first, second, body_from_odometry);
         const math::matrix<double, 3, 3> rotation = motion.rotation().get_matrix();
         residual[0][0] = rotation[0][2];
         residual[1][0] = rotation[1][2];
@@ -46,8 +47,9 @@ namespace optimisation::edges {
     void planar_motion::compute_jacobians(const edge& context, std::vector<math::matrix<double, 0, 0>>& jacobians) const {
         const math::se3<double> first = odometry::read_pose(context.get_vertex(0)->get_parameters());
         const math::se3<double> second = odometry::read_pose(context.get_vertex(1)->get_parameters());
-        const math::se3<double> extrinsic = odometry::read_pose(context.get_vertex(2)->get_parameters());
-        const math::se3<double> motion = odometry::relative(first, second, extrinsic);
+        const math::se3<double> body_from_odometry = vertices::extrinsic::from_parameters(context.get_vertex(2)->get_parameters());
+        const math::se3<double> odometry_from_body = body_from_odometry.inverse();
+        const math::se3<double> motion = odometry::relative(first, second, body_from_odometry);
         const math::matrix<double, 3, 3> rotation = motion.rotation().get_matrix();
         const math::matrix<double, 3, 1> axis = { { rotation[0][2], rotation[1][2], rotation[2][2] } };
         const math::matrix<double, 3, 1>& translation = motion.translation();
@@ -63,9 +65,9 @@ namespace optimisation::edges {
         residual_motion[2][1] = -translation[0];
         residual_motion[2][5] = 1.0;
 
-        const math::matrix<double, 3, 6> jacobian_first = residual_motion * odometry::adjoint(extrinsic);
-        const math::matrix<double, 3, 6> jacobian_second = -(residual_motion * odometry::adjoint(motion * extrinsic));
-        const math::matrix<double, 3, 6> jacobian_extrinsic = residual_motion * (math::matrix<double, 6, 6>::identity() - odometry::adjoint(motion));
+        const math::matrix<double, 3, 6> jacobian_first = residual_motion * odometry::adjoint(odometry_from_body);
+        const math::matrix<double, 3, 6> jacobian_second = -(residual_motion * odometry::adjoint(motion * odometry_from_body));
+        const math::matrix<double, 3, 6> jacobian_extrinsic = -(residual_motion * (math::matrix<double, 6, 6>::identity() - odometry::adjoint(motion)) * odometry::adjoint(odometry_from_body));
         edge::set_jacobian(jacobians[0], 3, 6, jacobian_first.data());
         edge::set_jacobian(jacobians[1], 3, 6, jacobian_second.data());
         edge::set_jacobian(jacobians[2], 3, 6, jacobian_extrinsic.data());

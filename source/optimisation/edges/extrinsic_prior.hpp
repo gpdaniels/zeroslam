@@ -36,10 +36,11 @@ namespace {
 }
 
 namespace optimisation::edges {
-    // A prior on a sensor extrinsic held by a pose vertex as the body to sensor transform T_sb, updated on the left. The
-    // observation is the prior transform as a pose vertex's parameters, and the residual the rotation error Log(R * R_prior^T)
-    // followed by the translation error t - t_prior, both in the sensor's frame, so that the information can hold each sensor axis
-    // apart: an odometer's planar motion leaves the height of its frame above the plane unobservable, which is the translation
+    // A prior on a sensor extrinsic held by an extrinsic vertex (vertices::extrinsic, sensor to body T_bs, updated on the left in
+    // the body's frame). The observation is the prior as an extrinsic vertex's parameters, and the residual is taken on the
+    // inverse, body to sensor T_sb: the rotation error Log(R_sb * R_sb_prior^T) followed by the translation error
+    // t_sb - t_sb_prior, both in the sensor's frame whatever frame the vertex steps in, so that the information can hold each
+    // sensor axis apart: an odometer's planar motion leaves the height of its frame above the plane unobservable, which is the translation
     // error's third row alone, and a tight prior there with loose ones elsewhere holds it without biasing what the motion shows.
     class extrinsic_prior final {
     public:

@@ -37,7 +37,7 @@ namespace {
 
 namespace optimisation::edges {
     // A soft constraint that a ground vehicle moves on a plane: between two body poses (world to body) the odometry frame, through
-    // the extrinsic (body to odometry), stays in the plane of the first, its z axis along the first's and its origin at the
+    // the extrinsic (vertices::extrinsic, odometry to body), stays in the plane of the first, its z axis along the first's and its origin at the
     // first's height. The vertices are the two body poses and the extrinsic, as for the odometry edge, which holds the same three
     // rows between the two ends of each interval; this edge holds them between any two keyframes, such as the ends of a loop or
     // keyframes whose odometry was lost. The residual is the first two components of the end's z axis in the start's odometry

@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "math/lie.hpp"
 #include "optimisation/edges/odometry.hpp"
+#include "optimisation/vertices/extrinsic.hpp"
 
 namespace optimisation::edges {
     math::matrix<double, 0, 0> extrinsic_prior::observation(const double* const pose_parameters) {
@@ -34,8 +35,8 @@ namespace optimisation::edges {
     }
 
     void extrinsic_prior::compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const {
-        const math::se3<double> current = odometry::read_pose(context.get_vertex(0)->get_parameters());
-        const math::se3<double> prior = odometry::read_pose(context.get_observation().data());
+        const math::se3<double> current = vertices::extrinsic::from_parameters(context.get_vertex(0)->get_parameters()).inverse();
+        const math::se3<double> prior = vertices::extrinsic::from_parameters(context.get_observation().data()).inverse();
         const math::matrix<double, 3, 1> rotation_error = (current.rotation() * prior.rotation().inverse()).log();
         for (size_t i = 0; i < 3; ++i) {
             residual[i][0] = rotation_error[i];
@@ -44,11 +45,12 @@ namespace optimisation::edges {
     }
 
     void extrinsic_prior::compute_jacobians(const edge& context, std::vector<math::matrix<double, 0, 0>>& jacobians) const {
-        const math::se3<double> current = odometry::read_pose(context.get_vertex(0)->get_parameters());
-        const math::se3<double> prior = odometry::read_pose(context.get_observation().data());
+        const math::se3<double> current = vertices::extrinsic::from_parameters(context.get_vertex(0)->get_parameters()).inverse();
+        const math::se3<double> prior = vertices::extrinsic::from_parameters(context.get_observation().data()).inverse();
         const math::matrix<double, 3, 1> rotation_error = (current.rotation() * prior.rotation().inverse()).log();
 
-        // A perturbation exp(phi) * T moves the rotation error by Jl^-1(error) * omega and the translation by upsilon - [t]x * omega.
+        // A perturbation exp(phi) * T_sb moves the rotation error by Jl^-1(error) * omega and the translation by upsilon - [t]x * omega,
+        // and the vertex's step exp(epsilon) * T_bs is the perturbation phi = -Ad(T_sb) * epsilon of its inverse.
         const math::matrix<double, 3, 3> rotation_block = math::so3<double>::left_jacobian_inverse(rotation_error);
         const math::matrix<double, 3, 3> translation_block = -odometry::skew(current.translation());
         math::matrix<double, 6, 6> jacobian = math::matrix<double, 6, 6>::zero();
@@ -59,6 +61,7 @@ namespace optimisation::edges {
             }
             jacobian[3 + r][3 + r] = 1.0;
         }
-        edge::set_jacobian(jacobians[0], 6, 6, jacobian.data());
+        const math::matrix<double, 6, 6> jacobian_vertex = -(jacobian * odometry::adjoint(current));
+        edge::set_jacobian(jacobians[0], 6, 6, jacobian_vertex.data());
     }
 }

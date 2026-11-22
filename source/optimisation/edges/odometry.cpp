@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "core/assert.hpp"
 #include "math/math.hpp"
 #include "optimisation/vertices/calibration.hpp"
+#include "optimisation/vertices/extrinsic.hpp"
 
 namespace optimisation::edges {
     math::matrix<double, 0, 0> odometry::observation(const sensor::odometry::preintegration& motion) {
@@ -124,23 +125,23 @@ namespace optimisation::edges {
         return result;
     }
 
-    math::se3<double> odometry::relative(const math::se3<double>& first_pose, const math::se3<double>& second_pose, const math::se3<double>& extrinsic) {
-        return extrinsic * first_pose * second_pose.inverse() * extrinsic.inverse();
+    math::se3<double> odometry::relative(const math::se3<double>& first_pose, const math::se3<double>& second_pose, const math::se3<double>& body_from_odometry) {
+        return body_from_odometry.inverse() * first_pose * second_pose.inverse() * body_from_odometry;
     }
 
     math::se3<double> odometry::lift(const math::matrix<double, 3, 1>& planar) {
         return math::se3<double>(math::so3<double>::exp({ { 0.0, 0.0, planar[2] } }), { { planar[0], planar[1], 0.0 } });
     }
 
-    math::se3<double> odometry::predict(const math::se3<double>& first_pose, const math::se3<double>& extrinsic, const math::matrix<double, 3, 1>& planar) {
-        return extrinsic.inverse() * odometry::lift(planar).inverse() * extrinsic * first_pose;
+    math::se3<double> odometry::predict(const math::se3<double>& first_pose, const math::se3<double>& body_from_odometry, const math::matrix<double, 3, 1>& planar) {
+        return body_from_odometry * odometry::lift(planar).inverse() * body_from_odometry.inverse() * first_pose;
     }
 
     void odometry::compute_residual(const edge& context, math::matrix<double, 0, 0>& residual) const {
         const math::se3<double> first = odometry::read_pose(context.get_vertex(static_cast<int>(odometry::first_pose))->get_parameters());
         const math::se3<double> second = odometry::read_pose(context.get_vertex(static_cast<int>(odometry::second_pose))->get_parameters());
-        const math::se3<double> extrinsic_pose = odometry::read_pose(context.get_vertex(static_cast<int>(odometry::extrinsic))->get_parameters());
-        const math::se3<double> motion = odometry::relative(first, second, extrinsic_pose);
+        const math::se3<double> body_from_odometry = vertices::extrinsic::from_parameters(context.get_vertex(static_cast<int>(odometry::extrinsic))->get_parameters());
+        const math::se3<double> motion = odometry::relative(first, second, body_from_odometry);
         const math::matrix<double, 3, 1> planar = odometry::measurement(context);
         const math::matrix<double, 3, 1> rotation_error = (math::so3<double>::exp({ { 0.0, 0.0, -planar[2] } }) * motion.rotation()).log();
         residual[0][0] = rotation_error[0];
@@ -154,8 +155,9 @@ namespace optimisation::edges {
     void odometry::compute_jacobians(const edge& context, std::vector<math::matrix<double, 0, 0>>& jacobians) const {
         const math::se3<double> first = odometry::read_pose(context.get_vertex(static_cast<int>(odometry::first_pose))->get_parameters());
         const math::se3<double> second = odometry::read_pose(context.get_vertex(static_cast<int>(odometry::second_pose))->get_parameters());
-        const math::se3<double> extrinsic_pose = odometry::read_pose(context.get_vertex(static_cast<int>(odometry::extrinsic))->get_parameters());
-        const math::se3<double> motion = odometry::relative(first, second, extrinsic_pose);
+        const math::se3<double> body_from_odometry = vertices::extrinsic::from_parameters(context.get_vertex(static_cast<int>(odometry::extrinsic))->get_parameters());
+        const math::se3<double> odometry_from_body = body_from_odometry.inverse();
+        const math::se3<double> motion = odometry::relative(first, second, body_from_odometry);
         const math::matrix<double, 3, 1> planar = odometry::measurement(context);
         const math::matrix<double, 3, 1> rotation_error = (math::so3<double>::exp({ { 0.0, 0.0, -planar[2] } }) * motion.rotation()).log();
 
@@ -172,10 +174,11 @@ namespace optimisation::edges {
             residual_motion[3 + r][3 + r] = 1.0;
         }
 
-        // The start perturbs the motion by Ad(T_ob), the end by -Ad(T_oo * T_ob), and the extrinsic by (I - Ad(T_oo)).
-        const math::matrix<double, 6, 6> jacobian_first = residual_motion * odometry::adjoint(extrinsic_pose);
-        const math::matrix<double, 6, 6> jacobian_second = -(residual_motion * odometry::adjoint(motion * extrinsic_pose));
-        const math::matrix<double, 6, 6> jacobian_extrinsic = residual_motion * (math::matrix<double, 6, 6>::identity() - odometry::adjoint(motion));
+        // The start perturbs the motion by Ad(T_ob), the end by -Ad(T_oo * T_ob). A step exp(epsilon) * T_bo of the extrinsic is
+        // the step exp(-Ad(T_ob) * epsilon) * T_ob of its inverse, which perturbs the motion by (I - Ad(T_oo)).
+        const math::matrix<double, 6, 6> jacobian_first = residual_motion * odometry::adjoint(odometry_from_body);
+        const math::matrix<double, 6, 6> jacobian_second = -(residual_motion * odometry::adjoint(motion * odometry_from_body));
+        const math::matrix<double, 6, 6> jacobian_extrinsic = -(residual_motion * (math::matrix<double, 6, 6>::identity() - odometry::adjoint(motion)) * odometry::adjoint(odometry_from_body));
         edge::set_jacobian(jacobians[odometry::first_pose], 6, 6, jacobian_first.data());
         edge::set_jacobian(jacobians[odometry::second_pose], 6, 6, jacobian_second.data());
         edge::set_jacobian(jacobians[odometry::extrinsic], 6, 6, jacobian_extrinsic.data());
