@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "slam_rig.hpp"
 
 #include "image/image.hpp"
+#include "mapping/calibration.hpp"
 #include "mapping/rig.hpp"
 #include "math/lie.hpp"
 #include "sensor/camera.hpp"
@@ -181,6 +182,56 @@ namespace {
             REQUIRE(degrees < 0.2);
         }
     }
+
+    // Each camera of a stereo pair calibrated as the reference camera is (calibration=focal): both given focal lengths long,
+    // 4% on the first and 2.5% on the second, each camera's intrinsics vertex brings its own back, through the reprojection
+    // edges of its own observations. A baseline does not observe a focal length any better than one camera does, the depths
+    // it triangulates scaling with the focal length it is given, so as for one camera the turns of the rig decide it, here
+    // 51 degrees about one axis.
+    void test_rig_calibration() {
+        mapping::rig rig;
+        rig.add(1, mapping::rig::sensor_kind::camera, math::se3<double>::identity(), false);
+        const math::se3<double> body_from_second(math::so3<double>::identity(), { { 0.3, 0.0, 0.0 } });
+        rig.add(2, mapping::rig::sensor_kind::camera, body_from_second, false);
+        slam system;
+        system.frontend.calibration = mapping::calibration::level::focal;
+        system.set_rig(rig);
+        const double first_parameters[4] = { 1.04 * focal, 1.04 * focal, 0.5 * width, 0.5 * height };
+        const double second_parameters[4] = { 1.025 * focal, 1.025 * focal, 0.5 * width, 0.5 * height };
+        const std::vector<sensor::model> cameras = { sensor::model(sensor::camera::pinhole<double>(&first_parameters[0], 4)), sensor::model(sensor::camera::pinhole<double>(&second_parameters[0], 4)) };
+        constexpr static const int frames = 90;
+        for (int i = 0; i < frames; ++i) {
+            const double t = static_cast<double>(i);
+            const math::se3<double> pose(math::so3<double>::exp({ { 0.003 * std::sin(0.2 * t), 0.01 * t, 0.0 } }), { { -0.04 * t, 0.05 * std::sin(0.15 * t), 0.0 } });
+            std::vector<image::image> images;
+            images.emplace_back(static_cast<size_t>(height), static_cast<size_t>(width));
+            images.emplace_back(static_cast<size_t>(height), static_cast<size_t>(width));
+            render_room(pose, images[0]);
+            render_room(body_from_second.inverse() * pose, images[1]);
+            system.process_rig_frame(cameras, images);
+        }
+        system.finalise();
+        REQUIRE(system.state() == slam::tracking_state::tracking);
+        // The newest keyframe holds both cameras as the adjustments left them.
+        int newest = -1;
+        for (const int keyframe_id : system.keyframe_ids()) {
+            newest = std::max(newest, keyframe_id);
+        }
+        REQUIRE(newest >= 0);
+        const mapping::frame& keyframe = system.reconstruction.frames.at(newest);
+        REQUIRE(keyframe.views.size() == 1);
+        double first[4];
+        double second[4];
+        REQUIRE(keyframe.camera.get_pinhole(&first[0], 4));
+        REQUIRE(keyframe.views[0].camera.get_pinhole(&second[0], 4));
+        std::printf("Rig calibration: focal lengths %.2f and %.2f from %.1f and %.1f, the truth %.1f.\n", first[0], second[0], first_parameters[0], second_parameters[0], focal);
+        std::fflush(stdout);
+        REQUIRE(std::abs((first[0] / focal) - 1.0) < 0.03);
+        REQUIRE(std::abs((second[0] / focal) - 1.0) < 0.03);
+        // Each camera's own vertex moved it, the second's from where the first's was not.
+        REQUIRE(std::abs(first[0] - first_parameters[0]) > 0.01 * focal);
+        REQUIRE(std::abs(second[0] - second_parameters[0]) > 0.01 * focal);
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -190,6 +241,7 @@ int main(int argc, char* argv[]) {
     test_rig(true, false);
     test_rig(true, true);
     test_rig(false, false);
+    test_rig_calibration();
 
     return EXIT_SUCCESS;
 }

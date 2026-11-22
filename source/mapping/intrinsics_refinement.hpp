@@ -58,9 +58,16 @@ namespace mapping {
         size_t edge_count;
         std::vector<int> refined_frame_ids;
         sensor::model previous_camera;
+        // The camera of a rig the request is for (see mapping::map::observation::camera): 0 for the frames' own, otherwise
+        // their views through that camera.
+        int camera_index;
+
+        // The camera of a frame this refinement is for, null when the frame has no view through it.
+        static const sensor::model* camera_of(const mapping::frame& frame, const int camera);
+        static sensor::model* camera_of(mapping::frame& frame, const int camera);
 
     public:
-        intrinsics_refinement(calibration::refinement* const request_value, optimisation::factor_graph& graph_value, const bool landmarks_free);
+        intrinsics_refinement(calibration::refinement* const request_value, optimisation::factor_graph& graph_value, const bool landmarks_free, const int camera = 0);
 
         intrinsics_refinement(const intrinsics_refinement&) = delete;
         intrinsics_refinement& operator=(const intrinsics_refinement&) = delete;

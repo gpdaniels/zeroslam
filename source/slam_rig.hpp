@@ -46,6 +46,7 @@ inline void slam::set_rig(const mapping::rig& rig) {
     this->view_trackers_.clear();
     this->view_trackers_.resize((cameras > 1) ? (cameras - 1) : 0);
     this->view_laplacian_history_.assign(this->view_trackers_.size(), std::vector<double>());
+    this->view_calibrations_.assign(this->view_trackers_.size(), mapping::calibration());
     this->declared_refined_.assign(rig.size(), static_cast<unsigned char>(0));
     for (size_t index = 0; index < rig.size(); ++index) {
         this->declared_refined_[index] = rig.at(index).refined ? 1 : 0;
@@ -101,7 +102,9 @@ inline void slam::add_views(mapping::frame& frame, const sensor::model* const vi
     const size_t views = math::min(view_count, this->view_trackers_.size());
     frame.views.reserve(views);
     for (size_t index = 0; index < views; ++index) {
-        mapping::frame view(frame.id, view_cameras[index], view_images[index], this->frontend);
+        // While the caller gives the camera it gave before, the view takes it as the adjustments have refined it.
+        this->view_calibrations_[index].set_level(this->frontend.calibration);
+        mapping::frame view(frame.id, this->view_calibrations_[index].camera_for(view_cameras[index]), view_images[index], this->frontend);
         if (this->frontend.blur_weighting) {
             std::vector<double>& history = this->view_laplacian_history_[index];
             history.push_back(view.laplacian_variance);
@@ -119,6 +122,25 @@ inline void slam::add_views(mapping::frame& frame, const sensor::model* const vi
         frame.views.push_back(static_cast<mapping::frame&&>(view));
     }
     this->apply_extrinsics_setting();
+}
+
+inline std::vector<mapping::calibration::refinement> slam::view_refinement_requests() {
+    std::vector<mapping::calibration::refinement> requests(this->view_calibrations_.size());
+    for (size_t index = 0; index < this->view_calibrations_.size(); ++index) {
+        // A camera not ready to refine gives an empty request, which its refinement in the adjustment leaves alone.
+        if (!mapping::intrinsics_refinement::make_request(this->view_calibrations_[index], this->reconstruction.frames, this->keyframe_ids_, requests[index])) {
+            requests[index] = mapping::calibration::refinement();
+        }
+    }
+    return requests;
+}
+
+inline void slam::take_view_refinements(const std::vector<mapping::calibration::refinement>& requests) {
+    for (size_t index = 0; (index < requests.size()) && (index < this->view_calibrations_.size()); ++index) {
+        if (requests[index].refined) {
+            this->view_calibrations_[index].update(requests[index]);
+        }
+    }
 }
 
 inline void slam::update_view_trackers(mapping::frame& frame) {

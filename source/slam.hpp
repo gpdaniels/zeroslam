@@ -668,7 +668,11 @@ private:
     void optimise_globally(const int rounds) {
         mapping::calibration::refinement request;
         const bool refining = mapping::intrinsics_refinement::make_request(this->calibration_, this->reconstruction.frames, this->keyframe_ids_, request);
+        std::vector<mapping::calibration::refinement> view_requests = this->view_refinement_requests();
+        this->reconstruction.view_refinements = view_requests.empty() ? nullptr : &view_requests;
         this->reconstruction.optimise(0, false, rounds, true, refining ? &request : nullptr);
+        this->reconstruction.view_refinements = nullptr;
+        this->take_view_refinements(view_requests);
         if (refining && request.refined) {
             const sensor::model before = this->calibration_.get_camera();
             this->calibration_.update(request);
@@ -2114,6 +2118,10 @@ private:
     std::vector<std::vector<double>> view_laplacian_history_;
     // Whether each sensor was declared refined, which the extrinsics setting may override.
     std::vector<unsigned char> declared_refined_;
+    // The calibration of each further camera, camera c's at [c - 1], refined as the reference camera's is.
+    std::vector<mapping::calibration> view_calibrations_;
+    std::vector<mapping::calibration::refinement> view_refinement_requests();
+    void take_view_refinements(const std::vector<mapping::calibration::refinement>& requests);
     // A landmark is triangulated across the rig's baseline from this parallax, less than two frames of one camera need, the
     // baseline being known; a match lies within the band of the epipolar line, wider while the extrinsic is refined.
     static constexpr double rig_parallax_degrees_minimum = 0.5;

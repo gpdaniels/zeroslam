@@ -33,7 +33,21 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 namespace mapping {
-    intrinsics_refinement::intrinsics_refinement(calibration::refinement* const request_value, optimisation::factor_graph& graph_value, const bool landmarks_free)
+    const sensor::model* intrinsics_refinement::camera_of(const mapping::frame& frame, const int camera) {
+        if (camera == 0) {
+            return &frame.camera;
+        }
+        return ((camera > 0) && (static_cast<size_t>(camera - 1) < frame.views.size())) ? &frame.views[static_cast<size_t>(camera - 1)].camera : nullptr;
+    }
+
+    sensor::model* intrinsics_refinement::camera_of(mapping::frame& frame, const int camera) {
+        if (camera == 0) {
+            return &frame.camera;
+        }
+        return ((camera > 0) && (static_cast<size_t>(camera - 1) < frame.views.size())) ? &frame.views[static_cast<size_t>(camera - 1)].camera : nullptr;
+    }
+
+    intrinsics_refinement::intrinsics_refinement(calibration::refinement* const request_value, optimisation::factor_graph& graph_value, const bool landmarks_free, const int camera)
         : request(request_value)
         , graph(graph_value)
         , enabled((request_value != nullptr) && landmarks_free)
@@ -42,7 +56,8 @@ namespace mapping {
         , frame_ids()
         , edge_count(0)
         , refined_frame_ids()
-        , previous_camera() {
+        , previous_camera()
+        , camera_index(camera) {
         if (this->request != nullptr) {
             this->request->refined = false;
             this->request->parameters.clear();
@@ -89,7 +104,8 @@ namespace mapping {
         for (const auto& [frame_id, vertex] : camera_vertexes) {
             static_cast<void>(vertex);
             const std::unordered_map<int, mapping::frame>::const_iterator found = frames.find(frame_id);
-            if ((found != frames.end()) && (intrinsics_refinement::camera_parameters(found->second.camera) == this->request_parameters)) {
+            const sensor::model* const camera = (found != frames.end()) ? intrinsics_refinement::camera_of(found->second, this->camera_index) : nullptr;
+            if ((camera != nullptr) && (intrinsics_refinement::camera_parameters(*camera) == this->request_parameters)) {
                 this->frame_ids.insert(frame_id);
             }
         }
@@ -133,7 +149,7 @@ namespace mapping {
             return;
         }
         const int first = *std::min_element(this->frame_ids.begin(), this->frame_ids.end());
-        this->previous_camera = frames.at(first).camera;
+        this->previous_camera = *intrinsics_refinement::camera_of(frames.at(first), this->camera_index);
         sensor::model refined_camera = this->previous_camera;
         const size_t count = this->request_parameters.size();
         if (!refined_camera.set_parameters(this->node->get_parameters(), count)) {
@@ -147,9 +163,9 @@ namespace mapping {
         }
         std::sort(ordered.begin(), ordered.end());
         for (const int frame_id : ordered) {
-            mapping::frame& frame = frames.at(frame_id);
-            if (intrinsics_refinement::camera_parameters(frame.camera) == this->request_parameters) {
-                frame.camera = refined_camera;
+            sensor::model* const camera = intrinsics_refinement::camera_of(frames.at(frame_id), this->camera_index);
+            if ((camera != nullptr) && (intrinsics_refinement::camera_parameters(*camera) == this->request_parameters)) {
+                *camera = refined_camera;
                 this->refined_frame_ids.push_back(frame_id);
             }
         }
@@ -161,16 +177,25 @@ namespace mapping {
             const int written = std::snprintf(text.data() + used, text.size() - used, " %.6g", this->request->parameters[index]);
             used += (written > 0) ? static_cast<size_t>(written) : 0;
         }
-        core::logger::log(core::logger::level::note, "Calibration refined over %zu observations:%s.", this->edge_count, text.data());
+        if (this->camera_index == 0) {
+            core::logger::log(core::logger::level::note, "Calibration refined over %zu observations:%s.", this->edge_count, text.data());
+        }
+        else {
+            core::logger::log(core::logger::level::note, "Calibration of camera %d refined over %zu observations:%s.", this->camera_index, this->edge_count, text.data());
+        }
     }
 
     const sensor::model& intrinsics_refinement::camera_before(const int frame_id, const mapping::frame& frame) const {
-        return std::binary_search(this->refined_frame_ids.begin(), this->refined_frame_ids.end(), frame_id) ? this->previous_camera : frame.camera;
+        const sensor::model* const camera = intrinsics_refinement::camera_of(frame, this->camera_index);
+        return (std::binary_search(this->refined_frame_ids.begin(), this->refined_frame_ids.end(), frame_id) || (camera == nullptr)) ? this->previous_camera : *camera;
     }
 
     void intrinsics_refinement::restore(std::unordered_map<int, mapping::frame>& frames) {
         for (const int frame_id : this->refined_frame_ids) {
-            frames.at(frame_id).camera = this->previous_camera;
+            sensor::model* const camera = intrinsics_refinement::camera_of(frames.at(frame_id), this->camera_index);
+            if (camera != nullptr) {
+                *camera = this->previous_camera;
+            }
         }
         this->refined_frame_ids.clear();
         if (this->request != nullptr) {

@@ -45,6 +45,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 #include <algorithm>
+#include <deque>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -93,6 +94,10 @@ namespace mapping {
         // pair): no scale gauge is then held, the measurements hold the scale themselves. The one property the pipeline asks
         // about the scale.
         bool metric_scale = false;
+
+        // The calibration requests of the rig's other cameras for an adjustment of the whole map, camera c's at [c - 1], each
+        // refining that camera's intrinsics through slot 3 of its rig_reprojection edges; null for none (see slam_rig.hpp).
+        std::vector<calibration::refinement>* view_refinements = nullptr;
 
         int next_frame_id = 0;
         int next_landmark_id = 0;
@@ -412,12 +417,12 @@ namespace mapping {
 
         // The reprojection edge of an observation, its vertices still to add: the pose and the landmark for the reference
         // camera, and the camera's extrinsic after them for any other (see add_observation_vertices).
-        optimisation::edge make_observation_edge(const mapping::frame& frame, const mapping::point& landmark, const observation& obs, const optimisation::loss& lossfunction, const double sigma) const {
+        optimisation::edge make_observation_edge(const mapping::frame& frame, const mapping::point& landmark, const observation& obs, const optimisation::loss& lossfunction, const double sigma, const bool with_intrinsics = false) const {
             const mapping::frame* const view = map::view_of(frame, obs.camera);
             if ((obs.camera == 0) || (view == nullptr)) {
-                return map::make_point_edge(frame.camera, landmark, obs, lossfunction, sigma);
+                return map::make_point_edge(frame.camera, landmark, obs, lossfunction, sigma, with_intrinsics);
             }
-            optimisation::edge m = landmark.inverse_depth ? optimisation::edge{ optimisation::edges::rig_reprojection(sensor::camera::model<double>(view->camera), landmark.anchor_rotation, landmark.anchor_translation) } : optimisation::edge{ optimisation::edges::rig_reprojection(sensor::camera::model<double>(view->camera)) };
+            optimisation::edge m = landmark.inverse_depth ? optimisation::edge{ optimisation::edges::rig_reprojection(sensor::camera::model<double>(view->camera), landmark.anchor_rotation, landmark.anchor_translation, with_intrinsics) } : optimisation::edge{ optimisation::edges::rig_reprojection(sensor::camera::model<double>(view->camera), with_intrinsics) };
             m.set_observation(math::matrix<double, 0, 0>(2, 1, math::matrix<double, 2, 1>{ { obs.point[0], obs.point[1] } }.data()));
             if (sigma != 1.0) {
                 m.set_information(math::matrix<double, 0, 0>::identity(2, 2) * (1.0 / (sigma * sigma)));
@@ -556,6 +561,11 @@ namespace mapping {
             ba.set_strategy(this->solver_strategy);
             ba.set_precision(this->solver_precision);
             mapping::intrinsics_refinement intrinsics(refinement, ba, !fix_landmarks);
+            // The rig's other cameras, each refined with its own intrinsics vertex when the slam asks for it.
+            std::deque<mapping::intrinsics_refinement> view_intrinsics;
+            for (size_t camera = 1; (this->view_refinements != nullptr) && (camera <= this->view_refinements->size()); ++camera) {
+                view_intrinsics.emplace_back(&(*this->view_refinements)[camera - 1], ba, !fix_landmarks, static_cast<int>(camera));
+            }
             // Add frames.
             const int local_window_below = this->next_frame_id - 1 - local_window;
             const int local_window_fixed_below = local_window_below + 1;
@@ -720,6 +730,9 @@ namespace mapping {
                 non_fixed_poses += (fixed == false);
             }
             intrinsics.add_vertex(this->frames, camera_vertexes);
+            for (mapping::intrinsics_refinement& view : view_intrinsics) {
+                view.add_vertex(this->frames, camera_vertexes);
+            }
             // The extrinsics of the rig's other cameras, refined with the landmarks where the rig asks for it and held in a
             // pose adjustment; a refined camera keeps the distance from the reference it was declared at, the map's scale.
             std::vector<optimisation::vertex*> extrinsic_vertexes;
@@ -829,13 +842,14 @@ namespace mapping {
                     }
                     const double sigma = map::observation_sigma(this->frames.at(frame_id), obs);
                     // The reference camera's observations take the camera's intrinsics when the calibration refines them.
-                    const bool takes_intrinsics = (obs.camera == 0) && intrinsics.takes(frame_id);
-                    optimisation::edge m = takes_intrinsics ? map::make_point_edge(this->frames.at(frame_id).camera, landmark_record, obs, lossfunction, sigma, true) : this->make_observation_edge(this->frames.at(frame_id), landmark_record, obs, lossfunction, sigma);
+                    mapping::intrinsics_refinement* const camera_intrinsics = (obs.camera == 0) ? &intrinsics : (((obs.camera > 0) && (static_cast<size_t>(obs.camera) <= view_intrinsics.size())) ? &view_intrinsics[static_cast<size_t>(obs.camera - 1)] : nullptr);
+                    const bool takes_intrinsics = (camera_intrinsics != nullptr) && camera_intrinsics->takes(frame_id);
+                    optimisation::edge m = (takes_intrinsics && (obs.camera == 0)) ? map::make_point_edge(this->frames.at(frame_id).camera, landmark_record, obs, lossfunction, sigma, true) : this->make_observation_edge(this->frames.at(frame_id), landmark_record, obs, lossfunction, sigma, takes_intrinsics);
                     if (!map::add_observation_vertices(m, camera_vertexes[frame_id], landmark_vertexes[landmark_id], extrinsic_vertexes, obs.camera)) {
                         continue;
                     }
                     if (takes_intrinsics) {
-                        intrinsics.attach(m);
+                        camera_intrinsics->attach(m);
                     }
                     if (fix_landmarks && (landmark_record.uncertainty == mapping::point::uncertainty_kind::unbounded)) {
                         m.compute_jacobians();
@@ -1063,6 +1077,9 @@ namespace mapping {
                 }
             }
             intrinsics.add_priors();
+            for (mapping::intrinsics_refinement& view : view_intrinsics) {
+                view.add_priors();
+            }
             // Remove vertexes not attached to any edges.
             const auto remove_unconnected = [&ba](std::unordered_map<int, optimisation::vertex*>& vertexes, int& non_fixed) {
                 for (const int id : map::ordered(vertexes)) {
@@ -1184,6 +1201,9 @@ namespace mapping {
             const optimisation::factor_graph::diagnostics& solver_diagnostics = ba.get_diagnostics();
             core::logger::log(core::logger::level::debug, "Solver: %s%s, %d landmark blocks, %d reduced solves, %d conjugate gradient iterations, %d unconverged, %d rejected attempts.", solver_diagnostics.used_square_root ? "square root" : "dense schur", solver_diagnostics.used_single_precision ? " single" : "", solver_diagnostics.landmark_blocks, solver_diagnostics.reduced_solves, solver_diagnostics.reduced_iterations, solver_diagnostics.reduced_failures, solver_diagnostics.rejected_attempts);
             intrinsics.apply(this->frames);
+            for (mapping::intrinsics_refinement& view : view_intrinsics) {
+                view.apply(this->frames);
+            }
             // Apply optimised vertices to frames and landmarks.
             for (const auto& [frame_id, vertex] : camera_vertexes) {
                 mapping::frame& frame = frames.at(frame_id);
@@ -1302,6 +1322,9 @@ namespace mapping {
                         this->line_landmarks.at(landmark_id) = landmark;
                     }
                     intrinsics.restore(this->frames);
+                    for (mapping::intrinsics_refinement& view : view_intrinsics) {
+                        view.restore(this->frames);
+                    }
                     this->sensor_rig = rig_before;
                     return;
                 }
@@ -1349,6 +1372,9 @@ namespace mapping {
                         this->line_landmarks.at(landmark_id) = landmark;
                     }
                     intrinsics.restore(this->frames);
+                    for (mapping::intrinsics_refinement& view : view_intrinsics) {
+                        view.restore(this->frames);
+                    }
                     this->sensor_rig = rig_before;
                     return;
                 }
