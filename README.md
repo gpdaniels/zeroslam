@@ -47,6 +47,8 @@ Every `tests/[path].test.cpp` is one test executable for `source/[path].hpp`, co
 The test executables are left out of the default build: `ctest` builds each one before it runs it, or `cmake --build . --target tests` builds them all.
 The scripts in `checks/` (formatting, license headers, include guards, tool layering, raw allocations, ...) run as `check_*` tests too, or together with `cmake --build . --target check`, and `cmake --build . --target format` applies clang-format (the CI pins clang-format 21.1.2).
 
+The test of the inertial initialisation also runs over windows of a EuRoC MAV scene's ground truth and imu samples when `ZEROSLAM_EUROC_SCENE` names the scene's directory form (`zeroslam dataset expand`, see "Fetching datasets").
+
 | Option | Default | Effect |
 |---|---|---|
 | `ZEROSLAM_SIMD` | `ON` | Compile the AVX and AVX2 (x86-64) or NEON (arm64) kernels. The best one the CPU supports is chosen at run time, and every tier gives the same results as the portable code. |
