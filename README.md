@@ -197,6 +197,18 @@ Cameras that share their view across a baseline (a stereo pair) initialise from 
 With `calibration` on, each camera of the rig is calibrated as the primary camera is, with an intrinsics vertex of its own that its observations take after its extrinsic.
 Relocalisation, loop detection and lines run on the primary camera, and `adjustment=relative` adjusts the primary camera's observations alone (the final global adjustment takes every camera's). The square root solver takes the extrinsic vertices as it does the poses.
 
+### Inertial sensors ###
+
+An imu runs with the cameras as one more sensor of the rig: a `zeroslam_sensor_imu` entry of `zeroslam_set_sensor_rig` (at most one, beside at least one camera) whose parameters are a `zeroslam_sensor_parameters_imu_struct`, the continuous time noise densities its calibration publishes (gyroscope and accelerometer white noise in rad/s/√Hz and m/s²/√Hz, their bias random walks in rad/s²/√Hz and m/s³/√Hz, as Kalibr and the EuRoC datasets give them), its rate, the magnitude of gravity (`0` for 9.81) and the offset of its clock from the cameras' in seconds.
+Its entry of `zeroslam_set_sensor_extrinsics` poses its own frame on the body like a camera's (the scene's `ego -> sensor/imu_01`), refined or held, and its samples are `zeroslam_set_sensor_data` entries of one `zeroslam_sensor_measurement_imu_struct` each, the angular velocity and specific force in its own frame as measured, in time order with the frames, in the same batches or apart; a frame takes the samples up to its own timestamp, so the samples up to a frame go in before it (a frame a few sample periods past the last sample holds that sample).
+The imu's samples are checked whole with a batch, and the cameras' frames between them go as they would without it.
+
+Each keyframe preintegrates the samples since the keyframe before it (on the manifold, after Forster, Carlone, Dellaert and Scaramuzza, TRO 2017), and a culled keyframe's measurements are merged into the next one's.
+Once ten keyframes over two seconds or more have been taken, the system estimates the direction of gravity, the scale where the map has none (a monocular map's), the imu's velocities and its biases from them (ORB-SLAM3's inertial only optimisation, started from a closed form solution), and initialises when their uncertainty shows the motion held them: a monocular map is then scaled into metres and keeps the world of its first camera, with gravity known in it (`metric_scale` becomes true), and a stereo rig's map, metric already, only takes gravity, the velocities and the biases.
+From then on every adjustment holds consecutive keyframes with preintegrated inertial edges and bias random walk edges, a held keyframe holding its velocity and bias too, so the scale, the roll and the pitch are held by the imu; the estimate is refined over the longer window five and fifteen seconds later with the accelerometer bias freed, and a loop closes as a four degree of freedom pose graph, every keyframe's roll and pitch held.
+The imu predicts a frame's pose where its tracks cannot give it, and carries up to 40 frames the tracks lose before tracking is lost (10 without it); a new submap started after a loss starts a new chain of keyframes, initialised on its own with the scale held.
+The imu's extrinsic is refined with the keyframes' poses when its entry asks for it. `adjustment=relative` takes no imu.
+
 ## Scene format ##
 
 A scene is one mcap file, `datasets/[dataset]/[scene].mcap`, holding:
@@ -296,6 +308,8 @@ cmake --build . --parallel 4
 The options are `--frames [count]` (the first frames only), `--skip [count]` (ignore the first frames), `--verbose [0-5]` (the log level, default `1`), `--truth [trajectory.txt]` (end with the absolute, relative and per metre errors against a TUM trajectory), `--live` (skip the final global adjustment, so the trajectory is the one tracked live), `--focal-scale [factor]` (scale the scene's focal lengths, to run from a wrong calibration), `--config key=value` (repeatable), `--cameras image_01,image_02` (run several cameras of the scene as a rig, the first the primary camera, each at its extrinsic on `/tf`, see "Camera rigs") and `--perturb-extrinsics degrees,metres` (start every camera's extrinsic but the primary's turned and shifted off the calibration, for `--config extrinsics=refine`).
 The run ends by printing the camera's calibration as the system holds it (`Calibration: [model] fx ... fy ... cx ... cy ...` and the rest of its parameters), the scene's unless `--config calibration=...` refined it.
 
+`--imu imu_01` runs the scene's imu with the cameras (the primary camera alone when no `--cameras` are named), at its extrinsic on `/tf` and with the noise densities of the EuRoC MAV's ADIS16448 unless `--imu-noise gyroscope,accelerometer,gyroscope_walk,accelerometer_walk` gives others (a scene carries none), and `--imu-refine` refines its extrinsic (see "Inertial sensors").
+
 ## Evaluating a trajectory ##
 
 The `evaluate` tool aligns up to two TUM format trajectories to a ground truth, pairing poses by timestamp (the nearest within 20 ms), and reports the absolute trajectory error after the Sim(3) alignment, the relative displacement errors, the error per metre of path, and the per segment scale drift.
@@ -389,6 +403,7 @@ cmake --build . --parallel 4
 The `gui` tool plays a scene through the SLAM system live, drawing the image with its features, the landmarks, lines, voxels, keyframes, covisibility and loop edges, and the trajectory against the scene's ground truth with live metrics (see "Coordinate conventions" for the `Scale To Truth` and `Align To Truth` controls).
 It also saves a finished map (`--save-map`) and displays a saved map instead of running the system (`--load-map`), and `--play`, `--screenshot [file]`, `--screenshot-after [frames]` and `--exit-after [frames]` script it.
 `--config key=value` starts it with a front end setting it offers in its controls: `tracker`, `lines`, `culling`, `association`, `detector`, `descriptor`, `flow` and `local_map`; the controls otherwise start at the library's defaults (`--help` lists them). `--cameras image_01,image_02` runs several cameras as a rig, the first the one shown.
+`--imu imu_01` runs the scene's imu with the cameras, as the `process` tool does.
 It needs OpenGL, with X11 on linux, Cocoa on macOS and Win32 on windows.
 ```
 cd build
@@ -463,6 +478,7 @@ cmake --build . --parallel 4
 
 The run's outputs go to `--work-dir` (default `./zeroslam-regression-work/[name]`) and the results are appended to `--log` (default `./regression.log`).
 `--name` and `--commit` override the recorded scene name and commit (default the git `HEAD`), `--config key=value` and `--cameras` are forwarded to the `process` tool, `--first` or `--centroid` picks the alignment anchor, and `--tools-dir` points at the other tools.
+`--imu imu_01` is forwarded to the `process` tool too.
 
 ## License ##
 

@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "icon.hpp"
 #include "image_texture.hpp"
 #include "imgui.hpp"
+#include "imu.hpp"
 #include "map_file.hpp"
 #include "metrics.hpp"
 #include "opengl.hpp"
@@ -189,6 +190,7 @@ namespace {
         std::printf("                                 Unset ones start at the library's defaults: tracker=%s lines=%s culling=%s association=%s detector=%s descriptor=%s flow=%s local_map=%s.\n", (defaults.tracker == 1) ? "extrema" : "klt", defaults.lines ? "on" : "off", defaults.culling ? "on" : "off", association_names[defaults.association], detector_names[defaults.detector], descriptor_names[defaults.descriptor], defaults.wavelet ? "wavelet" : "intensity", local_map_names[defaults.local_map]);
         std::printf("        --cameras [names]      - Cameras run together as a rig, e.g. image_01,image_02: the first is the one shown and posed,\n");
         std::printf("                                 each sits at its 'ego -> sensor/[name]' extrinsic of /tf.\n");
+        std::printf("        --imu [name]           - An imu run with the cameras, e.g. imu_01, at its 'ego -> sensor/[name]' extrinsic of /tf.\n");
         std::printf("        --help                 - Show this message.\n");
     }
 
@@ -705,6 +707,8 @@ namespace {
         std::atomic<int> local_map_choice{ 0 };
         // The cameras run together with the fed channel as a rig, by sensor name, the fed channel's first; set before start.
         std::vector<std::string> rig_cameras;
+        // An imu run with the cameras, by sensor name (imu.hpp); set before start.
+        std::string rig_imu;
 
     private:
         std::thread thread;
@@ -726,6 +730,8 @@ namespace {
         bool applied_wavelet = false;
         int applied_local_map = -1;
         gtl::triple_buffer<gui::render_snapshot> snapshots;
+        std::size_t imu_next = 0;
+        zeroslam_sensor_parameters_imu_struct imu_parameters{};
 
         void publish() {
             this->snapshots.update_write();
@@ -803,6 +809,9 @@ namespace {
                 for (int component = 0; component < 4; ++component) {
                     extrinsics[i].pose[3 + component] = camera_channel.mounting.rotation[component];
                 }
+            }
+            if (!gui_imu::append(loaded, this->rig_imu, this->imu_parameters, rig, extrinsics)) {
+                return false;
             }
             return (this->system.set_sensor_rig(rig.data(), static_cast<int>(rig.size())) == zeroslam_return_success) && (this->system.set_sensor_extrinsics(extrinsics.data(), static_cast<int>(extrinsics.size())) == zeroslam_return_success);
         }
@@ -957,6 +966,7 @@ namespace {
                     this->system = zeroslam::system();
                     this->applied_tracker = -1;
                     this->fed_frames.clear();
+                    this->imu_next = 0;
                     fed_messages = 0;
                     fed_channel = channel_index;
                     rig_described = false;
@@ -980,7 +990,7 @@ namespace {
                 if (!rig_described) {
                     std::vector<int> rig_channels(1, channel_index);
                     rig_channels.insert(rig_channels.end(), further.begin(), further.end());
-                    rig_described = further.empty() ? this->describe_rig(channel_fed) : this->describe_rig(*loaded, rig_channels);
+                    rig_described = (further.empty() && this->rig_imu.empty()) ? this->describe_rig(channel_fed) : this->describe_rig(*loaded, rig_channels);
                     if (!rig_described) {
                         std::fprintf(stderr, "The library rejected the camera of channel %d.\n", channel_index);
                         this->pending_time_nanoseconds.store(-1);
@@ -1023,6 +1033,7 @@ namespace {
                     measurements[1 + i].measurement_length = static_cast<int>(further_decoded[i].grey.size());
                     measurements[1 + i].measurement_data = further_decoded[i].grey.data();
                 }
+                gui_imu::feed_until(this->system, *loaded, this->rig_imu, this->imu_next, decoded.timestamp_nanoseconds);
                 const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
                 const zeroslam_return_enum fed = this->system.set_sensor_data(measurements.data(), static_cast<int>(measurements.size()));
                 const double elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
@@ -1375,6 +1386,7 @@ int main(int argc, char* argv[]) {
     long long exit_after_frames = -1;
     bool autoplay = false;
     std::vector<std::string> rig_camera_names;
+    std::string rig_imu_name;
     front_end_settings initial = library_defaults();
     for (int i = 1; i < argc; ++i) {
         const auto take_string = [&](const char* const name, std::string& destination) -> bool {
@@ -1427,6 +1439,11 @@ int main(int argc, char* argv[]) {
             }
             if (!apply_setting(initial, setting)) {
                 std::fprintf(stderr, "Unknown --config setting: %s (tracker=klt|extrema, lines=on|off, culling=on|off, association=klt|match|both, detector=fast|mser|harris|klt|forstner|rohr|kenney, descriptor=orb|teblid|bsift|teblid512|bsift512, flow=intensity|wavelet)\n", setting.c_str());
+                return EXIT_FAILURE;
+            }
+        }
+        else if (std::strcmp(argv[i], "--imu") == 0) {
+            if (!take_string("--imu", rig_imu_name)) {
                 return EXIT_FAILURE;
             }
         }
@@ -1622,6 +1639,7 @@ int main(int argc, char* argv[]) {
             }
         }
         worker.rig_cameras = rig_camera_names;
+        worker.rig_imu = rig_imu_name;
         worker.channel.store(fed_channel);
         worker.playback_time_nanoseconds.store(timeline.time_nanoseconds);
         worker.pending_time_nanoseconds.store(-1);

@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "cdr.hpp"
 #include "dataset.hpp"
+#include "imu.hpp"
 #include "mcap.hpp"
 #include "zeroslam/zeroslam.hpp"
 
@@ -132,7 +133,7 @@ namespace process_rig {
     }
 
     // Gives the library the cameras and their extrinsics, the cameras other than the primary perturbed when asked.
-    inline bool declare_rig(const zeroslam::system& slam, std::vector<selected_camera>& selected, const double (&perturbation)[2], const int verbosity) {
+    inline bool declare_rig(const zeroslam::system& slam, std::vector<selected_camera>& selected, const double (&perturbation)[2], const int verbosity, const process_imu::settings& imu, process_imu::selected_imu& imu_selected) {
         std::vector<zeroslam_sensor_rig_struct> rig(selected.size());
         std::vector<zeroslam_sensor_extrinsics_struct> extrinsics(selected.size());
         for (size_t index = 0; index < selected.size(); ++index) {
@@ -156,6 +157,7 @@ namespace process_rig {
                 std::printf("Camera %s (sensor %d): %dx%d, extrinsic [%.6f %.6f %.6f] [%.6f %.6f %.6f %.6f].\n", entry.name.c_str(), rig[index].sensor_id, entry.parameters.width, entry.parameters.height, extrinsics[index].pose[0], extrinsics[index].pose[1], extrinsics[index].pose[2], extrinsics[index].pose[3], extrinsics[index].pose[4], extrinsics[index].pose[5], extrinsics[index].pose[6]);
             }
         }
+        process_imu::declare(imu, imu_selected, rig, extrinsics, verbosity);
         if (slam.set_sensor_rig(rig.data(), static_cast<int>(rig.size())) != zeroslam_return_success) {
             std::fprintf(stderr, "The library rejected the camera rig.\n");
             return false;
@@ -184,9 +186,13 @@ namespace process_rig {
 
     // Feeds the scene's cameras to the library, frame by frame: the frames' timestamps, the primary camera's intrinsics and the
     // frame count come back as the single camera run gives them.
-    inline bool feed(mcap& reader, const zeroslam::system& slam, const std::vector<std::string>& names, const double (&perturbation)[2], const size_t frame_limit, size_t skip_count, const int verbosity, const std::atomic<bool>& stop, const double focal_scale, std::vector<long long>& timestamps, size_t& frames, zeroslam_sensor_parameters_camera_model_struct& primary) {
+    inline bool feed(mcap& reader, const zeroslam::system& slam, const std::vector<std::string>& names, const double (&perturbation)[2], const size_t frame_limit, size_t skip_count, const int verbosity, const std::atomic<bool>& stop, const double focal_scale, std::vector<long long>& timestamps, size_t& frames, zeroslam_sensor_parameters_camera_model_struct& primary, const process_imu::settings& imu = process_imu::settings()) {
         std::vector<selected_camera> selected;
         if (!find_cameras(reader, names, selected)) {
+            return false;
+        }
+        process_imu::selected_imu imu_selected;
+        if (!process_imu::find(reader, imu, imu_selected)) {
             return false;
         }
         const mcap::channel_type* tf_channel = nullptr;
@@ -272,7 +278,7 @@ namespace process_rig {
                 }
             }
             if (!rig_set) {
-                if (!declare_rig(slam, selected, perturbation, verbosity)) {
+                if (!declare_rig(slam, selected, perturbation, verbosity, imu, imu_selected) || !process_imu::flush(slam, imu_selected)) {
                     return false;
                 }
                 primary = selected[0].parameters;
@@ -304,6 +310,9 @@ namespace process_rig {
                 }
             }
             current_timestamp = message_time;
+            if ((imu_selected.channel != nullptr) && (entry.channel_id == imu_selected.channel->id) && !process_imu::feed(reader, slam, message_number, rig_set, imu_selected)) {
+                return false;
+            }
             for (selected_camera& camera : selected) {
                 if (entry.channel_id == camera.image->id) {
                     image_messages.push_back(message_number);
@@ -338,6 +347,7 @@ namespace process_rig {
                 mcap::message_type message;
                 std::vector<cdr::transform_stamped> transforms;
                 if (reader.read_message(message_number, message) && cdr::read_tf_message(message.data, message.length, transforms)) {
+                    process_imu::take_extrinsic(imu, transforms, imu_selected);
                     for (const cdr::transform_stamped& transform : transforms) {
                         for (selected_camera& camera : selected) {
                             if (camera.extrinsic_found || (transform.frame_header.frame_id != "ego") || (transform.child_frame_id != ("sensor/" + camera.name))) {

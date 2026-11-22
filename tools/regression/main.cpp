@@ -122,6 +122,7 @@ namespace {
         std::printf("        --frames [count]       - Process only the first [count] frames of the scene.\n");
         std::printf("        --config [key=value]   - Slam configuration setting forwarded to the process tool (repeatable).\n");
         std::printf("        --cameras [names]      - Cameras run together as a rig, forwarded to the process tool (e.g. image_01,image_02).\n");
+        std::printf("        --imu [name]           - An imu run with the cameras, forwarded to the process tool (e.g. imu_01).\n");
         std::printf("        --first                - Anchor the evaluation alignment on the first pose pair (the default).\n");
         std::printf("        --centroid             - Anchor the evaluation alignment on the two centroids instead.\n");
         std::printf("The tool validates the scene, runs the SLAM system on it, evaluates the recorded trajectory\n");
@@ -141,6 +142,7 @@ int main(int argc, char* argv[]) {
     std::string frames_override;
     std::vector<std::string> config_settings;
     std::string cameras;
+    std::string imu;
     bool overlap_first_pose = true;
 
     for (int i = 1; i < argc; ++i) {
@@ -195,6 +197,10 @@ int main(int argc, char* argv[]) {
         }
         else if (matches("--cameras")) {
             if (!take_value(cameras))
+                return EXIT_FAILURE;
+        }
+        else if (matches("--imu")) {
+            if (!take_value(imu))
                 return EXIT_FAILURE;
         }
         else if (matches("--first") || matches("-f")) {
@@ -401,6 +407,9 @@ int main(int argc, char* argv[]) {
     }
     if (!cameras.empty()) {
         process_command += " --cameras " + platform::quote_for_shell(cameras);
+    }
+    if (!imu.empty()) {
+        process_command += " --imu " + platform::quote_for_shell(imu);
     }
     process_command += " 2>&1";
 

@@ -288,6 +288,7 @@ int main(int argc, char* argv[]) {
     std::vector<const char*> settings;
     std::vector<std::string> camera_names;
     double perturbation[2] = { 0.0, 0.0 };
+    process_imu::settings imu;
     for (int i = 1; i < argc; ++i) {
         const auto matches = [&](const char* name) {
             return std::strcmp(argv[i], name) == 0;
@@ -366,6 +367,23 @@ int main(int argc, char* argv[]) {
                 return EXIT_FAILURE;
             }
         }
+        else if (matches("--imu") || matches("--imu-noise")) {
+            const bool name = matches("--imu");
+            const char* text = nullptr;
+            if (!take_value(text)) {
+                return EXIT_FAILURE;
+            }
+            if (name) {
+                imu.name = text;
+            }
+            else if (!process_imu::parse_noise(text, imu.noise)) {
+                std::fprintf(stderr, "Invalid value for --imu-noise: '%s' (expected four positive densities separated by commas).\n", text);
+                return EXIT_FAILURE;
+            }
+        }
+        else if (matches("--imu-refine")) {
+            imu.refine = true;
+        }
         else if (matches("--verbose")) {
             size_t level = 0;
             if (!take_count(level, 0, "must be 0 to 5")) {
@@ -404,6 +422,9 @@ int main(int argc, char* argv[]) {
         std::printf("                written, each at its 'ego -> sensor/[name]' extrinsic of /tf.\n");
         std::printf("    --perturb-extrinsics - Optional turn and shift (degrees,metres) of every camera's extrinsic but the primary's, to start\n");
         std::printf("                the extrinsic refinement (--config extrinsics=refine) off the calibration.\n");
+        std::printf("    --imu     - Optional imu run with the cameras, e.g. imu_01, at its 'ego -> sensor/[name]' extrinsic of /tf.\n");
+        std::printf("    --imu-noise - Optional imu noise densities: gyroscope, accelerometer, gyroscope walk, accelerometer walk (default EuRoC's).\n");
+        std::printf("    --imu-refine - Refine the imu's extrinsic.\n");
         return EXIT_SUCCESS;
     }
 
@@ -462,11 +483,16 @@ int main(int argc, char* argv[]) {
     long long current_timestamp = -1;
 
     const std::vector<mcap::message_index_type>& message_index = reader.get_message_index();
-    // A rig is fed apart (rig.hpp), and the single camera's pass then has nothing to read.
-    if ((camera_names.size() > 1) && !process_rig::feed(reader, slam, camera_names, perturbation, frame_limit, skip_count, verbosity, shutdown_requested, focal_scale, timestamps, frames, camera)) {
+    // A rig is fed apart (rig.hpp), and the single camera's pass then has nothing to read. An imu goes with the rig, the scene's
+    // primary camera alone when no cameras are named.
+    if (imu.enabled() && camera_names.empty()) {
+        camera_names.push_back(image_channel->topic.substr(std::string("/sensor/").size()));
+    }
+    const bool fed_as_rig = (camera_names.size() > 1) || imu.enabled();
+    if (fed_as_rig && !process_rig::feed(reader, slam, camera_names, perturbation, frame_limit, skip_count, verbosity, shutdown_requested, focal_scale, timestamps, frames, camera, imu)) {
         return EXIT_FAILURE;
     }
-    const size_t total_messages = (camera_names.size() > 1) ? 0 : message_index.size();
+    const size_t total_messages = fed_as_rig ? 0 : message_index.size();
     size_t processed_messages = 0;
 
     auto process_buffered_images = [&]() {
