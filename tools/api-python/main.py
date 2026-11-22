@@ -116,6 +116,15 @@ def main():
         require(result == success, "get_timestamp")
         require(timestamp.value == 1000000000 + (frame_interval * (frame_count - 1)), "timestamp is the newest frame")
 
+        # The camera's calibration as the system holds it: the rig's, as the calibration key is off.
+        calibration = zeroslam.zeroslam_sensor_parameters_camera_model_struct()
+        result = system.get_camera_calibration(sensor_id, calibration)
+        print("get_camera_calibration: {} (fx {:.3f}, fy {:.3f}, cx {:.3f}, cy {:.3f})".format(result.name, calibration.parameters[0], calibration.parameters[1], calibration.parameters[2], calibration.parameters[3]))
+        require(result == success, "get_camera_calibration")
+        require(calibration.parameters_length == 12, "the calibration is of the rig's model")
+        require(calibration.parameters[0] == camera_parameters.focal_x, "the calibration is the rig's")
+        require(system.get_camera_calibration(sensor_id + 1, calibration) == zeroslam.zeroslam_return_enum.zeroslam_return_failure_invalid_argument, "get_camera_calibration rejects an unknown sensor")
+
         pose = zeroslam.zeroslam_pose_struct()
         result = system.get_pose(pose)
         print("get_pose: {}".format(result.name))

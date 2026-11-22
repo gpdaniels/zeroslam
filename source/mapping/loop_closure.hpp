@@ -222,6 +222,10 @@ namespace mapping {
         // that they keep reprojecting into its image rather than staying where the map was before the correction.
         void correct(const std::function<bool(const int, math::sim3<double>&)>& camera_to_world);
 
+        // Gives the held keyframes taken with one camera another, as a refined calibration replaces the camera. Returns how
+        // many it changed.
+        size_t replace_camera(const sensor::model& camera_from, const sensor::model& camera_to);
+
         size_t num_keyframes() const;
 
         void set_hamming_scale(const float scale);

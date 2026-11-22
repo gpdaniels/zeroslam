@@ -88,6 +88,10 @@ namespace zeroslam {
             return zeroslam_finalise(this->handle);
         }
 
+        zeroslam_return_enum get_camera_calibration(int sensor_id, zeroslam_sensor_parameters_camera_model_struct* calibration) const {
+            return zeroslam_get_camera_calibration(this->handle, sensor_id, calibration);
+        }
+
         zeroslam_return_enum get_pose(zeroslam_pose_struct* pose) const {
             return zeroslam_get_pose(this->handle, pose);
         }

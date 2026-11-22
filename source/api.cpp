@@ -228,6 +228,10 @@ namespace {
     constexpr static const char configuration_key_wavelet_robust[] = "wavelet_robust";
     constexpr static const char configuration_key_wavelet_undecimated[] = "wavelet_undecimated";
     constexpr static const char configuration_key_wavelet_seed[] = "wavelet_seed";
+    constexpr static const char configuration_key_calibration[] = "calibration";
+
+    // In the order of mapping::calibration::level.
+    constexpr static const char* const calibration_names[5] = { "off", "focal", "focal_centre", "intrinsics", "all" };
 
     constexpr static const char* const anchor_names[4] = { "translation", "affine", "translation_illumination", "affine_illumination" };
 
@@ -319,7 +323,7 @@ namespace {
         return std::snprintf(
             buffer,
             capacity,
-            "%s=%d\n%s=%s\n%s=%.9g\n%s=%s\n%s=%.9g\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n",
+            "%s=%d\n%s=%s\n%s=%.9g\n%s=%s\n%s=%.9g\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n",
             configuration_key_verbosity,
             core::logger::get_verbosity(),
             configuration_key_detector,
@@ -389,7 +393,9 @@ namespace {
             configuration_key_solver,
             (frontend.solver == optimisation::factor_graph::strategy::square_root) ? "square_root" : ((frontend.solver == optimisation::factor_graph::strategy::automatic) ? "automatic" : "dense_schur"),
             configuration_key_solver_precision,
-            (frontend.solver_precision == optimisation::factor_graph::precision::single_precision) ? "single" : "double"
+            (frontend.solver_precision == optimisation::factor_graph::precision::single_precision) ? "single" : "double",
+            configuration_key_calibration,
+            calibration_names[static_cast<int>(frontend.calibration)]
         );
     }
 
@@ -845,6 +851,18 @@ namespace {
                     return false;
                 }
             }
+            else if (token_equals(line, key_length, configuration_key_calibration)) {
+                bool known = false;
+                for (int level = 0; level < 5; ++level) {
+                    if (token_equals(value, value_length, calibration_names[level])) {
+                        frontend.calibration = static_cast<mapping::calibration::level>(level);
+                        known = true;
+                    }
+                }
+                if (!known) {
+                    return false;
+                }
+            }
             else if (token_equals(line, key_length, configuration_key_adjustment)) {
                 if (token_equals(value, value_length, "absolute")) {
                     frontend.adjustment = mapping::frame::settings::adjustment_kind::absolute;
@@ -1047,6 +1065,46 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_finalise(zeroslam_system* system
         return zeroslam_return_failure_invalid_system;
     }
     system->slam_instance.finalise();
+    return zeroslam_return_success;
+}
+
+zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_camera_calibration(zeroslam_system* system, int sensor_id, zeroslam_sensor_parameters_camera_model_struct* calibration) {
+    if (system == nullptr) {
+        return zeroslam_return_failure_invalid_system;
+    }
+    if ((calibration == nullptr) || (sensor_id == 0)) {
+        return zeroslam_return_failure_invalid_argument;
+    }
+    const zeroslam_system::camera_entry* camera = nullptr;
+    for (const zeroslam_system::camera_entry& existing : system->cameras) {
+        if (existing.sensor_id == sensor_id) {
+            camera = &existing;
+        }
+    }
+    if (camera == nullptr) {
+        return zeroslam_return_failure_invalid_argument;
+    }
+    // The system's camera as refined while the frames come with the rig's camera, which it was given last; the rig's before
+    // the first frame.
+    const mapping::calibration& held = system->slam_instance.calibration();
+    const sensor::model& intrinsics = (system->any_data && held.get_given_camera().is_equal(camera->intrinsics)) ? held.get_camera() : camera->intrinsics;
+    const char* const names[9] = { sensor::camera::pinhole<double>::name, sensor::camera::pinhole_radial_tangential<double>::name, sensor::camera::pinhole_opencv<double>::name, sensor::camera::kannala_brandt<double>::name, sensor::camera::field_of_view<double>::name, sensor::camera::unified<double>::name, sensor::camera::extended_unified<double>::name, sensor::camera::double_sphere<double>::name, sensor::camera::fisheye_624<double>::name };
+    const zeroslam_camera_model_enum models[9] = { zeroslam_camera_model_pinhole, zeroslam_camera_model_radial_tangential, zeroslam_camera_model_opencv, zeroslam_camera_model_kannala_brandt, zeroslam_camera_model_field_of_view, zeroslam_camera_model_unified, zeroslam_camera_model_extended_unified, zeroslam_camera_model_double_sphere, zeroslam_camera_model_fisheye_624 };
+    zeroslam_camera_model_enum model = zeroslam_camera_model_invalid;
+    for (size_t index = 0; index < 9; ++index) {
+        if (std::strcmp(names[index], intrinsics.name()) == 0) {
+            model = models[index];
+        }
+    }
+    const size_t count = intrinsics.get_parameter_count();
+    std::memset(calibration, 0, sizeof(zeroslam_sensor_parameters_camera_model_struct));
+    calibration->width = camera->width;
+    calibration->height = camera->height;
+    calibration->model = model;
+    calibration->parameters_length = static_cast<int>(count);
+    if ((model == zeroslam_camera_model_invalid) || (count > 32) || !intrinsics.get_parameters(&calibration->parameters[0], count)) {
+        return zeroslam_return_failure_invalid_argument;
+    }
     return zeroslam_return_success;
 }
 

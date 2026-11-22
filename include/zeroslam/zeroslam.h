@@ -335,6 +335,10 @@ ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sens
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system* system, const zeroslam_sensor_data_struct* data, int length);
 
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_finalise(zeroslam_system* system);
+
+// The calibration of a camera of the rig as the system holds it now, of whichever model the rig gave: the rig's, refined by
+// the adjustments when the configuration's calibration key asks for it (see README.md "Calibrating the camera").
+ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_camera_calibration(zeroslam_system* system, int sensor_id, zeroslam_sensor_parameters_camera_model_struct* calibration);
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_pose(zeroslam_system* system, zeroslam_pose_struct* pose);
 
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_pose_at_timestamp(zeroslam_system* system, zeroslam_pose_struct* pose, long long int timestamp);

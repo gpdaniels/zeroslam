@@ -1033,6 +1033,25 @@ namespace mapping {
         }
     }
 
+    size_t loop_closure::replace_camera(const sensor::model& camera_from, const sensor::model& camera_to) {
+        const size_t count = camera_from.get_parameter_count();
+        std::vector<double> from(count, 0.0);
+        std::vector<double> held(count, 0.0);
+        if ((count == 0) || !camera_from.get_parameters(from.data(), count)) {
+            return 0;
+        }
+        size_t replaced = 0;
+        for (auto& [keyframe_id, entry] : this->keyframes) {
+            static_cast<void>(keyframe_id);
+            if ((entry.camera.get_parameter_count() != count) || !entry.camera.get_parameters(held.data(), count) || (held != from)) {
+                continue;
+            }
+            entry.camera = camera_to;
+            ++replaced;
+        }
+        return replaced;
+    }
+
     size_t loop_closure::num_keyframes() const {
         return this->recognition.num_keyframes();
     }

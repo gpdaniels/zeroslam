@@ -1789,6 +1789,76 @@ static void test_map_reacquisition(const int width, const int height, const math
     }
 }
 
+// The camera's focal lengths and principal point refined from a run started with them wrong, as the system is given them:
+// a circle about the room's centre, which turns the camera all the way round, from a camera 8% long in focal length and
+// a few pixels off in its principal point. The refinement waits until the keyframes span enough of the turn, refines at
+// each adjustment of the whole map, and the frames from then on take the refined camera.
+static void test_calibration(const int width, const int height, const math::matrix<double, 3, 3>& intrinsics, world& room, const double focal_scale, const double centre_offset) {
+    constexpr static const int approach_frames = 8;
+    constexpr static const int circle_frames = 72;
+    constexpr static const double radius = 3.0;
+    std::vector<math::se3<double>> trajectory;
+    for (int i = 0; i < approach_frames; i++) {
+        const math::matrix<double, 3, 1> centre = { { (i - approach_frames) * 0.25, 0.0, 6.0 - radius } };
+        trajectory.push_back({ math::so3<double>::identity(), -centre });
+    }
+    for (int i = 0; i <= circle_frames; i++) {
+        const double angle = 2.0 * 3.14159265358979323846 * static_cast<double>(i) / static_cast<double>(circle_frames);
+        const math::so3<double> rotation = math::so3<double>::rotation(0, angle, 0);
+        const math::matrix<double, 3, 1> centre = { { radius * std::sin(angle), 0.0, 6.0 - (radius * std::cos(angle)) } };
+        trajectory.push_back({ rotation, -(rotation * centre) });
+    }
+    math::matrix<double, 3, 3> given = intrinsics;
+    given[0][0] *= focal_scale;
+    given[1][1] *= focal_scale;
+    given[0][2] += centre_offset;
+    given[1][2] -= centre_offset;
+
+    slam system;
+    system.frontend.track_collision_distance = 0.0f;
+    system.frontend.calibration = mapping::calibration::level::focal_centre;
+    for (const math::se3<double>& pose : trajectory) {
+        image::image frame(static_cast<size_t>(height), static_cast<size_t>(width));
+        room.render_frame(pose, intrinsics, frame);
+        system.process_frame(given, frame);
+    }
+    REQUIRE(system.state() == slam::tracking_state::tracking);
+    REQUIRE(system.calibration().has_started());
+    system.finalise();
+    double refined[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = {};
+    REQUIRE(system.calibration().get_camera().get_parameters(&refined[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
+    double held[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = {};
+    REQUIRE(system.calibration().get_given_camera().get_parameters(&held[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
+    REQUIRE(held[0] == given[0][0]);
+    REQUIRE(held[2] == given[0][2]);
+    // The focal lengths come within 1.5% of the truth, from 8% out, and the principal point within three pixels.
+    const double focal = intrinsics[0][0];
+    REQUIRE(std::abs(refined[0] - focal) < 0.015 * focal);
+    REQUIRE(std::abs(refined[1] - focal) < 0.015 * focal);
+    REQUIRE(std::abs(refined[2] - intrinsics[0][2]) < 3.0);
+    REQUIRE(std::abs(refined[3] - intrinsics[1][2]) < 3.0);
+    // Every frame of the map holds the refined camera, as do the frames to come.
+    for (const auto& [frame_id, frame_record] : system.reconstruction.frames) {
+        static_cast<void>(frame_id);
+        double parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = {};
+        REQUIRE(frame_record.camera.get_parameters(&parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
+        for (size_t index = 0; index < sensor::camera::pinhole_radial_tangential<double>::parameter_count; ++index) {
+            REQUIRE(parameters[index] == refined[index]);
+        }
+    }
+    // The circle closes on itself.
+    const mapping::frame& circle_start = system.reconstruction.frames.at(approach_frames);
+    const mapping::frame& circle_end = system.reconstruction.frames.at(approach_frames + circle_frames);
+    const math::matrix<double, 3, 1> start_centre = -math::transpose(circle_start.rotation) * circle_start.translation;
+    const math::matrix<double, 3, 1> end_centre = -math::transpose(circle_end.rotation) * circle_end.translation;
+    double furthest = 0.0;
+    for (const auto& [frame_id, frame_record] : system.reconstruction.frames) {
+        static_cast<void>(frame_id);
+        furthest = std::max(furthest, std::sqrt((-math::transpose(frame_record.rotation) * frame_record.translation).get_length_squared()));
+    }
+    REQUIRE(std::sqrt((end_centre - start_centre).get_length_squared()) < 0.15 * furthest);
+}
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
@@ -1879,6 +1949,8 @@ int main(int argc, char* argv[]) {
     constexpr static const int face_size = 512;
     world faces(face_size, face_size, true);
     test_wide_angle_camera(width, height, faces, face_size, true);
+    test_calibration(width, height, intrinsics, room, 1.08, 4.0);
+    test_calibration(width, height, intrinsics, room, 1.0, 0.0);
 
     return EXIT_SUCCESS;
 }

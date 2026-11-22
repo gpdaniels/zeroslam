@@ -25,6 +25,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "feature/tracker/tracker.hpp"
 #include "image/image.hpp"
 #include "image/pyramid.hpp"
+#include "mapping/calibration.hpp"
 #include "math/matrix.hpp"
 #include "optimisation/factor_graph.hpp"
 #include "sensor/camera.hpp"
@@ -135,6 +136,8 @@ namespace mapping {
             // keyframe that found it, keyframes covisible with that one, then the keyframes that follow.
             int loop_confirmations = 3;
             int global_adjustment_keyframes = 10;
+            // Which of the camera's parameters the adjustments refine (see mapping::calibration).
+            mapping::calibration::level calibration = mapping::calibration::level::off;
             // How the map is adjusted as keyframes arrive: absolute, a window of world poses with periodic global adjustments
             // and a pose graph at each loop, or relative, an adaptive region of a graph of relative transforms (see
             // mapping::relative_graph) where a loop is one more transform.

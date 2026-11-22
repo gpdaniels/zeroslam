@@ -283,6 +283,7 @@ int main(int argc, char* argv[]) {
     size_t frame_limit = static_cast<size_t>(-1);
     size_t skip_count = 0;
     bool live = false;
+    double focal_scale = 1.0;
     std::vector<const char*> settings;
     for (int i = 1; i < argc; ++i) {
         const auto matches = [&](const char* name) {
@@ -339,6 +340,18 @@ int main(int argc, char* argv[]) {
         else if (matches("--live")) {
             live = true;
         }
+        else if (matches("--focal-scale")) {
+            const char* text = nullptr;
+            if (!take_value(text)) {
+                return EXIT_FAILURE;
+            }
+            char* end_pointer = nullptr;
+            focal_scale = std::strtod(text, &end_pointer);
+            if ((end_pointer == text) || (*end_pointer != 0) || !(focal_scale > 0.0)) {
+                std::fprintf(stderr, "Invalid value for --focal-scale: '%s' (expected a positive factor).\n", text);
+                return EXIT_FAILURE;
+            }
+        }
         else if (matches("--verbose")) {
             size_t level = 0;
             if (!take_count(level, 0, "must be 0 to 5")) {
@@ -364,13 +377,14 @@ int main(int argc, char* argv[]) {
     }
 
     if (scene_path == nullptr) {
-        std::printf("Usage %s [scene] [--frames count] [--skip count] [--verbose level] [--truth trajectory.txt] [--live] [--config key=value]...\n", argv[0]);
+        std::printf("Usage %s [scene] [--frames count] [--skip count] [--verbose level] [--truth trajectory.txt] [--live] [--focal-scale factor] [--config key=value]...\n", argv[0]);
         std::printf("    scene     - Scene mcap file path.\n");
         std::printf("    --frames  - Optional limit, process only the first [count] frames.\n");
         std::printf("    --skip    - Optional offset, ignore the first [count] frames (camera info is still consumed).\n");
         std::printf("    --verbose - Optional log verbosity (0=silent, 1=errors, 2=warnings, 3=notes, 4=progress, 5=debug), default is 1.\n");
         std::printf("    --truth   - Optional ground truth trajectory (TUM format); the run ends with absolute, relative and scale drift figures against it.\n");
         std::printf("    --live    - Skip the final global adjustment: the trajectory is the one tracked live, as the viewer shows it.\n");
+        std::printf("    --focal-scale - Optional factor on the scene's focal lengths, to run from a wrong calibration (see the calibration key).\n");
         std::printf("    --config  - Optional slam configuration setting (repeatable), see the library's configuration keys.\n");
         return EXIT_SUCCESS;
     }
@@ -566,6 +580,9 @@ int main(int argc, char* argv[]) {
                     std::fprintf(stderr, "The camera model '%s' does not match the library's.\n", information.distortion_model.c_str());
                     return EXIT_FAILURE;
                 }
+                // Every model of the C api starts with the focal lengths, which --focal-scale scales.
+                parameters[0] *= focal_scale;
+                parameters[1] *= focal_scale;
                 if (rig_set) {
                     bool changed = (model != static_cast<int>(camera.model)) || (static_cast<int>(parameters_length) != camera.parameters_length);
                     for (size_t index = 0; (index < parameters_length) && !changed; ++index) {
@@ -608,6 +625,17 @@ int main(int argc, char* argv[]) {
         }
     }
     log(4, "Saving map and camera trajectory...");
+
+    // The calibration the run ends with, the scene's unless the calibration key refined it.
+    zeroslam_sensor_parameters_camera_model_struct calibrated{};
+    if (slam.get_camera_calibration(sensor_id, &calibrated) == zeroslam_return_success) {
+        // Every model starts with the focal lengths and the principal point.
+        std::printf("Calibration: %s fx %.4f fy %.4f cx %.4f cy %.4f", zeroslam_camera_model_enum_to_string(calibrated.model), calibrated.parameters[0], calibrated.parameters[1], calibrated.parameters[2], calibrated.parameters[3]);
+        for (int index = 4; index < calibrated.parameters_length; ++index) {
+            std::printf(" %.6g", calibrated.parameters[index]);
+        }
+        std::printf("\n");
+    }
 
     std::vector<camera_pose> poses;
     for (const long long timestamp : timestamps) {

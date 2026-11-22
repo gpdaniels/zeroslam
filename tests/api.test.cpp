@@ -236,6 +236,19 @@ int main(int argc, char* argv[]) {
         REQUIRE(std::strstr(buffer.data(), "global_adjustment=off\n") != nullptr);
         REQUIRE(std::strstr(buffer.data(), "\nadjustment=absolute\n") != nullptr);
 
+        // Each calibration level reads back, off by default, and an unknown one is rejected.
+        REQUIRE(std::strstr(buffer.data(), "\ncalibration=off\n") != nullptr);
+        const char* const calibrations[5] = { "calibration=focal\n", "calibration=focal_centre\n", "calibration=intrinsics\n", "calibration=all\n", "calibration=off\n" };
+        buffer.assign(static_cast<size_t>(length) + 64u, '\0');
+        for (int index = 0; index < 5; ++index) {
+            REQUIRE(zeroslam_set_configuration(system, calibrations[index], static_cast<int>(std::strlen(calibrations[index]))) == zeroslam_return_success);
+            capacity = static_cast<int>(buffer.size());
+            REQUIRE(zeroslam_get_configuration(system, buffer.data(), &capacity) == zeroslam_return_success);
+            REQUIRE(std::strstr(buffer.data(), calibrations[index]) != nullptr);
+        }
+        const char* const bad_calibration = "calibration=distortion\n";
+        REQUIRE(zeroslam_set_configuration(system, bad_calibration, static_cast<int>(std::strlen(bad_calibration))) == zeroslam_return_failure_invalid_configuration);
+
         // Each local map source reads back, and an unknown one is rejected.
         const char* const local_maps[4] = { "local_map=covisible\n", "local_map=voxels\n", "local_map=both\n", "local_map=fallback\n" };
         for (int index = 0; index < 4; ++index) {
@@ -435,6 +448,22 @@ int main(int argc, char* argv[]) {
         const char* const lines_on = "lines=on\n";
         REQUIRE(zeroslam_set_configuration(system, lines_on, static_cast<int>(std::strlen(lines_on))) == zeroslam_return_success);
 
+        // The calibration of a camera of the rig is the rig's before any frame, and nothing for a sensor it does not hold.
+        zeroslam_sensor_parameters_camera_model_struct calibrated{};
+        const auto calibration_is_rig = [&calibrated, &camera_parameters]() {
+            const double expected[12] = { camera_parameters.focal_x, camera_parameters.focal_y, camera_parameters.centre_x, camera_parameters.centre_y, camera_parameters.distortion[0], camera_parameters.distortion[1], camera_parameters.distortion[2], camera_parameters.distortion[3], camera_parameters.distortion[4], camera_parameters.distortion[5], camera_parameters.distortion[6], camera_parameters.distortion[7] };
+            bool same = (calibrated.width == camera_parameters.width) && (calibrated.height == camera_parameters.height) && (calibrated.model == zeroslam_camera_model_radial_tangential) && (calibrated.parameters_length == 12);
+            for (size_t index = 0; index < 12; ++index) {
+                same = same && (calibrated.parameters[index] == expected[index]);
+            }
+            return same;
+        };
+        REQUIRE(zeroslam_get_camera_calibration(nullptr, 3, &calibrated) == zeroslam_return_failure_invalid_system);
+        REQUIRE(zeroslam_get_camera_calibration(system, 3, nullptr) == zeroslam_return_failure_invalid_argument);
+        REQUIRE(zeroslam_get_camera_calibration(system, 9, &calibrated) == zeroslam_return_failure_invalid_argument);
+        REQUIRE(zeroslam_get_camera_calibration(system, 3, &calibrated) == zeroslam_return_success);
+        REQUIRE(calibration_is_rig());
+
         std::vector<unsigned char> pixels(static_cast<size_t>(width * height));
         zeroslam_sensor_data_struct data{};
         data.sensor_id = 3;
@@ -465,6 +494,10 @@ int main(int argc, char* argv[]) {
         REQUIRE(timestamp == 1000 * frame_count);
 
         REQUIRE(zeroslam_set_sensor_rig(system, &rig, 1) == zeroslam_return_failure_invalid_rig_sensor);
+
+        // With the calibration off it stays the rig's after the frames too.
+        REQUIRE(zeroslam_get_camera_calibration(system, 3, &calibrated) == zeroslam_return_success);
+        REQUIRE(calibration_is_rig());
 
         zeroslam_pose_struct pose{};
         REQUIRE(zeroslam_get_pose(system, &pose) == zeroslam_return_success);

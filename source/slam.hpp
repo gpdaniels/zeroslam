@@ -39,8 +39,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "geometry/triangulation/linear_least_squares.hpp"
 #include "image/image.hpp"
 #include "image/remap.hpp"
+#include "mapping/calibration.hpp"
 #include "mapping/covisibility.hpp"
 #include "mapping/frame.hpp"
+#include "mapping/intrinsics_refinement.hpp"
 #include "mapping/line.hpp"
 #include "mapping/loop_closure.hpp"
 #include "mapping/map.hpp"
@@ -148,6 +150,11 @@ public:
     // The part of the map a frame is in: 0 for the first map and every submap joined to it, the frame's submap otherwise.
     size_t component_of_frame(const int frame_id) const {
         return this->map_component(frame_id);
+    }
+
+    // The calibration of the camera, refined by the adjustments when the configuration asks for it.
+    const mapping::calibration& calibration() const {
+        return this->calibration_;
     }
 
     // The voxel map of the current map component's landmarks, as of the newest keyframe.
@@ -646,6 +653,22 @@ private:
     }
 
     mapping::loop_closure loop_closure_;
+
+    mapping::calibration calibration_;
+
+    // An adjustment of the whole map, which refines the camera when the configuration asks for it and the map can support
+    // it (see mapping::calibration); the frames then hold the refined camera, and the loop closure's keyframes take it too.
+    void optimise_globally(const int rounds) {
+        mapping::calibration::refinement request;
+        const bool refining = mapping::intrinsics_refinement::make_request(this->calibration_, this->reconstruction.frames, this->keyframe_ids_, request);
+        this->reconstruction.optimise(0, false, rounds, true, refining ? &request : nullptr);
+        if (refining && request.refined) {
+            const sensor::model before = this->calibration_.get_camera();
+            this->calibration_.update(request);
+            static_cast<void>(this->loop_closure_.replace_camera(before, this->calibration_.get_camera()));
+        }
+    }
+
     mapping::covisibility covisibility_;
 
     bool close_loop(const int keyframe_id, const mapping::loop_closure::result& loop, std::vector<mapping::loop_closure::record>& records) {
@@ -816,7 +839,7 @@ private:
             this->join_components(moved_keyframe_id, held_keyframe_id);
         }
         this->update_anchored_frames();
-        this->reconstruction.optimise(0, false, 50, true);
+        this->optimise_globally(50);
         this->reanchor_corrected();
         this->update_anchored_frames();
         this->refit_anchored_frames();
@@ -3514,7 +3537,7 @@ public:
             this->relative_graph_.relax(this->reconstruction, 50);
             this->update_anchored_frames();
         }
-        this->reconstruction.optimise(0, false, 200, true);
+        this->optimise_globally(200);
         this->reanchor_corrected();
         this->update_anchored_frames();
         this->refit_anchored_frames();
@@ -3544,7 +3567,9 @@ public:
     }
 
     void process_frame(const sensor::model& camera_intrinsics, const image::image& image_grey) {
-        mapping::frame frame(this->reconstruction.allocate_frame_id(), camera_intrinsics, image_grey, this->frontend);
+        // While the caller gives the camera it gave before, the frame takes the camera as the adjustments have refined it.
+        this->calibration_.set_level(this->frontend.calibration);
+        mapping::frame frame(this->reconstruction.allocate_frame_id(), this->calibration_.camera_for(camera_intrinsics), image_grey, this->frontend);
         if (this->frontend.blur_weighting) {
             this->laplacian_history_.push_back(frame.laplacian_variance);
             if (this->laplacian_history_.size() > slam::blur_history_frames) {
@@ -4325,7 +4350,7 @@ public:
             this->reconstruction.optimise(broad_ba_window, false, 50, true);
             globally_adjusted = (this->frontend.global_adjustment_keyframes > 0) && (this->keyframes_since_global_adjustment_ >= static_cast<size_t>(this->frontend.global_adjustment_keyframes));
             if (globally_adjusted) {
-                this->reconstruction.optimise(0, false, 20, true);
+                this->optimise_globally(20);
                 this->keyframes_since_global_adjustment_ = 0;
             }
         }

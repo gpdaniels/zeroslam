@@ -316,6 +316,12 @@ zeroslam_finalise = _wrap("zeroslam_finalise", [
     _ctypes.POINTER(zeroslam_system)
 ])
 
+zeroslam_get_camera_calibration = _wrap("zeroslam_get_camera_calibration", [
+    _ctypes.POINTER(zeroslam_system),
+    _ctypes.c_int,
+    _ctypes.POINTER(zeroslam_sensor_parameters_camera_model_struct)
+])
+
 zeroslam_get_pose = _wrap("zeroslam_get_pose", [
     _ctypes.POINTER(zeroslam_system),
     _ctypes.POINTER(zeroslam_pose_struct)
@@ -399,6 +405,9 @@ class system:
     def finalise(self):
         return zeroslam_return_enum(zeroslam_finalise(self._handle))
 
+    def get_camera_calibration(self, sensor_id, calibration):
+        return zeroslam_return_enum(zeroslam_get_camera_calibration(self._handle, sensor_id, _ctypes.byref(calibration)))
+
     def get_pose(self, pose):
         return zeroslam_return_enum(zeroslam_get_pose(self._handle, _ctypes.byref(pose)))
 
@@ -449,6 +458,7 @@ __all__ = [
     "zeroslam_set_sensor_rig",
     "zeroslam_set_sensor_data",
     "zeroslam_finalise",
+    "zeroslam_get_camera_calibration",
     "zeroslam_get_pose",
     "zeroslam_get_pose_at_timestamp",
     "zeroslam_get_map_chunk",

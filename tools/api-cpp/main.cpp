@@ -137,6 +137,18 @@ int main(int argc, char* argv[]) {
     REQUIRE(timestamp == 1000000000ll + (frame_interval * (frame_count - 1)));
 
     {
+        // The camera's calibration as the system holds it: the rig's, as the calibration key is off.
+        zeroslam_sensor_parameters_camera_model_struct calibration{};
+        result = system.get_camera_calibration(sensor_id, &calibration);
+        std::printf("get_camera_calibration: %s (%s, fx %.3f, fy %.3f, cx %.3f, cy %.3f)\n", zeroslam_return_enum_to_string(result), zeroslam_camera_model_enum_to_string(calibration.model), calibration.parameters[0], calibration.parameters[1], calibration.parameters[2], calibration.parameters[3]);
+        REQUIRE(result == zeroslam_return_success);
+        REQUIRE(calibration.parameters_length == 12);
+        REQUIRE(calibration.parameters[0] == camera_parameters.focal_x);
+        REQUIRE(calibration.parameters[3] == camera_parameters.centre_y);
+        REQUIRE(system.get_camera_calibration(sensor_id + 1, &calibration) == zeroslam_return_failure_invalid_argument);
+    }
+
+    {
         zeroslam_pose_struct pose{};
         result = system.get_pose(&pose);
         std::printf("get_pose: %s\n", zeroslam_return_enum_to_string(result));

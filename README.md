@@ -92,7 +92,7 @@ The `tools/api-c`, `tools/api-cpp` and `tools/api-python` demonstrations walk th
 1. `zeroslam_create` a system, and optionally `zeroslam_set_configuration` it (see "Configuration").
 2. `zeroslam_set_sensor_rig`, before any data, with exactly one `zeroslam_sensor_camera` entry (the system is monocular, and the other sensor types are rejected): a non-zero id and either a `zeroslam_sensor_parameters_camera_struct` of the image size, the focal lengths, the principal point in the pixel-centre frame (see "Pixel coordinates"), and the distortion `[k1 k2 p1 p2 k3 k4 k5 k6]` (zeros for an undistorted pinhole), or a `zeroslam_sensor_parameters_camera_model_struct` of the image size, a `zeroslam_camera_model_enum` and that model's parameters (see "Camera models"). The entry's `parameters_length` is the size of the struct it points to, which tells the two apart.
 3. `zeroslam_set_sensor_data` with each frame: the camera's id, a nanosecond timestamp that increases strictly from frame to frame, and `width * height` bytes of row major 8 bit greyscale pixels. A batch is validated whole before any of it is processed.
-4. `zeroslam_get_pose` (the newest posed frame) or `zeroslam_get_pose_at_timestamp` (the frame with exactly that timestamp) at any time, and `zeroslam_finalise` at the end of a run for a last global adjustment. Poses follow "Coordinate conventions": frames before initialisation completes, and frames dropped while tracking was lost, have no pose, and the covariance is not estimated yet (it is zero).
+4. `zeroslam_get_pose` (the newest posed frame) or `zeroslam_get_pose_at_timestamp` (the frame with exactly that timestamp) at any time, and `zeroslam_finalise` at the end of a run for a last global adjustment. `zeroslam_get_camera_calibration` gives a camera's calibration as the system holds it, in a `zeroslam_sensor_parameters_camera_model_struct` of the rig's model: the rig's, refined when the `calibration` key asks for it (see "Calibrating the camera"). Poses follow "Coordinate conventions": frames before initialisation completes, and frames dropped while tracking was lost, have no pose, and the covariance is not estimated yet (it is zero).
 5. `zeroslam_get_map_chunk` (every landmark, the position arguments are not used yet), `zeroslam_get_map_lines`, `zeroslam_get_map_keyframes`, `zeroslam_get_map_edges` (the covisibility and loop edges between keyframes, by timestamp) and `zeroslam_get_map_voxels` (the voxel map of the current map's landmarks as of the newest keyframe: the voxel size, and each occupied voxel's lowest corner and landmark count) export the map.
 6. `zeroslam_destroy` the system.
 
@@ -167,6 +167,23 @@ The `process` and `regression` tools pass any setting through with `--config key
 | `wavelet_seed` | `klt_fallback` | Start the wavelet flow at `rest`, from the `klt` flow, or from the klt flow and fall back to it where the wavelet flow fails (`klt_fallback`). |
 | `solver` | `dense_schur` | The bundle adjustment's linear solver: `dense_schur`, `square_root` (landmarks eliminated by QR), or `automatic` (square root once there are enough poses). Graphs the square root solver cannot take fall back to the dense one. |
 | `solver_precision` | `double` | The linear solver's precision, `double` or `single`. |
+| `calibration` | `off` | Refine the camera's calibration in the adjustments of the whole map, see "Calibrating the camera": `focal` the focal lengths, `focal_centre` and the principal point, `intrinsics` and the leading distortion terms (`k1 k2 p1 p2`), `all` every parameter, each on its own. |
+
+### Calibrating the camera ###
+
+With `calibration` other than `off` the camera's intrinsics are a variable of the adjustments of the whole map (every `global_adjustment` keyframes, at each loop closure and in `zeroslam_finalise`): one vertex shared by every frame taken with the camera, solved with the poses and landmarks by either solver.
+The frames processed after an adjustment take the refined camera, as do the frames already in the map, the tracking, the matching and the loop closure, while the caller keeps giving the calibration it started with; a different calibration given with a frame starts the calibration again from it.
+The line observations (`lines=on`) take part as the points do; the window adjustments and the pose adjustments hold the camera as it was last refined, as does `adjustment=relative` until `zeroslam_finalise`.
+
+Which parameters are refined follows what the camera model says each one is (a focal length, the principal point, the leading or the higher order distortion), so any model that says so can be refined; one that does not can only be refined `all`.
+Below `all` the two focal lengths keep their ratio, the pixels' aspect ratio, which is the sensor's: a camera moving in a plane, as a vehicle does, observes the focal length along the plane and leaves the other free to stretch the scene across it.
+Each refined parameter has a Gaussian prior on the given calibration, a tenth of the focal length on a focal length, a twentieth of it on the principal point, 0.1 on the leading distortion terms and 0.01 on the higher order ones, wide enough for the observations to decide what they observe and holding what they hardly do.
+A monocular map does not observe the focal length until the camera has turned: from a translation alone a shallow scene stretched along the view, seen with the focal length stretched as much, gives the same images.
+The refinement therefore starts at the first adjustment of the whole map with at least 10 keyframes, one of whose optical axes is at least 10 degrees from their mean.
+
+Run from focal lengths 5% and 10% too long (`zeroslam process --focal-scale 1.05`), `calibration=focal_centre` took the absolute trajectory error of EuRoC MH_01 from 6.5 and 15.4 cm back to 1.7 cm, what the given calibration gives, the focal length coming to 463 px from 482 and 505 px as from the given 459 px; TUM fr1_desk went from 2.1 and 2.4 cm to 2.0 and 1.9 cm, and fr1_xyz from 1.4 and 1.9 cm to 1.2 cm, against 2.3 and 1.1 cm with the published calibration.
+A monocular estimate of a focal length is good to a few percent, not to a checkerboard's accuracy: from every start the refinement reached the same value within a pixel or two on each sequence, 463 px on MH_01 for the 459 px of its calibration, and 536 to 541 px on fr1_desk and 526 to 529 px on fr1_xyz for the 517 px published for that camera.
+Started from the published calibration, it left fr1_desk at 1.9 cm, fr1_xyz at 1.2 cm and MH_01 at 1.7 cm.
 
 ## Scene format ##
 
@@ -264,7 +281,8 @@ cmake --build . --parallel 4
 ./runtime/Release/zeroslam process ../datasets/tum-rgbd/fr1_xyz.mcap --config descriptor=teblid --config lines=on
 ```
 
-The options are `--frames [count]` (the first frames only), `--skip [count]` (ignore the first frames), `--verbose [0-5]` (the log level, default `1`), `--truth [trajectory.txt]` (end with the absolute, relative and per metre errors against a TUM trajectory), `--live` (skip the final global adjustment, so the trajectory is the one tracked live) and `--config key=value` (repeatable).
+The options are `--frames [count]` (the first frames only), `--skip [count]` (ignore the first frames), `--verbose [0-5]` (the log level, default `1`), `--truth [trajectory.txt]` (end with the absolute, relative and per metre errors against a TUM trajectory), `--live` (skip the final global adjustment, so the trajectory is the one tracked live), `--focal-scale [factor]` (scale the scene's focal lengths, to run from a wrong calibration) and `--config key=value` (repeatable).
+The run ends by printing the camera's calibration as the system holds it (`Calibration: [model] fx ... fy ... cx ... cy ...` and the rest of its parameters), the scene's unless `--config calibration=...` refined it.
 
 ## Evaluating a trajectory ##
 

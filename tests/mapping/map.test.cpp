@@ -17,9 +17,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "mapping/map.hpp"
 
 #include "geometry/plucker.hpp"
+#include "mapping/calibration.hpp"
 #include "mapping/line.hpp"
 #include "math/lie.hpp"
 #include "sensor/camera.hpp"
+#include "sensor/camera/pinhole_radial_tangential.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -367,6 +369,103 @@ int main(int argc, char* argv[]) {
             }
         }
         REQUIRE(remaining_observations == observations);
+    }
+
+    {
+        // An adjustment asked to refine the camera recovers its focal lengths and principal point from a map built with
+        // wrong ones, every frame taken with that camera takes the refined one, inside the adjustment or not, and a frame
+        // with another camera keeps its own.
+        const double truth_parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = { 500.0, 502.0, 320.0, 240.0, -0.05, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        const double wrong_parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = { 530.0, 532.0, 326.0, 235.0, -0.05, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        const double other_parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = { 420.0, 420.0, 330.0, 245.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        const sensor::model truth(sensor::camera::pinhole_radial_tangential<double>(&truth_parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
+        const sensor::model wrong(sensor::camera::pinhole_radial_tangential<double>(&wrong_parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
+        const sensor::model other(sensor::camera::pinhole_radial_tangential<double>(&other_parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
+        constexpr static const int frame_count = 12;
+        constexpr static const int landmark_count = 150;
+        const math::matrix<double, 3, 1> target({ 0.0, 0.0, 6.0 });
+        mapping::map m;
+        for (int frame_id = 0; frame_id <= frame_count; ++frame_id) {
+            const double phase = static_cast<double>(frame_id) / static_cast<double>(frame_count);
+            const math::so3<double> turn = math::so3<double>::exp({ { 0.25 * std::sin(6.0 * phase), -0.5 + phase, 0.4 * std::cos(5.0 * phase) } });
+            const math::matrix<double, 3, 1> centre = target - (turn.get_matrix() * math::matrix<double, 3, 1>({ 0.0, 0.0, 5.0 }));
+            mapping::frame f;
+            f.id = frame_id;
+            f.camera = (frame_id == frame_count) ? other : wrong;
+            f.rotation = math::transpose(turn.get_matrix());
+            f.translation = -(f.rotation * centre);
+            m.add_frame(f);
+        }
+        m.next_frame_id = frame_count + 1;
+        // A frame of the same camera that the adjustment does not hold, as a frame that is not a keyframe.
+        mapping::frame unobserved;
+        unobserved.id = frame_count + 1;
+        unobserved.camera = wrong;
+        m.add_frame(unobserved);
+        m.next_frame_id = frame_count + 2;
+        unsigned int state = 98765u;
+        const auto uniform = [&state]() {
+            state = (state * 1664525u) + 1013904223u;
+            return static_cast<double>(state >> 8) / static_cast<double>(1u << 24);
+        };
+        for (int landmark_id = 0; landmark_id < landmark_count; ++landmark_id) {
+            const math::matrix<double, 3, 1> location = target + math::matrix<double, 3, 1>({ -2.5 + (5.0 * uniform()), -2.0 + (4.0 * uniform()), -2.0 + (4.0 * uniform()) });
+            const mapping::point landmark(landmark_id, location + math::matrix<double, 3, 1>({ 0.04 * (uniform() - 0.5), 0.04 * (uniform() - 0.5), 0.04 * (uniform() - 0.5) }), math::matrix<double, 3, 1>::zero());
+            m.add_landmark(landmark);
+            for (int frame_id = 0; frame_id <= frame_count; ++frame_id) {
+                const mapping::frame& f = m.frames.at(frame_id);
+                const math::matrix<double, 3, 1> in_camera = (f.rotation * location) + f.translation;
+                double pixel[2] = {};
+                const sensor::model& seen_with = (frame_id == frame_count) ? other : truth;
+                if (seen_with.project(in_camera.data(), &pixel[0]) && (pixel[0] > 0.0) && (pixel[0] < 640.0) && (pixel[1] > 0.0) && (pixel[1] < 480.0)) {
+                    m.add_observation(frame_id, landmark, pixel[0], pixel[1]);
+                }
+            }
+        }
+
+        mapping::calibration calibration;
+        calibration.set_level(mapping::calibration::level::focal_centre);
+        static_cast<void>(calibration.camera_for(wrong));
+        mapping::calibration::refinement request;
+        REQUIRE(calibration.make_refinement(request));
+        m.optimise(0, false, 50, true, &request);
+        REQUIRE(request.refined);
+        REQUIRE(request.parameters.size() == sensor::camera::pinhole_radial_tangential<double>::parameter_count);
+        REQUIRE(std::abs(request.parameters[0] - 500.0) < 1.0);
+        REQUIRE(std::abs(request.parameters[1] - 502.0) < 1.0);
+        REQUIRE(std::abs(request.parameters[2] - 320.0) < 1.0);
+        REQUIRE(std::abs(request.parameters[3] - 240.0) < 1.0);
+        for (size_t index = 4; index < sensor::camera::pinhole_radial_tangential<double>::parameter_count; ++index) {
+            REQUIRE(request.parameters[index] == wrong_parameters[index]);
+        }
+        for (const int frame_id : { 0, 3, frame_count - 1, frame_count + 1 }) {
+            double parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = {};
+            REQUIRE(m.frames.at(frame_id).camera.get_parameters(&parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
+            for (size_t index = 0; index < sensor::camera::pinhole_radial_tangential<double>::parameter_count; ++index) {
+                REQUIRE(parameters[index] == request.parameters[index]);
+            }
+        }
+        double kept[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = {};
+        REQUIRE(m.frames.at(frame_count).camera.get_parameters(&kept[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
+        for (size_t index = 0; index < sensor::camera::pinhole_radial_tangential<double>::parameter_count; ++index) {
+            REQUIRE(kept[index] == other_parameters[index]);
+        }
+        // The observations fit through the refined camera.
+        for (const auto& [landmark_id, landmark_observations] : m.observations) {
+            for (const mapping::map::observation& obs : landmark_observations) {
+                math::matrix<double, 2, 1> projected;
+                REQUIRE(mapping::map::project_landmark(m.frames.at(obs.frame_id), m.landmarks.at(landmark_id), projected));
+                REQUIRE((projected - obs.point).get_length_squared() < 1.0e-2);
+            }
+        }
+        calibration.update(request);
+        REQUIRE(calibration.get_refinements() == 1);
+
+        // Without a request, or with the landmarks fixed, the adjustment leaves the camera alone.
+        mapping::calibration::refinement unused;
+        REQUIRE(calibration.make_refinement(unused));
+        m.optimise(1, true, 10, false, &unused);
+        REQUIRE(!unused.refined);
     }
 
     return EXIT_SUCCESS;
