@@ -37,6 +37,9 @@ namespace {
 }
 
 namespace optimisation {
+    // The rows of one landmark's observations for the square root solver: per observation two whitened rows, holding the
+    // jacobians by the general blocks it sees (poses, and any block shared between observations such as a camera's
+    // intrinsics), by the landmark, and the residual. Each general block is a slot of columns, in the order of its offset.
     template <typename type>
     class landmark_block final {
     private:
@@ -45,6 +48,8 @@ namespace optimisation {
         std::vector<type> triangular_solution;
         std::vector<type> scratch;
         std::vector<int> pose_offsets;
+        std::vector<int> block_dimensions;
+        std::vector<int> block_columns;
         int landmark_offset = 0;
         int observation_rows = 0;
         int total_rows = 0;
@@ -57,6 +62,7 @@ namespace optimisation {
         bool damped = false;
 
     public:
+        // A block whose general blocks are all poses of six dimensions.
         void configure(
             const int observation_count,
             const int dimension,
@@ -65,19 +71,40 @@ namespace optimisation {
             const int* pose_offset_values,
             const int pose_count
         ) {
+            const std::vector<int> dimensions(static_cast<size_t>(pose_count), 6);
+            this->configure(observation_count, dimension, landmark_is_free, landmark_offset_value, pose_offset_values, dimensions.data(), pose_count);
+        }
+
+        void configure(
+            const int observation_count,
+            const int dimension,
+            const bool landmark_is_free,
+            const int landmark_offset_value,
+            const int* pose_offset_values,
+            const int* block_dimension_values,
+            const int pose_count
+        ) {
             ASSERT(observation_count > 0, "A landmark block needs at least one observation.");
             ASSERT(pose_count >= 0, "A landmark block cannot have a negative pose count.");
             ASSERT(dimension > 0, "A landmark block needs a positive landmark dimension.");
+            this->pose_offsets.assign(pose_offset_values, pose_offset_values + pose_count);
+            this->block_dimensions.assign(block_dimension_values, block_dimension_values + pose_count);
+            this->block_columns.assign(static_cast<size_t>(pose_count), 0);
+            int columns = 0;
+            for (int slot = 0; slot < pose_count; ++slot) {
+                ASSERT(block_dimension_values[slot] > 0, "A general block needs a positive dimension.");
+                this->block_columns[static_cast<size_t>(slot)] = columns;
+                columns += block_dimension_values[slot];
+            }
             this->observation_rows = 2 * observation_count;
             this->landmark_dimension = dimension;
             this->landmark_cols = landmark_is_free ? dimension : 0;
             this->reduced_row = landmark_is_free ? dimension : 0;
             this->total_rows = this->observation_rows + (landmark_is_free ? dimension : 0);
-            this->landmark_col = 6 * pose_count;
+            this->landmark_col = columns;
             this->residual_col = this->landmark_col + this->landmark_cols;
             this->total_cols = this->residual_col + 1;
             this->landmark_offset = landmark_offset_value;
-            this->pose_offsets.assign(pose_offset_values, pose_offset_values + pose_count);
             this->storage.assign(static_cast<size_t>(this->total_rows) * static_cast<size_t>(this->total_cols), static_cast<type>(0));
             this->undamped_head.assign(static_cast<size_t>(this->landmark_cols) * static_cast<size_t>(this->total_cols), static_cast<type>(0));
             this->triangular_solution.assign(static_cast<size_t>(this->landmark_cols), static_cast<type>(0));
@@ -118,7 +145,12 @@ namespace optimisation {
             return this->storage.data() + (static_cast<size_t>(index) * static_cast<size_t>(this->total_cols));
         }
 
+        int get_block_dimension(const int slot) const {
+            return this->block_dimensions[static_cast<size_t>(slot)];
+        }
+
     public:
+        // An observation of at most one general block, its two by dimensions jacobian row major.
         void set_observation(
             const int observation_slot,
             const int pose_slot,
@@ -127,13 +159,31 @@ namespace optimisation {
             const type* residual,
             const type* whitening
         ) {
+            const type* const jacobians[1] = { jacobian_pose };
+            this->set_observation(observation_slot, &pose_slot, &jacobians[0], (pose_slot >= 0) ? 1 : 0, jacobian_landmark, residual, whitening);
+        }
+
+        // An observation of any of the general blocks, each of the slots given with its two by dimensions jacobian.
+        void set_observation(
+            const int observation_slot,
+            const int* block_slots,
+            const type* const* block_jacobians,
+            const int block_count,
+            const type* jacobian_landmark,
+            const type* residual,
+            const type* whitening
+        ) {
             ASSERT((observation_slot >= 0) && ((2 * observation_slot) + 1 < this->observation_rows), "Observation slot out of bounds.");
-            ASSERT(pose_slot < static_cast<int>(this->pose_offsets.size()), "Pose slot out of bounds.");
             for (int r = 0; r < 2; ++r) {
                 type* const target = this->storage.data() + (static_cast<size_t>((2 * observation_slot) + r) * static_cast<size_t>(this->total_cols));
-                if (pose_slot >= 0) {
-                    for (int c = 0; c < 6; ++c) {
-                        target[(6 * pose_slot) + c] = (whitening[(2 * r) + 0] * jacobian_pose[c]) + (whitening[(2 * r) + 1] * jacobian_pose[6 + c]);
+                for (int block = 0; block < block_count; ++block) {
+                    const int slot = block_slots[block];
+                    ASSERT((slot >= 0) && (slot < static_cast<int>(this->pose_offsets.size())), "Pose slot out of bounds.");
+                    const int columns = this->block_dimensions[static_cast<size_t>(slot)];
+                    const type* const jacobian = block_jacobians[block];
+                    type* const destination = target + this->block_columns[static_cast<size_t>(slot)];
+                    for (int c = 0; c < columns; ++c) {
+                        destination[c] = (whitening[(2 * r) + 0] * jacobian[c]) + (whitening[(2 * r) + 1] * jacobian[columns + c]);
                     }
                 }
                 if (this->landmark_cols > 0) {
@@ -152,8 +202,10 @@ namespace optimisation {
             ASSERT((pose_slot >= 0) && (pose_slot < static_cast<int>(this->pose_offsets.size())), "Pose slot out of bounds.");
             for (int r = 0; r < 2; ++r) {
                 type* const target = this->storage.data() + (static_cast<size_t>((2 * observation_slot) + r) * static_cast<size_t>(this->total_cols));
-                for (int c = 0; c < 6; ++c) {
-                    target[(6 * pose_slot) + c] = (whitening[(2 * r) + 0] * jacobian_pose[c]) + (whitening[(2 * r) + 1] * jacobian_pose[6 + c]);
+                const int columns = this->block_dimensions[static_cast<size_t>(pose_slot)];
+                type* const destination = target + this->block_columns[static_cast<size_t>(pose_slot)];
+                for (int c = 0; c < columns; ++c) {
+                    destination[c] = (whitening[(2 * r) + 0] * jacobian_pose[c]) + (whitening[(2 * r) + 1] * jacobian_pose[columns + c]);
                 }
             }
         }
@@ -170,11 +222,12 @@ namespace optimisation {
 
         template <typename output_type>
         void accumulate_gradient_slot(const int slot, output_type* target) const {
+            const int columns = this->block_dimensions[static_cast<size_t>(slot)];
             for (int r = 0; r < this->observation_rows; ++r) {
                 const type* const source = this->row(r);
                 const type residual = source[this->residual_col];
-                const type* const jacobian = source + (6 * slot);
-                for (int c = 0; c < 6; ++c) {
+                const type* const jacobian = source + this->block_columns[static_cast<size_t>(slot)];
+                for (int c = 0; c < columns; ++c) {
                     target[c] -= static_cast<output_type>(jacobian[c] * residual);
                 }
             }
@@ -204,9 +257,10 @@ namespace optimisation {
 
         template <typename output_type>
         void accumulate_hessian_diagonal_slot(const int slot, output_type* target) const {
+            const int columns = this->block_dimensions[static_cast<size_t>(slot)];
             for (int r = 0; r < this->observation_rows; ++r) {
-                const type* const jacobian = this->row(r) + (6 * slot);
-                for (int c = 0; c < 6; ++c) {
+                const type* const jacobian = this->row(r) + this->block_columns[static_cast<size_t>(slot)];
+                for (int c = 0; c < columns; ++c) {
                     target[c] += static_cast<output_type>(jacobian[c] * jacobian[c]);
                 }
             }
@@ -228,8 +282,8 @@ namespace optimisation {
                 type* const target = this->storage.data() + (static_cast<size_t>(r) * static_cast<size_t>(this->total_cols));
                 for (size_t slot = 0; slot < this->pose_offsets.size(); ++slot) {
                     const input_type* const scale = column_scale + this->pose_offsets[slot];
-                    type* const jacobian = target + (6 * static_cast<int>(slot));
-                    for (int c = 0; c < 6; ++c) {
+                    type* const jacobian = target + this->block_columns[slot];
+                    for (int c = 0; c < this->block_dimensions[slot]; ++c) {
                         jacobian[c] *= static_cast<type>(scale[c]);
                     }
                 }
@@ -359,8 +413,8 @@ namespace optimisation {
             type* const image = gathered + pose_columns;
             type* const output = image + reduced;
             for (size_t slot = 0; slot < this->pose_offsets.size(); ++slot) {
-                for (int c = 0; c < 6; ++c) {
-                    gathered[(6 * static_cast<int>(slot)) + c] = column_x[this->pose_offsets[slot] + c];
+                for (int c = 0; c < this->block_dimensions[slot]; ++c) {
+                    gathered[this->block_columns[slot] + c] = column_x[this->pose_offsets[slot] + c];
                 }
             }
             for (int c = 0; c < pose_columns; ++c) {
@@ -381,8 +435,8 @@ namespace optimisation {
         }
 
         void add_operator_slot(const int slot, type* target) const {
-            const type* const output = this->scratch.data() + this->landmark_col + this->reduced_rows() + (6 * slot);
-            for (int c = 0; c < 6; ++c) {
+            const type* const output = this->scratch.data() + this->landmark_col + this->reduced_rows() + this->block_columns[static_cast<size_t>(slot)];
+            for (int c = 0; c < this->block_dimensions[static_cast<size_t>(slot)]; ++c) {
                 target[c] += output[c];
             }
         }
@@ -398,32 +452,36 @@ namespace optimisation {
             if ((reduced <= 0) || (this->landmark_col == 0)) {
                 return;
             }
+            const int columns = this->block_dimensions[static_cast<size_t>(slot)];
             for (int r = 0; r < reduced; ++r) {
                 const type* const source = this->row(this->reduced_row + r);
                 const type residual = source[this->residual_col];
-                const type* const jacobian = source + (6 * slot);
-                for (int c = 0; c < 6; ++c) {
+                const type* const jacobian = source + this->block_columns[static_cast<size_t>(slot)];
+                for (int c = 0; c < columns; ++c) {
                     target[c] -= jacobian[c] * residual;
                 }
             }
         }
 
+        // Every slot's block of the reduced diagonal into blocks of six by six by pose, for a block of poses only.
         void add_reduced_diagonal_blocks(type* blocks) const {
             for (size_t slot = 0; slot < this->pose_offsets.size(); ++slot) {
                 this->add_reduced_diagonal_slot(static_cast<int>(slot), blocks + (static_cast<size_t>(this->pose_offsets[slot] / 6) * 36u));
             }
         }
 
+        // The slot's block of the reduced diagonal, dimensions by dimensions row major.
         void add_reduced_diagonal_slot(const int slot, type* block) const {
             const int reduced = this->reduced_rows();
             if ((reduced <= 0) || (this->landmark_col == 0)) {
                 return;
             }
+            const int columns = this->block_dimensions[static_cast<size_t>(slot)];
             for (int r = 0; r < reduced; ++r) {
-                const type* const jacobian = this->row(this->reduced_row + r) + (6 * slot);
-                for (int i = 0; i < 6; ++i) {
-                    for (int j = 0; j < 6; ++j) {
-                        block[(6 * i) + j] += jacobian[i] * jacobian[j];
+                const type* const jacobian = this->row(this->reduced_row + r) + this->block_columns[static_cast<size_t>(slot)];
+                for (int i = 0; i < columns; ++i) {
+                    for (int j = 0; j < columns; ++j) {
+                        block[(columns * i) + j] += jacobian[i] * jacobian[j];
                     }
                 }
             }
@@ -446,9 +504,9 @@ namespace optimisation {
                 const type* const source = this->row(r);
                 type sum = source[this->residual_col];
                 for (size_t slot = 0; slot < this->pose_offsets.size(); ++slot) {
-                    const type* const jacobian = source + (6 * static_cast<int>(slot));
+                    const type* const jacobian = source + this->block_columns[slot];
                     const type* const increment = column_x + this->pose_offsets[slot];
-                    for (int c = 0; c < 6; ++c) {
+                    for (int c = 0; c < this->block_dimensions[slot]; ++c) {
                         sum += jacobian[c] * increment[c];
                     }
                 }

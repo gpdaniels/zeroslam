@@ -773,11 +773,33 @@ int main(int argc, char* argv[]) {
         REQUIRE(large.graph.solve(3, true));
         REQUIRE(large.graph.get_diagnostics().used_square_root);
         REQUIRE(large.graph.get_diagnostics().landmark_blocks == 10);
+        // A general block of other than six dimensions, here a similarity's seven, is solved by the square root path too, to
+        // the step the dense solve takes.
         problem mixed;
         build_problem(mixed, rng, 4, 10, false, true);
+        mixed.graph.set_conjugate_gradient_tolerance(1e-14);
+        mixed.graph.set_conjugate_gradient_iteration_limit(100000);
+        for (const double lambda : { 1e-6, 1e-2, 1.0 }) {
+            math::matrix<double, 0, 0> step_dense;
+            mixed.graph.set_strategy(optimisation::factor_graph::strategy::dense_schur);
+            REQUIRE(mixed.graph.compute_damped_step(lambda, step_dense));
+            REQUIRE(!mixed.graph.get_diagnostics().used_square_root);
+            math::matrix<double, 0, 0> step_square_root;
+            mixed.graph.set_strategy(optimisation::factor_graph::strategy::square_root);
+            REQUIRE(mixed.graph.compute_damped_step(lambda, step_square_root));
+            REQUIRE(mixed.graph.get_diagnostics().used_square_root);
+            REQUIRE(step_dense.rows() == step_square_root.rows());
+            double largest = 0.0;
+            for (size_t i = 0; i < step_dense.rows(); ++i) {
+                largest = std::max(largest, std::abs(step_dense[i][0]));
+            }
+            for (size_t i = 0; i < step_dense.rows(); ++i) {
+                REQUIRE(std::abs(step_dense[i][0] - step_square_root[i][0]) < 1e-7 * largest);
+            }
+        }
         mixed.graph.set_strategy(optimisation::factor_graph::strategy::square_root);
         REQUIRE(mixed.graph.solve(3, true));
-        REQUIRE(!mixed.graph.get_diagnostics().used_square_root);
+        REQUIRE(mixed.graph.get_diagnostics().used_square_root);
     }
 
     {

@@ -23,6 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -599,6 +600,137 @@ int main(int argc, char* argv[]) {
                 REQUIRE(row[18 + c] == 2.0 * jacobian_landmark[(3 * r) + c]);
             }
             REQUIRE(row[21] == 2.0 * residual[r]);
+        }
+    }
+
+    {
+        // General blocks of different sizes, a pose of six and a block of four that every observation sees as well, such as a
+        // camera's intrinsics: the gradient and the reduced system over their columns are those of the whole jacobian with
+        // the landmark eliminated, J_g^T J_g - J_g^T J_l (J_l^T J_l)^-1 J_l^T J_g.
+        const int observations = 7;
+        const int offsets[3] = { 0, 6, 12 };
+        const int dimensions[3] = { 6, 6, 4 };
+        const int columns = 16;
+        std::vector<double> whole(static_cast<size_t>(2 * observations * (columns + 3)), 0.0);
+        std::vector<double> residuals(static_cast<size_t>(2 * observations), 0.0);
+        optimisation::landmark_block<double> block;
+        block.configure(observations, 3, true, columns, &offsets[0], &dimensions[0], 3);
+        REQUIRE(block.pose_count() == 3);
+        REQUIRE(block.get_block_dimension(2) == 4);
+        REQUIRE(block.cols() == columns + 3 + 1);
+        const double identity[4] = { 1.0, 0.0, 0.0, 1.0 };
+        for (int i = 0; i < observations; ++i) {
+            double pose[12] = {};
+            double shared[8] = {};
+            double landmark[6] = {};
+            double residual[2] = {};
+            for (double& value : pose) {
+                value = random_signed(rng);
+            }
+            for (double& value : shared) {
+                value = random_signed(rng);
+            }
+            for (double& value : landmark) {
+                value = random_signed(rng);
+            }
+            for (double& value : residual) {
+                value = random_signed(rng);
+            }
+            const int pose_slot = i % 2;
+            const int slots[2] = { pose_slot, 2 };
+            const double* const jacobians[2] = { &pose[0], &shared[0] };
+            block.set_observation(i, &slots[0], &jacobians[0], 2, &landmark[0], &residual[0], &identity[0]);
+            for (int r = 0; r < 2; ++r) {
+                double* const row = whole.data() + (static_cast<size_t>((2 * i) + r) * static_cast<size_t>(columns + 3));
+                for (int c = 0; c < 6; ++c) {
+                    row[(6 * pose_slot) + c] = pose[(6 * r) + c];
+                }
+                for (int c = 0; c < 4; ++c) {
+                    row[12 + c] = shared[(4 * r) + c];
+                }
+                for (int c = 0; c < 3; ++c) {
+                    row[columns + c] = landmark[(3 * r) + c];
+                }
+                residuals[static_cast<size_t>((2 * i) + r)] = residual[r];
+            }
+        }
+        std::vector<double> gradient(static_cast<size_t>(columns), 0.0);
+        for (int slot = 0; slot < 3; ++slot) {
+            block.accumulate_gradient_slot(slot, gradient.data() + offsets[slot]);
+        }
+        for (int c = 0; c < columns; ++c) {
+            double expected = 0.0;
+            for (int r = 0; r < 2 * observations; ++r) {
+                expected -= whole[(static_cast<size_t>(r) * static_cast<size_t>(columns + 3)) + static_cast<size_t>(c)] * residuals[static_cast<size_t>(r)];
+            }
+            REQUIRE(is_value_approx(gradient[static_cast<size_t>(c)], expected, 1e-12));
+        }
+        // The dense Schur complement onto the general columns.
+        const auto entry = [&whole, columns](const int r, const int c) {
+            return whole[(static_cast<size_t>(r) * static_cast<size_t>(columns + 3)) + static_cast<size_t>(c)];
+        };
+        math::matrix<double, 3, 3> landmark_hessian = math::matrix<double, 3, 3>::zero();
+        for (int a = 0; a < 3; ++a) {
+            for (int b = 0; b < 3; ++b) {
+                for (int r = 0; r < 2 * observations; ++r) {
+                    landmark_hessian[static_cast<size_t>(a)][static_cast<size_t>(b)] += entry(r, columns + a) * entry(r, columns + b);
+                }
+            }
+        }
+        math::matrix<double, 3, 3> landmark_inverse;
+        REQUIRE(math::invert(landmark_hessian, landmark_inverse));
+        std::vector<double> schur(static_cast<size_t>(columns * columns), 0.0);
+        for (int a = 0; a < columns; ++a) {
+            for (int b = 0; b < columns; ++b) {
+                double direct = 0.0;
+                for (int r = 0; r < 2 * observations; ++r) {
+                    direct += entry(r, a) * entry(r, b);
+                }
+                double coupled = 0.0;
+                for (int k = 0; k < 3; ++k) {
+                    for (int m = 0; m < 3; ++m) {
+                        double left = 0.0;
+                        double right = 0.0;
+                        for (int r = 0; r < 2 * observations; ++r) {
+                            left += entry(r, a) * entry(r, columns + k);
+                            right += entry(r, columns + m) * entry(r, b);
+                        }
+                        coupled += left * landmark_inverse[static_cast<size_t>(k)][static_cast<size_t>(m)] * right;
+                    }
+                }
+                schur[static_cast<size_t>((a * columns) + b)] = direct - coupled;
+            }
+        }
+        block.perform_qr();
+        block.set_damping(0.0);
+        std::vector<double> input(static_cast<size_t>(columns), 0.0);
+        for (double& value : input) {
+            value = random_signed(rng);
+        }
+        std::vector<double> image(static_cast<size_t>(columns), 0.0);
+        block.add_operator_product(input.data(), image.data());
+        double largest = 0.0;
+        for (const double value : schur) {
+            largest = std::max(largest, std::abs(value));
+        }
+        for (int a = 0; a < columns; ++a) {
+            double expected = 0.0;
+            for (int b = 0; b < columns; ++b) {
+                expected += schur[static_cast<size_t>((a * columns) + b)] * input[static_cast<size_t>(b)];
+            }
+            REQUIRE(std::abs(image[static_cast<size_t>(a)] - expected) < 1e-10 * largest * static_cast<double>(columns));
+        }
+        // Each slot's block of the reduced diagonal, as many rows and columns as the slot has.
+        for (int slot = 0; slot < 3; ++slot) {
+            const int size = dimensions[slot];
+            std::vector<double> diagonal(static_cast<size_t>(size * size), 0.0);
+            block.add_reduced_diagonal_slot(slot, diagonal.data());
+            for (int a = 0; a < size; ++a) {
+                for (int b = 0; b < size; ++b) {
+                    const double expected = schur[static_cast<size_t>(((offsets[slot] + a) * columns) + offsets[slot] + b)];
+                    REQUIRE(std::abs(diagonal[static_cast<size_t>((a * size) + b)] - expected) < 1e-10 * largest);
+                }
+            }
         }
     }
 

@@ -467,30 +467,34 @@ namespace optimisation {
                 return false;
             }
         }
-        for (const vertex* node : this->vertices_general) {
-            if (!node->is_fixed() && (node->get_local_dimensions() != 6)) {
-                return false;
-            }
-        }
+        // An edge of a landmark may see a pose and blocks shared between frames, each a different vertex, with two residuals.
         for (const edge* factor : this->edges) {
             int marginalised_count = 0;
-            int general_count = 0;
+            size_t general_count = 0;
             int marginalised_dimensions = 0;
-            for (const vertex* node : factor->get_vertices()) {
+            bool repeated = false;
+            const std::vector<vertex*>& edge_vertices = factor->get_vertices();
+            for (size_t slot = 0; slot < edge_vertices.size(); ++slot) {
+                const vertex* const node = edge_vertices[slot];
                 if (node->is_marginalised()) {
                     ++marginalised_count;
                     marginalised_dimensions = node->get_local_dimensions();
+                    continue;
                 }
-                else if (!node->is_fixed()) {
-                    ++general_count;
+                if (node->is_fixed()) {
+                    continue;
+                }
+                ++general_count;
+                for (size_t other = 0; other < slot; ++other) {
+                    repeated = repeated || (edge_vertices[other] == node);
                 }
             }
             if (marginalised_count == 0) {
                 continue;
             }
-            // A landmark edge may hold several general vertices, a rig camera's the rig's pose and the camera's extrinsic: each
-            // free one is a pose block of the landmark's block, up to three, and a fixed one is no column at all.
-            if ((marginalised_count != 1) || (general_count > 3) || (marginalised_dimensions > factor_graph::maximum_landmark_dimensions) || (factor->get_residual().rows() != 2)) {
+            // A landmark edge may hold several general vertices, a rig camera's the rig's pose and the camera's extrinsic, and a
+            // camera's intrinsics: each free one is a column block of the landmark's block, and a fixed one is no column at all.
+            if ((marginalised_count != 1) || repeated || (general_count > factor_graph::maximum_observation_blocks) || (marginalised_dimensions > factor_graph::maximum_landmark_dimensions) || (factor->get_residual().rows() != 2)) {
                 return false;
             }
         }
@@ -763,6 +767,7 @@ namespace optimisation {
         this->slot_general_term.assign(slot_count, -1);
         this->slot_landmark_term.assign(slot_count, -1);
         this->slot_coupling.assign(slot_count, -1);
+        this->slot_coupling_term.assign(slot_count, -1);
         for (size_t index = 0; index < edge_count; ++index) {
             const std::vector<vertex*>& edge_vertices = this->edges[index]->get_vertices();
             for (size_t slot = 0; slot < edge_vertices.size(); ++slot) {
@@ -811,12 +816,24 @@ namespace optimisation {
 
         this->analyse_pairs();
 
-        // The couplings, per landmark in edge order and per edge in slot order, and the couplings of each general block.
+        // The couplings, per landmark in edge order and per edge in slot order, one per general block the landmark is seen
+        // with, and the couplings of each general block. A block that one edge of the landmark sees is written by that edge;
+        // one that several see has a term per edge, summed in edge order once the edges are linearised.
         this->couplings.clear();
+        this->coupling_terms.clear();
+        this->merged_couplings.clear();
+        this->merged_term_begin.assign(1, 0);
         this->landmark_coupling_begin.assign(landmark_count + 1, 0);
         size_t values_cursor = 0;
         size_t gradient_cursor = 0;
+        size_t term_cursor = 0;
+        std::vector<coupling_term> seen;
+        std::vector<int> seen_edges;
+        std::vector<int> seen_counts;
         for (size_t landmark = 0; landmark < landmark_count; ++landmark) {
+            const size_t first_coupling = this->couplings.size();
+            seen.clear();
+            seen_edges.clear();
             for (size_t k = this->landmark_incidence_begin[landmark]; k < this->landmark_incidence_begin[landmark + 1]; ++k) {
                 const incidence& link = this->landmark_incidence[k];
                 const std::vector<vertex*>& edge_vertices = this->edges[static_cast<size_t>(link.edge)]->get_vertices();
@@ -826,22 +843,67 @@ namespace optimisation {
                     if (general < 0) {
                         continue;
                     }
-                    coupling created;
-                    created.general = general;
-                    created.landmark = static_cast<int>(landmark);
-                    created.edge = link.edge;
-                    created.general_slot = static_cast<int>(slot);
-                    created.landmark_slot = link.slot;
-                    created.values = values_cursor;
-                    created.gradient = gradient_cursor;
-                    values_cursor += static_cast<size_t>(this->general_blocks[static_cast<size_t>(general)].dimensions) * landmark_dimensions;
-                    gradient_cursor += static_cast<size_t>(this->general_blocks[static_cast<size_t>(general)].dimensions);
-                    this->slot_coupling[this->edge_slot_begin[static_cast<size_t>(link.edge)] + slot] = static_cast<int>(this->couplings.size());
-                    this->couplings.push_back(created);
+                    int existing = -1;
+                    for (size_t index = first_coupling; index < this->couplings.size(); ++index) {
+                        if (this->couplings[index].general == general) {
+                            existing = static_cast<int>(index);
+                            break;
+                        }
+                    }
+                    if (existing < 0) {
+                        coupling created;
+                        created.general = general;
+                        created.landmark = static_cast<int>(landmark);
+                        created.edge = link.edge;
+                        created.general_slot = static_cast<int>(slot);
+                        created.landmark_slot = link.slot;
+                        created.values = values_cursor;
+                        created.gradient = gradient_cursor;
+                        values_cursor += static_cast<size_t>(this->general_blocks[static_cast<size_t>(general)].dimensions) * landmark_dimensions;
+                        gradient_cursor += static_cast<size_t>(this->general_blocks[static_cast<size_t>(general)].dimensions);
+                        existing = static_cast<int>(this->couplings.size());
+                        this->couplings.push_back(created);
+                    }
+                    coupling_term term;
+                    term.coupling = existing;
+                    term.general_slot = static_cast<int>(slot);
+                    term.landmark_slot = link.slot;
+                    seen.push_back(term);
+                    seen_edges.push_back(link.edge);
                 }
+            }
+            seen_counts.assign(this->couplings.size() - first_coupling, 0);
+            for (const coupling_term& term : seen) {
+                ++seen_counts[static_cast<size_t>(term.coupling) - first_coupling];
+            }
+            for (size_t index = 0; index < seen.size(); ++index) {
+                const coupling_term& term = seen[index];
+                if (seen_counts[static_cast<size_t>(term.coupling) - first_coupling] == 1) {
+                    this->slot_coupling[this->edge_slot_begin[static_cast<size_t>(seen_edges[index])] + static_cast<size_t>(term.general_slot)] = term.coupling;
+                }
+            }
+            for (size_t index = first_coupling; index < this->couplings.size(); ++index) {
+                if (seen_counts[index - first_coupling] < 2) {
+                    continue;
+                }
+                const coupling& merged = this->couplings[index];
+                const size_t size = static_cast<size_t>(this->general_blocks[static_cast<size_t>(merged.general)].dimensions) * static_cast<size_t>(this->edges[static_cast<size_t>(merged.edge)]->get_vertices()[static_cast<size_t>(merged.landmark_slot)]->get_local_dimensions());
+                for (size_t term_index = 0; term_index < seen.size(); ++term_index) {
+                    coupling_term term = seen[term_index];
+                    if (static_cast<size_t>(term.coupling) != index) {
+                        continue;
+                    }
+                    term.values = term_cursor;
+                    term_cursor += size;
+                    this->slot_coupling_term[this->edge_slot_begin[static_cast<size_t>(seen_edges[term_index])] + static_cast<size_t>(term.general_slot)] = static_cast<int>(this->coupling_terms.size());
+                    this->coupling_terms.push_back(term);
+                }
+                this->merged_couplings.push_back(static_cast<int>(index));
+                this->merged_term_begin.push_back(this->coupling_terms.size());
             }
             this->landmark_coupling_begin[landmark + 1] = this->couplings.size();
         }
+        this->coupling_term_values.assign(term_cursor, 0.0);
         this->coupling_values.assign(values_cursor, 0.0);
         this->coupling_products.assign(values_cursor, 0.0);
         this->coupling_gradients.assign(gradient_cursor, 0.0);
@@ -1100,12 +1162,14 @@ namespace optimisation {
                     factor_graph::edge_block(jacobian, jacobian, weights, residuals, term + size);
                 }
                 const int coupling_index = this->slot_coupling[first_slot + slot];
-                if (coupling_index >= 0) {
-                    const coupling& link = this->couplings[static_cast<size_t>(coupling_index)];
-                    const math::matrix<double, 0, 0>& landmark_jacobian = jacobians[static_cast<size_t>(link.landmark_slot)];
+                const int coupling_term_index = this->slot_coupling_term[first_slot + slot];
+                if ((coupling_index >= 0) || (coupling_term_index >= 0)) {
+                    const bool whole = coupling_index >= 0;
+                    const int landmark_slot = whole ? this->couplings[static_cast<size_t>(coupling_index)].landmark_slot : this->coupling_terms[static_cast<size_t>(coupling_term_index)].landmark_slot;
+                    const math::matrix<double, 0, 0>& landmark_jacobian = jacobians[static_cast<size_t>(landmark_slot)];
                     const size_t dimensions = landmark_jacobian.cols();
-                    double* const values = this->coupling_values.data() + link.values;
-                    if (link.general_slot < link.landmark_slot) {
+                    double* const values = whole ? (this->coupling_values.data() + this->couplings[static_cast<size_t>(coupling_index)].values) : (this->coupling_term_values.data() + this->coupling_terms[static_cast<size_t>(coupling_term_index)].values);
+                    if (static_cast<int>(slot) < landmark_slot) {
                         factor_graph::edge_block(jacobian, landmark_jacobian, weights, residuals, values);
                     }
                     else {
@@ -1164,8 +1228,9 @@ namespace optimisation {
             state.general_right_hand_side[i] = static_cast<scalar>(this->vector_b[i][0]);
         }
         for (const free_block& entry : this->general_blocks) {
-            for (size_t i = 0; i < 6; ++i) {
-                this->hessian_diagonal[static_cast<size_t>(entry.offset) + i] = this->hessian_values[entry.hessian + (i * 6) + i];
+            const size_t size = static_cast<size_t>(entry.dimensions);
+            for (size_t i = 0; i < size; ++i) {
+                this->hessian_diagonal[static_cast<size_t>(entry.offset) + i] = this->hessian_values[entry.hessian + (i * size) + i];
             }
         }
 
@@ -1207,37 +1272,36 @@ namespace optimisation {
             }
             std::sort(pose_offsets.begin(), pose_offsets.end());
             pose_offsets.erase(std::unique(pose_offsets.begin(), pose_offsets.end()), pose_offsets.end());
+            std::vector<int> block_dimensions(pose_offsets.size(), 0);
+            for (size_t slot = 0; slot < pose_offsets.size(); ++slot) {
+                block_dimensions[slot] = this->general_blocks[static_cast<size_t>(this->block_of_offset[static_cast<size_t>(pose_offsets[slot])])].dimensions;
+            }
             landmark_block<scalar>& block = state.blocks[block_index];
-            block.configure(static_cast<int>(group.size()), landmark_dimension, landmark_is_free, landmark_is_free ? landmark_vertex->get_ordering_id() : 0, pose_offsets.data(), static_cast<int>(pose_offsets.size()));
+            block.configure(static_cast<int>(group.size()), landmark_dimension, landmark_is_free, landmark_is_free ? landmark_vertex->get_ordering_id() : 0, pose_offsets.data(), block_dimensions.data(), static_cast<int>(pose_offsets.size()));
             for (size_t slot = 0; slot < group.size(); ++slot) {
                 const size_t edge_index = static_cast<size_t>(group[slot]);
                 const edge* const factor = this->edges[edge_index];
                 const std::vector<vertex*>& edge_vertices = factor->get_vertices();
                 const std::vector<math::matrix<double, 0, 0>>& jacobians = factor->get_jacobians();
                 ASSERT(edge_vertices.size() == jacobians.size(), "Mismatching sizes between edge vertices and edge jacobians.");
-                const math::matrix<double, 0, 0>* jacobian_pose = nullptr;
                 const math::matrix<double, 0, 0>* jacobian_landmark = nullptr;
-                int pose_slot = -1;
-                // The free general vertices after the first, written into their own pose blocks once the observation is set.
-                const math::matrix<double, 0, 0>* further_jacobians[2] = { nullptr, nullptr };
-                int further_slots[2] = { -1, -1 };
-                size_t further_count = 0;
+                // Each general block the observation sees, with its jacobian in the solver's precision.
+                int block_slots[factor_graph::maximum_observation_blocks] = {};
+                scalar block_values[factor_graph::maximum_observation_blocks][2 * vertex::maximum_parameters] = {};
+                const scalar* block_jacobians[factor_graph::maximum_observation_blocks] = {};
+                int observed_blocks = 0;
                 for (size_t i = 0; i < edge_vertices.size(); ++i) {
                     if (edge_vertices[i]->is_marginalised()) {
                         jacobian_landmark = &jacobians[i];
                     }
-                    else if (!edge_vertices[i]->is_fixed()) {
-                        const int slot_of_vertex = static_cast<int>(std::lower_bound(pose_offsets.begin(), pose_offsets.end(), edge_vertices[i]->get_ordering_id()) - pose_offsets.begin());
-                        if (jacobian_pose == nullptr) {
-                            jacobian_pose = &jacobians[i];
-                            pose_slot = slot_of_vertex;
+                    else if (!edge_vertices[i]->is_fixed() && (static_cast<size_t>(observed_blocks) < factor_graph::maximum_observation_blocks)) {
+                        const size_t values = 2 * static_cast<size_t>(edge_vertices[i]->get_local_dimensions());
+                        for (size_t k = 0; k < values; ++k) {
+                            block_values[observed_blocks][k] = static_cast<scalar>(jacobians[i].data()[k]);
                         }
-                        else {
-                            ASSERT(further_count < 2, "A landmark edge holds at most three free general vertices.");
-                            further_jacobians[further_count] = &jacobians[i];
-                            further_slots[further_count] = slot_of_vertex;
-                            ++further_count;
-                        }
+                        block_slots[observed_blocks] = static_cast<int>(std::lower_bound(pose_offsets.begin(), pose_offsets.end(), edge_vertices[i]->get_ordering_id()) - pose_offsets.begin());
+                        block_jacobians[observed_blocks] = &block_values[observed_blocks][0];
+                        ++observed_blocks;
                     }
                 }
                 const double* const robust_information = this->edge_weights.data() + this->edge_weights_begin[edge_index];
@@ -1256,14 +1320,8 @@ namespace optimisation {
                         whitening[i] = static_cast<scalar>(root.data()[i]);
                     }
                 }
-                scalar pose_values[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
                 scalar landmark_values[2 * factor_graph::maximum_landmark_dimensions] = {};
                 scalar residual_values[2] = { 0, 0 };
-                if (jacobian_pose != nullptr) {
-                    for (size_t i = 0; i < 12; ++i) {
-                        pose_values[i] = static_cast<scalar>(jacobian_pose->data()[i]);
-                    }
-                }
                 if ((jacobian_landmark != nullptr) && landmark_is_free) {
                     for (size_t i = 0; i < static_cast<size_t>(2 * landmark_dimension); ++i) {
                         landmark_values[i] = static_cast<scalar>(jacobian_landmark->data()[i]);
@@ -1271,21 +1329,16 @@ namespace optimisation {
                 }
                 residual_values[0] = static_cast<scalar>(factor->get_residual()[0][0]);
                 residual_values[1] = static_cast<scalar>(factor->get_residual()[1][0]);
-                block.set_observation(static_cast<int>(slot), (jacobian_pose != nullptr) ? pose_slot : -1, pose_values, landmark_values, residual_values, whitening);
-                for (size_t further = 0; further < further_count; ++further) {
-                    for (size_t i = 0; i < 12; ++i) {
-                        pose_values[i] = static_cast<scalar>(further_jacobians[further]->data()[i]);
-                    }
-                    block.set_observation_pose(static_cast<int>(slot), further_slots[further], pose_values, whitening);
-                }
+                block.set_observation(static_cast<int>(slot), &block_slots[0], &block_jacobians[0], observed_blocks, landmark_values, residual_values, whitening);
             }
         });
 
-        const size_t general_groups = general_count / 6;
+        // The landmark blocks that see each general block, in block order, so every sum into a general block keeps one order.
+        const size_t general_groups = this->general_blocks.size();
         state.pose_block_begin.assign(general_groups + 1, 0);
         for (const landmark_block<scalar>& block : state.blocks) {
             for (int slot = 0; slot < block.pose_count(); ++slot) {
-                ++state.pose_block_begin[static_cast<size_t>(block.get_pose_offset(slot) / 6) + 1];
+                ++state.pose_block_begin[static_cast<size_t>(this->block_of_offset[static_cast<size_t>(block.get_pose_offset(slot))]) + 1];
             }
         }
         for (size_t group = 0; group < general_groups; ++group) {
@@ -1298,7 +1351,7 @@ namespace optimisation {
             for (size_t block_index = 0; block_index < block_count; ++block_index) {
                 const landmark_block<scalar>& block = state.blocks[block_index];
                 for (int slot = 0; slot < block.pose_count(); ++slot) {
-                    const size_t group = static_cast<size_t>(block.get_pose_offset(slot) / 6);
+                    const size_t group = static_cast<size_t>(this->block_of_offset[static_cast<size_t>(block.get_pose_offset(slot))]);
                     state.pose_block_index[static_cast<size_t>(fill[group])] = static_cast<int>(block_index);
                     state.pose_block_slot[static_cast<size_t>(fill[group])] = slot;
                     ++fill[group];
@@ -1308,8 +1361,9 @@ namespace optimisation {
 
         if (total_count > 0) {
             core::thread_pool::instance().parallel_for(general_groups, 1, [this, &state](const size_t group) {
-                double* const gradient = this->vector_b.data() + (6 * group);
-                double* const diagonal = this->hessian_diagonal.data() + (6 * group);
+                const size_t offset = static_cast<size_t>(this->general_blocks[group].offset);
+                double* const gradient = this->vector_b.data() + offset;
+                double* const diagonal = this->hessian_diagonal.data() + offset;
                 for (int k = state.pose_block_begin[group]; k < state.pose_block_begin[group + 1]; ++k) {
                     const landmark_block<scalar>& block = state.blocks[static_cast<size_t>(state.pose_block_index[static_cast<size_t>(k)])];
                     block.accumulate_gradient_slot(state.pose_block_slot[static_cast<size_t>(k)], gradient);
@@ -1337,7 +1391,7 @@ namespace optimisation {
     template <typename scalar>
     bool factor_graph::solve_linear_system_qr(square_root_state<scalar>& state) {
         const int general_params = this->count_general_params;
-        const int general_groups = general_params / 6;
+        const size_t general_groups = this->general_blocks.size();
         const size_t total_count = static_cast<size_t>(this->count_general_params + this->count_marginalised_params);
         const scalar lambda = static_cast<scalar>(this->damping_lambda);
         const bool general_edges = !state.general_right_hand_side.empty();
@@ -1347,38 +1401,66 @@ namespace optimisation {
             state.blocks[block_index].set_damping(lambda);
         });
 
-        state.preconditioner.assign(static_cast<size_t>(general_groups) * 36u, static_cast<scalar>(0));
+        // A block Jacobi preconditioner, the inverse of each general block's damped diagonal block of the reduced system.
+        state.preconditioner_begin.assign(general_groups + 1, 0);
+        for (size_t group = 0; group < general_groups; ++group) {
+            const size_t size = static_cast<size_t>(this->general_blocks[group].dimensions);
+            state.preconditioner_begin[group + 1] = state.preconditioner_begin[group] + (size * size);
+        }
+        state.preconditioner.assign(state.preconditioner_begin[general_groups], static_cast<scalar>(0));
         state.right_hand_side.assign(static_cast<size_t>(general_params), static_cast<scalar>(0));
-        pool.parallel_for(static_cast<size_t>(general_groups), 1, [this, &state, lambda, general_edges](const size_t group) {
-            scalar* const entries = state.preconditioner.data() + (group * 36u);
-            scalar* const right_hand_side = state.right_hand_side.data() + (6 * group);
+        pool.parallel_for(general_groups, 1, [this, &state, lambda, general_edges](const size_t group) {
+            const free_block& entry = this->general_blocks[group];
+            const size_t size = static_cast<size_t>(entry.dimensions);
+            const size_t offset = static_cast<size_t>(entry.offset);
+            scalar* const entries = state.preconditioner.data() + state.preconditioner_begin[group];
+            scalar* const right_hand_side = state.right_hand_side.data() + offset;
             for (int k = state.pose_block_begin[group]; k < state.pose_block_begin[group + 1]; ++k) {
                 const landmark_block<scalar>& block = state.blocks[static_cast<size_t>(state.pose_block_index[static_cast<size_t>(k)])];
                 block.add_reduced_diagonal_slot(state.pose_block_slot[static_cast<size_t>(k)], entries);
             }
             if (general_edges) {
-                const double* const hessian = this->hessian_values.data() + this->general_blocks[group].hessian;
-                for (int i = 0; i < 6; ++i) {
-                    for (int j = 0; j < 6; ++j) {
-                        const size_t row = (6 * group) + static_cast<size_t>(i);
-                        const size_t col = (6 * group) + static_cast<size_t>(j);
-                        entries[(6 * i) + j] += static_cast<scalar>(this->column_scale[row] * hessian[(6 * i) + j] * this->column_scale[col]);
+                const double* const hessian = this->hessian_values.data() + entry.hessian;
+                for (size_t i = 0; i < size; ++i) {
+                    for (size_t j = 0; j < size; ++j) {
+                        const size_t row = offset + i;
+                        const size_t col = offset + j;
+                        entries[(size * i) + j] += static_cast<scalar>(this->column_scale[row] * hessian[(size * i) + j] * this->column_scale[col]);
                     }
                 }
             }
-            math::matrix<scalar, 6, 6> damped(entries);
-            for (size_t i = 0; i < 6; ++i) {
-                damped[i][i] += lambda;
-            }
-            math::matrix<scalar, 6, 6> inverse;
-            if (math::invert(damped, inverse)) {
-                for (size_t i = 0; i < 36; ++i) {
-                    entries[i] = inverse.data()[i];
+            if (size == 6) {
+                math::matrix<scalar, 6, 6> damped(entries);
+                for (size_t i = 0; i < 6; ++i) {
+                    damped[i][i] += lambda;
+                }
+                math::matrix<scalar, 6, 6> inverse;
+                if (math::invert(damped, inverse)) {
+                    for (size_t i = 0; i < 36; ++i) {
+                        entries[i] = inverse.data()[i];
+                    }
+                }
+                else {
+                    for (size_t i = 0; i < 36; ++i) {
+                        entries[i] = ((i % 7u) == 0u) ? static_cast<scalar>(1) : static_cast<scalar>(0);
+                    }
                 }
             }
             else {
-                for (size_t i = 0; i < 36; ++i) {
-                    entries[i] = ((i % 7u) == 0u) ? static_cast<scalar>(1) : static_cast<scalar>(0);
+                math::matrix<scalar, 0, 0> damped(size, size, entries);
+                for (size_t i = 0; i < size; ++i) {
+                    damped[i][i] += lambda;
+                }
+                math::matrix<scalar, 0, 0> inverse(size, size);
+                if (math::invert(damped, inverse)) {
+                    for (size_t i = 0; i < (size * size); ++i) {
+                        entries[i] = inverse.data()[i];
+                    }
+                }
+                else {
+                    for (size_t i = 0; i < (size * size); ++i) {
+                        entries[i] = ((i % (size + 1)) == 0u) ? static_cast<scalar>(1) : static_cast<scalar>(0);
+                    }
                 }
             }
             for (int k = state.pose_block_begin[group]; k < state.pose_block_begin[group + 1]; ++k) {
@@ -1386,8 +1468,8 @@ namespace optimisation {
                 block.add_right_hand_side_slot(state.pose_block_slot[static_cast<size_t>(k)], right_hand_side);
             }
             if (general_edges) {
-                for (size_t i = 0; i < 6; ++i) {
-                    right_hand_side[i] += static_cast<scalar>(this->column_scale[(6 * group) + i]) * state.general_right_hand_side[(6 * group) + i];
+                for (size_t i = 0; i < size; ++i) {
+                    right_hand_side[i] += static_cast<scalar>(this->column_scale[offset + i]) * state.general_right_hand_side[offset + i];
                 }
             }
         });
@@ -1398,10 +1480,13 @@ namespace optimisation {
             pool.parallel_for(state.blocks.size(), 16, [&state, input](const size_t block_index) {
                 state.blocks[block_index].compute_operator_image(input);
             });
-            pool.parallel_for(static_cast<size_t>(general_groups), 1, [this, &state, input, output, lambda, general_edges](const size_t group) {
-                scalar* const target = output + (6 * group);
-                for (size_t i = 0; i < 6; ++i) {
-                    target[i] = lambda * input[(6 * group) + i];
+            pool.parallel_for(general_groups, 1, [this, &state, input, output, lambda, general_edges](const size_t group) {
+                const free_block& entry = this->general_blocks[group];
+                const size_t size = static_cast<size_t>(entry.dimensions);
+                const size_t offset = static_cast<size_t>(entry.offset);
+                scalar* const target = output + offset;
+                for (size_t i = 0; i < size; ++i) {
+                    target[i] = lambda * input[offset + i];
                 }
                 for (int k = state.pose_block_begin[group]; k < state.pose_block_begin[group + 1]; ++k) {
                     const landmark_block<scalar>& block = state.blocks[static_cast<size_t>(state.pose_block_index[static_cast<size_t>(k)])];
@@ -1410,15 +1495,17 @@ namespace optimisation {
                     }
                 }
                 if (general_edges && (this->operator_neighbour_begin[group + 1] > this->operator_neighbour_begin[group])) {
-                    for (size_t i = 0; i < 6; ++i) {
-                        const size_t row = (6 * group) + i;
+                    for (size_t i = 0; i < size; ++i) {
+                        const size_t row = offset + i;
                         double sum = 0.0;
                         for (size_t k = this->operator_neighbour_begin[group]; k < this->operator_neighbour_begin[group + 1]; ++k) {
                             const neighbour& other = this->operator_neighbours[k];
+                            const free_block& other_entry = this->general_blocks[static_cast<size_t>(other.block)];
+                            const size_t other_size = static_cast<size_t>(other_entry.dimensions);
                             const double* const values = this->hessian_values.data() + other.values;
-                            for (size_t j = 0; j < 6; ++j) {
-                                const size_t column = (6 * static_cast<size_t>(other.block)) + j;
-                                sum += (other.transposed ? values[(j * 6) + i] : values[(i * 6) + j]) * this->column_scale[column] * static_cast<double>(input[column]);
+                            for (size_t j = 0; j < other_size; ++j) {
+                                const size_t column = static_cast<size_t>(other_entry.offset) + j;
+                                sum += (other.transposed ? values[(j * size) + i] : values[(i * other_size) + j]) * this->column_scale[column] * static_cast<double>(input[column]);
                             }
                         }
                         target[i] += static_cast<scalar>(this->column_scale[row] * sum);
@@ -1426,15 +1513,17 @@ namespace optimisation {
                 }
             });
         };
-        const auto apply_preconditioner = [&state, general_groups](const scalar* input, scalar* output) {
-            for (int group = 0; group < general_groups; ++group) {
-                const scalar* const entries = state.preconditioner.data() + (static_cast<size_t>(group) * 36u);
-                for (int i = 0; i < 6; ++i) {
+        const auto apply_preconditioner = [this, &state, general_groups](const scalar* input, scalar* output) {
+            for (size_t group = 0; group < general_groups; ++group) {
+                const size_t size = static_cast<size_t>(this->general_blocks[group].dimensions);
+                const size_t offset = static_cast<size_t>(this->general_blocks[group].offset);
+                const scalar* const entries = state.preconditioner.data() + state.preconditioner_begin[group];
+                for (size_t i = 0; i < size; ++i) {
                     scalar sum = 0;
-                    for (int j = 0; j < 6; ++j) {
-                        sum += entries[(6 * i) + j] * input[(6 * group) + j];
+                    for (size_t j = 0; j < size; ++j) {
+                        sum += entries[(size * i) + j] * input[offset + j];
                     }
-                    output[(6 * group) + i] = sum;
+                    output[offset + i] = sum;
                 }
             }
         };
@@ -1535,6 +1624,26 @@ namespace optimisation {
         });
     }
 
+    void factor_graph::accumulate_merged_couplings() {
+        core::thread_pool& pool = core::thread_pool::instance();
+        pool.parallel_for(this->merged_couplings.size(), factor_graph::general_grain, [this](const size_t index) {
+            const coupling& merged = this->couplings[static_cast<size_t>(this->merged_couplings[index])];
+            const size_t size = static_cast<size_t>(this->general_blocks[static_cast<size_t>(merged.general)].dimensions) * static_cast<size_t>(this->edges[static_cast<size_t>(merged.edge)]->get_vertices()[static_cast<size_t>(merged.landmark_slot)]->get_local_dimensions());
+            double* const values = this->coupling_values.data() + merged.values;
+            const size_t first = this->merged_term_begin[index];
+            const double* const first_values = this->coupling_term_values.data() + this->coupling_terms[first].values;
+            for (size_t i = 0; i < size; ++i) {
+                values[i] = first_values[i];
+            }
+            for (size_t k = first + 1; k < this->merged_term_begin[index + 1]; ++k) {
+                const double* const term = this->coupling_term_values.data() + this->coupling_terms[k].values;
+                for (size_t i = 0; i < size; ++i) {
+                    values[i] = values[i] + term[i];
+                }
+            }
+        });
+    }
+
     void factor_graph::make_hessian() {
         const size_t total_count = static_cast<size_t>(this->count_general_params + this->count_marginalised_params);
         const size_t landmark_count = this->landmark_incidence_begin.size() - 1;
@@ -1553,7 +1662,8 @@ namespace optimisation {
 
         this->accumulate_general_blocks();
         this->accumulate_pair_blocks();
-        // The couplings were written when the edges were linearised.
+        // The couplings were written when the edges were linearised, those of several edges as their terms.
+        this->accumulate_merged_couplings();
         core::thread_pool::instance().parallel_for(landmark_count, factor_graph::landmark_grain, [this](const size_t landmark) {
             landmark_diagonal& diagonal = this->h_ll[landmark];
             const size_t offset = static_cast<size_t>(diagonal.offset);

@@ -108,6 +108,9 @@ namespace optimisation {
         };
 
         constexpr static const size_t maximum_residuals = 16;
+        // The general blocks one edge of a landmark may see on the square root path: a pose, and blocks it shares with other
+        // frames such as a camera's intrinsics and extrinsic.
+        constexpr static const size_t maximum_observation_blocks = 4;
         constexpr static const double gain_ratio_epsilon = 1e-12;
 
         // Work items per thread pool task, sized so a task outweighs its scheduling and small problems stay serial.
@@ -144,8 +147,10 @@ namespace optimisation {
             bool transposed = false;
         };
 
-        // The block between a general block and a landmark from one edge, general rows and landmark columns, with the offsets
-        // of W, of Y = W * H_ll^-1, and of Y * b_ll.
+        // The block between a general block and a landmark, general rows and landmark columns, with the offsets of W, of
+        // Y = W * H_ll^-1, and of Y * b_ll. It is one edge's, the first of the landmark's edges to see the block, unless more
+        // of them do: a block shared between frames, such as a camera's intrinsics, sums the terms of all of them into one,
+        // so the reduced system gains one term per landmark for it rather than one per pair of the landmark's edges.
         class coupling final {
         public:
             int general = 0;
@@ -155,6 +160,15 @@ namespace optimisation {
             int landmark_slot = 0;
             size_t values = 0;
             size_t gradient = 0;
+        };
+
+        // One edge's term of a coupling that sums several, from its slots, at an offset of the term values.
+        class coupling_term final {
+        public:
+            int coupling = 0;
+            int general_slot = 0;
+            int landmark_slot = 0;
+            size_t values = 0;
         };
 
         // A block of a general block's row of the Hessian of the general edges, for the square root operator.
@@ -190,6 +204,7 @@ namespace optimisation {
             std::vector<int> pose_block_begin;
             std::vector<int> pose_block_index;
             std::vector<int> pose_block_slot;
+            std::vector<size_t> preconditioner_begin;
             std::vector<scalar> preconditioner;
             std::vector<scalar> right_hand_side;
             std::vector<scalar> general_right_hand_side;
@@ -227,6 +242,7 @@ namespace optimisation {
         std::vector<int> slot_general_term;
         std::vector<int> slot_landmark_term;
         std::vector<int> slot_coupling;
+        std::vector<int> slot_coupling_term;
         // Each incidence's gradient and then its Hessian terms in slot order, which its block sums in edge order.
         std::vector<size_t> general_term_begin;
         std::vector<double> general_terms;
@@ -245,6 +261,10 @@ namespace optimisation {
         std::vector<double> coupling_values;
         std::vector<double> coupling_products;
         std::vector<double> coupling_gradients;
+        std::vector<coupling_term> coupling_terms;
+        std::vector<double> coupling_term_values;
+        std::vector<int> merged_couplings;
+        std::vector<size_t> merged_term_begin;
         std::vector<unsigned char> landmark_failures;
         std::vector<size_t> column_pair_begin;
         std::vector<int> column_pairs;
@@ -330,6 +350,8 @@ namespace optimisation {
         void accumulate_general_blocks();
 
         void accumulate_pair_blocks();
+
+        void accumulate_merged_couplings();
 
         bool select_square_root_path() const;
 
