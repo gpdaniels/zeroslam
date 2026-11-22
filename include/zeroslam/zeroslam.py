@@ -325,6 +325,12 @@ zeroslam_set_sensor_extrinsics = _wrap("zeroslam_set_sensor_extrinsics", [
     _ctypes.c_int
 ])
 
+zeroslam_get_sensor_extrinsics = _wrap("zeroslam_get_sensor_extrinsics", [
+    _ctypes.POINTER(zeroslam_system),
+    _ctypes.POINTER(zeroslam_sensor_extrinsics_struct),
+    _ctypes.POINTER(_ctypes.c_int)
+])
+
 zeroslam_set_sensor_data = _wrap("zeroslam_set_sensor_data", [
     _ctypes.POINTER(zeroslam_system),
     _ctypes.POINTER(zeroslam_sensor_data_struct),
@@ -421,6 +427,9 @@ class system:
     def set_sensor_extrinsics(self, extrinsics, length):
         return zeroslam_return_enum(zeroslam_set_sensor_extrinsics(self._handle, extrinsics, length))
 
+    def get_sensor_extrinsics(self, extrinsics, length):
+        return zeroslam_return_enum(zeroslam_get_sensor_extrinsics(self._handle, extrinsics, _ctypes.byref(length)))
+
     def set_sensor_data(self, data, length):
         return zeroslam_return_enum(zeroslam_set_sensor_data(self._handle, data, length))
 
@@ -481,6 +490,7 @@ __all__ = [
     "zeroslam_set_configuration",
     "zeroslam_set_sensor_rig",
     "zeroslam_set_sensor_extrinsics",
+    "zeroslam_get_sensor_extrinsics",
     "zeroslam_set_sensor_data",
     "zeroslam_finalise",
     "zeroslam_get_camera_calibration",

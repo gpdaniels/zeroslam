@@ -1042,6 +1042,30 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_extrinsics(zeroslam_s
     }
     return zeroslam_return_success;
 }
+
+zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_sensor_extrinsics(zeroslam_system* system, zeroslam_sensor_extrinsics_struct* extrinsics, int* length) {
+    if (system == nullptr) {
+        return zeroslam_return_failure_invalid_system;
+    }
+    if (length == nullptr) {
+        return zeroslam_return_failure_invalid_argument;
+    }
+    std::vector<int> sensor_ids;
+    for (const zeroslam_system::camera_entry& camera : system->cameras) {
+        sensor_ids.push_back(camera.sensor_id);
+    }
+    // The system holds a rig of several cameras once their data has come, refined as it goes; the api holds the rest.
+    const mapping::rig& held = system->slam_instance.reconstruction.sensor_rig;
+    const mapping::rig rig = (held.camera_count() == sensor_ids.size()) ? held : system->rig.make_rig(sensor_ids);
+    const int required = static_cast<int>(rig.camera_count());
+    if ((required > 0) && ((extrinsics == nullptr) || (*length < required))) {
+        *length = required;
+        return zeroslam_return_failure_insufficient_data_length;
+    }
+    api_rig::fill_extrinsics(rig, extrinsics);
+    *length = required;
+    return zeroslam_return_success;
+}
 }
 
 namespace {

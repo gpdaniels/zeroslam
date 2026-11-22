@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "mapping/rig.hpp"
 
 #include "core/assert.hpp"
+#include "core/logger.hpp"
 #include "math/math.hpp"
 #include "optimisation/vertices/extrinsic.hpp"
 
@@ -135,5 +136,8 @@ namespace mapping {
             return;
         }
         this->set_reference_from_sensor(index, optimisation::vertices::extrinsic::from_parameters(node.get_parameters()));
+        const math::se3<double>& refined = this->sensors[index].body_from_sensor;
+        const math::matrix<double, 4, 1> quaternion = refined.rotation().get_quaternion();
+        core::logger::log(core::logger::level::info, "Extrinsic of sensor %d refined to [%.6f %.6f %.6f] [%.6f %.6f %.6f %.6f].", this->sensors[index].id, refined.translation()[0], refined.translation()[1], refined.translation()[2], quaternion[1], quaternion[2], quaternion[3], quaternion[0]);
     }
 }

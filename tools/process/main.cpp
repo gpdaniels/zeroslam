@@ -646,6 +646,9 @@ int main(int argc, char* argv[]) {
             return EXIT_FAILURE;
         }
     }
+    if (camera_names.size() > 1) {
+        process_rig::report_extrinsics(slam);
+    }
     log(4, "Saving map and camera trajectory...");
 
     // The calibration the run ends with, the scene's unless the calibration key refined it.

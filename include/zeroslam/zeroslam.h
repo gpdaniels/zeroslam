@@ -352,6 +352,9 @@ ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sens
 // The extrinsics of sensors of the rig, after the rig and before any data; a sensor given none sits at the body's origin, fixed.
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_extrinsics(zeroslam_system* system, const zeroslam_sensor_extrinsics_struct* extrinsics, int length);
 
+// The extrinsics of the rig's cameras as the system holds them, one per camera in the rig's order, refined where asked for.
+ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_sensor_extrinsics(zeroslam_system* system, zeroslam_sensor_extrinsics_struct* extrinsics, int* length);
+
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system* system, const zeroslam_sensor_data_struct* data, int length);
 
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_finalise(zeroslam_system* system);

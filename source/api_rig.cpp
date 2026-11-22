@@ -74,6 +74,22 @@ mapping::rig api_rig::make_rig(const std::vector<int>& sensor_ids) const {
     return rig;
 }
 
+void api_rig::fill_extrinsics(const mapping::rig& rig, zeroslam_sensor_extrinsics_struct* const values) {
+    for (size_t camera = 0; camera < rig.camera_count(); ++camera) {
+        const mapping::rig::sensor& sensor = rig.at(rig.camera(camera));
+        const math::matrix<double, 4, 1> quaternion = sensor.body_from_sensor.rotation().get_quaternion();
+        values[camera].sensor_id = sensor.id;
+        values[camera].refinement = sensor.refined ? zeroslam_extrinsic_refine : zeroslam_extrinsic_fixed;
+        for (size_t axis = 0; axis < 3; ++axis) {
+            values[camera].pose[axis] = sensor.body_from_sensor.translation()[axis];
+        }
+        values[camera].pose[3] = quaternion[1];
+        values[camera].pose[4] = quaternion[2];
+        values[camera].pose[5] = quaternion[3];
+        values[camera].pose[6] = quaternion[0];
+    }
+}
+
 bool api_rig::accepts(const long long* const timestamps, const size_t* const cameras, const size_t count, const size_t camera_count, const bool any_data, const long long latest_timestamp) const {
     long long group_timestamp = (this->pending_count > 0) ? this->pending_timestamp : latest_timestamp;
     size_t group_count = this->pending_count;

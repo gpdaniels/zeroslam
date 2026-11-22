@@ -61,6 +61,9 @@ public:
     // The rig of the cameras, in their order, each at its extrinsic (the body's origin, held, when it was given none).
     mapping::rig make_rig(const std::vector<int>& sensor_ids) const;
 
+    // The extrinsics of a rig's cameras, one per camera in order.
+    static void fill_extrinsics(const mapping::rig& rig, zeroslam_sensor_extrinsics_struct* const values);
+
     // Whether a batch of images, by timestamp and camera index, follows on from the frame that waits and from the data before
     // it (any_data, latest_timestamp), keeping the cameras synchronised.
     bool accepts(const long long* const timestamps, const size_t* const cameras, const size_t count, const size_t camera_count, const bool any_data, const long long latest_timestamp) const;

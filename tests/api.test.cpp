@@ -397,6 +397,20 @@ int main(int argc, char* argv[]) {
         REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[0], 2) == zeroslam_return_failure_invalid_rig_sensor);
         extrinsics[1].refinement = zeroslam_extrinsic_refine;
         REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[0], 2) == zeroslam_return_success);
+        {
+            // The extrinsics come back as they were given, one per camera.
+            int held_length = 0;
+            REQUIRE(zeroslam_get_sensor_extrinsics(system, nullptr, nullptr) == zeroslam_return_failure_invalid_argument);
+            REQUIRE(zeroslam_get_sensor_extrinsics(system, nullptr, &held_length) == zeroslam_return_failure_insufficient_data_length);
+            REQUIRE(held_length == 2);
+            zeroslam_sensor_extrinsics_struct held[2] = {};
+            REQUIRE(zeroslam_get_sensor_extrinsics(system, &held[0], &held_length) == zeroslam_return_success);
+            REQUIRE((held[0].sensor_id == 1) && (held[1].sensor_id == 2));
+            REQUIRE(held[1].pose[0] == 0.1);
+            REQUIRE(held[1].pose[6] == 1.0);
+            REQUIRE(held[1].refinement == zeroslam_extrinsic_refine);
+            REQUIRE(held[0].refinement == zeroslam_extrinsic_fixed);
+        }
 
         // The extrinsics setting.
         const char* const refine = "extrinsics=refine\n";

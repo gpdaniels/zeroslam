@@ -167,6 +167,21 @@ namespace process_rig {
         return true;
     }
 
+    // Writes the cameras' extrinsics as the library holds them at the end of the run, refined where it was asked to.
+    inline void report_extrinsics(const zeroslam::system& slam) {
+        int length = 0;
+        if (slam.get_sensor_extrinsics(nullptr, &length) != zeroslam_return_failure_insufficient_data_length) {
+            return;
+        }
+        std::vector<zeroslam_sensor_extrinsics_struct> extrinsics(static_cast<size_t>(length));
+        if (slam.get_sensor_extrinsics(extrinsics.data(), &length) != zeroslam_return_success) {
+            return;
+        }
+        for (const zeroslam_sensor_extrinsics_struct& extrinsic : extrinsics) {
+            std::printf("Extrinsic of camera %d (%s): [%.6f %.6f %.6f] [%.6f %.6f %.6f %.6f]\n", extrinsic.sensor_id, (extrinsic.refinement == zeroslam_extrinsic_refine) ? "refined" : "held", extrinsic.pose[0], extrinsic.pose[1], extrinsic.pose[2], extrinsic.pose[3], extrinsic.pose[4], extrinsic.pose[5], extrinsic.pose[6]);
+        }
+    }
+
     // Feeds the scene's cameras to the library, frame by frame: the frames' timestamps, the primary camera's intrinsics and the
     // frame count come back as the single camera run gives them.
     inline bool feed(mcap& reader, const zeroslam::system& slam, const std::vector<std::string>& names, const double (&perturbation)[2], const size_t frame_limit, size_t skip_count, const int verbosity, const std::atomic<bool>& stop, const double focal_scale, std::vector<long long>& timestamps, size_t& frames, zeroslam_sensor_parameters_camera_model_struct& primary) {
