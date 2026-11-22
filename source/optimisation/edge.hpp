@@ -88,6 +88,32 @@ namespace optimisation {
             constexpr static const bool value = true;
         };
 
+        // An edge whose vertices are only known when it is made, such as one that may take a camera's intrinsics as a further
+        // vertex, provides get_vertex_count() as well, which then overrides the constant.
+        template <typename edge_type, typename = void>
+        struct has_runtime_vertex_count {
+            constexpr static const bool value = false;
+        };
+
+        template <typename edge_type>
+        struct has_runtime_vertex_count<
+            edge_type,
+            decltype(static_cast<void>(static_cast<int>(edge::reference<const edge_type>().get_vertex_count())))
+        > {
+            constexpr static const bool value = true;
+        };
+
+        template <typename edge_type>
+        static size_t vertex_count_of(const edge_type& factor) {
+            if constexpr (edge::has_runtime_vertex_count<edge_type>::value) {
+                return static_cast<size_t>(factor.get_vertex_count());
+            }
+            else {
+                static_cast<void>(factor);
+                return static_cast<size_t>(edge_type::vertex_count);
+            }
+        }
+
         template <typename edge_type, typename = void>
         struct has_measurable {
             constexpr static const bool value = false;
@@ -183,14 +209,14 @@ namespace optimisation {
             , ordering_id(0)
             , vertices()
             , residual(math::matrix<double, 0, 0>::zero(static_cast<size_t>(edge_type::residual_count), 1))
-            , jacobians(static_cast<size_t>(edge_type::vertex_count))
+            , jacobians(edge::vertex_count_of(factor))
             , information(math::matrix<double, 0, 0>::identity(static_cast<size_t>(edge_type::residual_count), static_cast<size_t>(edge_type::residual_count)))
             , observation()
             , robust_loss() {
             static_assert(edge::is_edge<edge_type>::value, "An edge provides name, residual_count, vertex_count and compute_residual(edge, residual).");
             static_assert(sizeof(edge_type) <= edge::maximum_size, "The edge must fit the storage of the erased edge.");
             static_assert(alignof(edge_type) <= edge::maximum_alignment, "The edge must not need more alignment than the erased edge provides.");
-            this->vertices.reserve(static_cast<size_t>(edge_type::vertex_count));
+            this->vertices.reserve(this->jacobians.size());
             new (static_cast<void*>(this->storage), static_cast<edge*>(nullptr)) edge_type(factor);
         }
 

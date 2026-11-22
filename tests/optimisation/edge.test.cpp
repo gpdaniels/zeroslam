@@ -61,6 +61,31 @@ public:
     }
 };
 
+// The same distance, taking a third vertex whose first parameter scales it when it is made with one.
+class scaled_distance_edge final {
+public:
+    constexpr static const char* name = "scaled_distance";
+    constexpr static const int residual_count = 1;
+    constexpr static const int vertex_count = 2;
+
+    bool scaled;
+
+    int get_vertex_count() const {
+        return scaled_distance_edge::vertex_count + (this->scaled ? 1 : 0);
+    }
+
+    void compute_residual(const optimisation::edge& context, math::matrix<double, 0, 0>& residual) const {
+        const double* const lhs = context.get_vertex(0)->get_parameters();
+        const double* const rhs = context.get_vertex(1)->get_parameters();
+        double sum = 0.0;
+        for (size_t i = 0; i < 3; ++i) {
+            sum += (lhs[i] - rhs[i]) * (lhs[i] - rhs[i]);
+        }
+        const double scale = this->scaled ? context.get_vertex(2)->get_parameters()[0] : 1.0;
+        residual[0][0] = context.get_observation()[0][0] - (scale * std::sqrt(sum));
+    }
+};
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
@@ -206,6 +231,39 @@ int main(int argc, char* argv[]) {
         REQUIRE(assigned.num_vertices() == 2);
         assigned.compute_residual();
         REQUIRE(is_value_approx(assigned.get_residual()[0][0], 1.0));
+    }
+
+    {
+        // An edge may take a vertex count of its own when it is made, and then needs that many vertices and gives that many
+        // jacobians.
+        optimisation::vertex first{ optimisation::vertices::point() };
+        optimisation::vertex second{ optimisation::vertices::point() };
+        optimisation::vertex scale{ optimisation::vertices::point() };
+        const double first_location[3] = { 0.0, 0.0, 0.0 };
+        const double second_location[3] = { 3.0, 4.0, 0.0 };
+        const double scale_value[3] = { 2.0, 0.0, 0.0 };
+        REQUIRE(first.set_parameters(&first_location[0], 3));
+        REQUIRE(second.set_parameters(&second_location[0], 3));
+        REQUIRE(scale.set_parameters(&scale_value[0], 3));
+        optimisation::edge plain{ scaled_distance_edge{ false } };
+        REQUIRE(plain.required_vertices() == 2);
+        optimisation::edge scaled{ scaled_distance_edge{ true } };
+        REQUIRE(scaled.required_vertices() == 3);
+        REQUIRE(scaled.add_vertex(&first));
+        REQUIRE(scaled.add_vertex(&second));
+        REQUIRE(scaled.add_vertex(&scale));
+        REQUIRE(!scaled.add_vertex(&scale));
+        scaled.set_observation(math::matrix<double, 0, 0>(1, 1, math::matrix<double, 1, 1>{ { 11.0 } }.data()));
+        scaled.compute_residual();
+        REQUIRE(is_value_approx(scaled.get_residual()[0][0], 1.0));
+        scaled.compute_jacobians();
+        REQUIRE(scaled.get_jacobians().size() == 3);
+        REQUIRE(is_value_approx(scaled.get_jacobians()[2][0][0], -5.0, 1e-6));
+        const optimisation::edge copied(scaled);
+        REQUIRE(copied.required_vertices() == 3);
+        optimisation::edge moved(static_cast<optimisation::edge&&>(scaled));
+        REQUIRE(moved.required_vertices() == 3);
+        REQUIRE(scaled.required_vertices() == 0);
     }
 
     return EXIT_SUCCESS;

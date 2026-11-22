@@ -132,7 +132,7 @@ namespace optimisation {
     }
 
     size_t edge::required_vertices() const {
-        return (this->functions != nullptr) ? static_cast<size_t>(this->functions->vertex_count) : 0;
+        return (this->functions != nullptr) ? this->jacobians.size() : 0;
     }
 
     bool edge::add_vertex(vertex* node) {

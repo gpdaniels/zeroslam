@@ -52,6 +52,40 @@ public:
     }
 };
 
+// A vertex whose sizes are known when it is made, which keeps the sum of its parameters wherever they are written.
+class sized_vertex final {
+public:
+    constexpr static const char* name = "sized";
+    constexpr static const int parameter_count = 1;
+    constexpr static const int local_count = 1;
+
+    int parameters_held;
+    int locals_held;
+    double* sum;
+
+    int get_parameter_count() const {
+        return this->parameters_held;
+    }
+
+    int get_local_count() const {
+        return this->locals_held;
+    }
+
+    void plus(double* const parameters, const double* const delta) const {
+        for (int i = 0; i < this->locals_held; ++i) {
+            parameters[i] += delta[i];
+        }
+        this->synchronise(parameters);
+    }
+
+    void synchronise(const double* const parameters) const {
+        *this->sum = 0.0;
+        for (int i = 0; i < this->parameters_held; ++i) {
+            *this->sum += parameters[i];
+        }
+    }
+};
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
@@ -139,6 +173,46 @@ int main(int argc, char* argv[]) {
 
     // An erased vertex has no type to name.
     REQUIRE(std::strcmp(empty.name(), "") == 0);
+
+    {
+        // The sizes a vertex is made with override its constants, and are checked then: a vertex that cannot hold them is
+        // invalid. Its own policy is reachable by its type, and writing its parameters from outside synchronises it.
+        double sum = 0.0;
+        optimisation::vertex sized{ sized_vertex{ 20, 3, &sum } };
+        REQUIRE(sized.is_valid());
+        REQUIRE(sized.get_parameter_dimensions() == 20);
+        REQUIRE(sized.get_local_dimensions() == 3);
+        REQUIRE(sized.get_policy<sized_vertex>() != nullptr);
+        REQUIRE(sized.get_policy<sized_vertex>()->parameters_held == 20);
+        REQUIRE(sized.get_policy<scalar_vertex>() == nullptr);
+        double values[20] = {};
+        for (size_t i = 0; i < 20; ++i) {
+            values[i] = 1.0;
+        }
+        REQUIRE(!sized.set_parameters(&values[0], 7));
+        REQUIRE(sized.set_parameters(&values[0], 20));
+        REQUIRE(sum == 20.0);
+        sized.backup();
+        const double step[3] = { 1.0, 2.0, 3.0 };
+        sized.plus(&step[0]);
+        REQUIRE(sum == 26.0);
+        sized.restore();
+        REQUIRE(sum == 20.0);
+        const optimisation::vertex sized_copy(sized);
+        REQUIRE(sized_copy.get_parameter_dimensions() == 20);
+        REQUIRE(sized_copy.get_local_dimensions() == 3);
+        optimisation::vertex sized_assigned;
+        sized_assigned = sized_copy;
+        REQUIRE(sized_assigned.get_local_dimensions() == 3);
+        sized_assigned.clear();
+        REQUIRE(sized_assigned.get_parameter_dimensions() == 0);
+        REQUIRE(sized_assigned.get_local_dimensions() == 0);
+        REQUIRE(!optimisation::vertex(sized_vertex{ static_cast<int>(optimisation::vertex::maximum_parameters) + 1, 1, &sum }).is_valid());
+        REQUIRE(!optimisation::vertex(sized_vertex{ 4, 5, &sum }).is_valid());
+        REQUIRE(!optimisation::vertex(sized_vertex{ 4, 0, &sum }).is_valid());
+        REQUIRE(!optimisation::vertex(sized_vertex{ 0, 0, &sum }).is_valid());
+        REQUIRE(optimisation::vertex(sized_vertex{ 4, 0, &sum }).get_policy<sized_vertex>() == nullptr);
+    }
 
     return EXIT_SUCCESS;
 }

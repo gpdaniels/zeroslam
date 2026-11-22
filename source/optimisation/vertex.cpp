@@ -20,6 +20,8 @@ namespace optimisation {
     vertex::vertex()
         : storage{}
         , functions(nullptr)
+        , parameter_count(0)
+        , local_count(0)
         , ordering_id(0)
         , fixed(false)
         , marginalised(false)
@@ -30,6 +32,8 @@ namespace optimisation {
     vertex::vertex(const vertex& other)
         : storage{}
         , functions(other.functions)
+        , parameter_count(other.parameter_count)
+        , local_count(other.local_count)
         , ordering_id(other.ordering_id)
         , fixed(other.fixed)
         , marginalised(other.marginalised)
@@ -47,6 +51,8 @@ namespace optimisation {
     vertex::vertex(vertex&& other)
         : storage{}
         , functions(other.functions)
+        , parameter_count(other.parameter_count)
+        , local_count(other.local_count)
         , ordering_id(other.ordering_id)
         , fixed(other.fixed)
         , marginalised(other.marginalised)
@@ -68,6 +74,8 @@ namespace optimisation {
             if (this->functions != nullptr) {
                 this->functions->copy(other.storage, this->storage);
             }
+            this->parameter_count = other.parameter_count;
+            this->local_count = other.local_count;
             this->ordering_id = other.ordering_id;
             this->fixed = other.fixed;
             this->marginalised = other.marginalised;
@@ -86,6 +94,8 @@ namespace optimisation {
             if (this->functions != nullptr) {
                 this->functions->move(other.storage, this->storage);
             }
+            this->parameter_count = other.parameter_count;
+            this->local_count = other.local_count;
             this->ordering_id = other.ordering_id;
             this->fixed = other.fixed;
             this->marginalised = other.marginalised;
@@ -106,6 +116,8 @@ namespace optimisation {
             this->functions->destroy(this->storage);
             this->functions = nullptr;
         }
+        this->parameter_count = 0;
+        this->local_count = 0;
     }
 
     bool vertex::is_valid() const {
@@ -125,11 +137,11 @@ namespace optimisation {
     }
 
     int vertex::get_parameter_dimensions() const {
-        return (this->functions != nullptr) ? this->functions->parameter_count : 0;
+        return this->parameter_count;
     }
 
     int vertex::get_local_dimensions() const {
-        return (this->functions != nullptr) ? this->functions->local_count : 0;
+        return this->local_count;
     }
 
     void vertex::set_fixed(bool fixed_value) {
@@ -159,6 +171,9 @@ namespace optimisation {
         for (size_t i = 0; i < parameters_length; ++i) {
             this->parameters[i] = parameters_value[i];
         }
+        if (this->functions->synchronise != nullptr) {
+            this->functions->synchronise(this->storage, &this->parameters[0]);
+        }
         return true;
     }
 
@@ -181,6 +196,9 @@ namespace optimisation {
     void vertex::restore() {
         for (size_t i = 0; i < vertex::maximum_parameters; ++i) {
             this->parameters[i] = this->parameters_backup[i];
+        }
+        if ((this->functions != nullptr) && (this->functions->synchronise != nullptr)) {
+            this->functions->synchronise(this->storage, &this->parameters[0]);
         }
     }
 
