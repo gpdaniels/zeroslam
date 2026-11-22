@@ -164,11 +164,14 @@ namespace mapping {
         bool provisional_loops = false;
         // How many keyframes must verify a loop before it is reported, the keyframe that found it included.
         size_t loop_confirmations = 1;
+        // Whether a loop is a rigid motion, its similarity's scale held at one, as in a map with metric scale.
+        bool fixed_scale = false;
         pending_loop pending;
 
         // Similarities rhs = s R lhs + t from three pairs at a time, each supported by the pairs that reproject within the
-        // inlier bound in both keyframes, and the best refitted on its supporters.
-        static bool reprojection_consensus(const math::se3<double>& pose, const sensor::model& camera, const keyframe& candidate, const record* const keyframe_records, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, double (&rotation)[3][3], double (&translation)[3], double& scale, size_t& supporters);
+        // inlier bound in both keyframes, and the best refitted on its supporters. With fixed_scale each is the rigid motion
+        // with the same rotation, s one and t between the pairs' centroids.
+        static bool reprojection_consensus(const math::se3<double>& pose, const sensor::model& camera, const keyframe& candidate, const record* const keyframe_records, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, const bool fixed_scale, double (&rotation)[3][3], double (&translation)[3], double& scale, size_t& supporters);
 
         // The candidate's records of the keyframe's landmarks, by landmark id.
         static void shared_landmarks(const record* const keyframe_records, const size_t keyframe_records_size, const keyframe& candidate, std::vector<estimation::correspondence_3d_3d<double>>& correspondences, std::vector<correspondence>& pairs, std::vector<std::pair<size_t, size_t>>& pair_records);
@@ -183,8 +186,8 @@ namespace mapping {
         static bool reprojects(const math::se3<double>& pose, const sensor::model& camera, const record& current_record, const keyframe& candidate, const record& recorded_record, const estimation::correspondence_3d_3d<double>& correspondence, const math::sim3<double>& similarity, const math::sim3<double>& similarity_inverse, const double bound_squared);
 
         // The similarity refined over the seeded pairs by their reprojection into both keyframes, the pairs then beyond the
-        // inlier bound dropped and the rest solved again.
-        static math::sim3<double> refine_similarity(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const keyframe& candidate, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, const std::vector<unsigned char>& seeded, const size_t seeded_count, const math::sim3<double>& initial);
+        // inlier bound dropped and the rest solved again. With fixed_scale its scale is held at one.
+        static math::sim3<double> refine_similarity(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const keyframe& candidate, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, const std::vector<unsigned char>& seeded, const size_t seeded_count, const math::sim3<double>& initial, const bool fixed_scale);
 
         // How many of a keyframe's records the similarity explains against the candidate's: the pairs shared by id and those
         // the guided search finds, the similarity refined over them and the inliers counted, which matches receives; none
@@ -258,6 +261,12 @@ namespace mapping {
         // that found it, then up to max_confirming_covisibles keyframes covisible with it, then the keyframes that follow,
         // each matched by projection through the loop's similarity; one reports a loop as soon as it verifies.
         void set_loop_confirmations(const size_t count);
+
+        // Whether a loop is a rigid motion rather than a similarity, for a map whose scale is metric: its hypotheses and
+        // refinement hold the scale at one, so a loop corrects the drift of the poses without rescaling the map.
+        void set_fixed_scale(const bool enabled);
+
+        bool get_fixed_scale() const;
 
         std::vector<int> recall(const feature::descriptor::stored* const descriptors, const size_t descriptors_size, const size_t max_recalled) const;
 

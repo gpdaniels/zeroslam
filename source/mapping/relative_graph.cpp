@@ -322,13 +322,13 @@ namespace mapping {
         }
     }
 
-    int relative_graph::add_loop(const int parent, const int child, const math::sim3<double>& child_to_parent) {
+    int relative_graph::add_loop(const int parent, const int child, const math::sim3<double>& child_to_parent, const bool similarity) {
         if ((parent == child) || (this->nodes.count(parent) == 0) || (this->nodes.count(child) == 0)) {
             return -1;
         }
         math::sim3<double> transform = child_to_parent;
         transform.transformation().rotation() = transform.transformation().rotation().normalised();
-        return this->add_link(parent, child, transform, true);
+        return this->add_link(parent, child, transform, similarity);
     }
 
     void relative_graph::search(const int source, const std::vector<int>* const targets) {

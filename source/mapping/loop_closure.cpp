@@ -28,6 +28,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "math/math.hpp"
 #include "optimisation/edge.hpp"
 #include "optimisation/edges/similarity_reprojection.hpp"
+#include "optimisation/edges/similarity_scale_prior.hpp"
 #include "optimisation/factor_graph.hpp"
 #include "optimisation/loss.hpp"
 #include "optimisation/losses/huber.hpp"
@@ -46,6 +47,32 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 namespace mapping {
+    namespace {
+        // The information of the unit scale prior that makes a refined similarity rigid.
+        constexpr static const double fixed_scale_information = 1.0e8;
+
+        // The rigid motion with a similarity's rotation that best maps count source points onto their targets: unit scale,
+        // and the translation between the centroids, which is the least squares translation for the rotation.
+        void hold_unit_scale(const double* const source, const double* const target, const size_t count, const double (&rotation)[9], double (&translation)[3], double& scale) {
+            double source_centroid[3] = { 0.0, 0.0, 0.0 };
+            double target_centroid[3] = { 0.0, 0.0, 0.0 };
+            for (size_t i = 0; i < count; ++i) {
+                for (size_t axis = 0; axis < 3; ++axis) {
+                    source_centroid[axis] += source[(i * 3) + axis];
+                    target_centroid[axis] += target[(i * 3) + axis];
+                }
+            }
+            for (size_t axis = 0; axis < 3; ++axis) {
+                source_centroid[axis] /= static_cast<double>(count);
+                target_centroid[axis] /= static_cast<double>(count);
+            }
+            for (size_t row = 0; row < 3; ++row) {
+                translation[row] = target_centroid[row] - ((rotation[(row * 3) + 0] * source_centroid[0]) + (rotation[(row * 3) + 1] * source_centroid[1]) + (rotation[(row * 3) + 2] * source_centroid[2]));
+            }
+            scale = 1.0;
+        }
+    }
+
     loop_closure::loop_closure()
         : recognition()
         , keyframes()
@@ -286,7 +313,7 @@ namespace mapping {
         return outcome;
     }
 
-    bool loop_closure::reprojection_consensus(const math::se3<double>& pose, const sensor::model& camera, const keyframe& candidate, const record* const keyframe_records, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, double (&rotation)[3][3], double (&translation)[3], double& scale, size_t& supporters) {
+    bool loop_closure::reprojection_consensus(const math::se3<double>& pose, const sensor::model& camera, const keyframe& candidate, const record* const keyframe_records, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, const bool fixed_scale, double (&rotation)[3][3], double (&translation)[3], double& scale, size_t& supporters) {
         const size_t count = correspondences.size();
         supporters = 0;
         if (count < 3) {
@@ -355,6 +382,9 @@ namespace mapping {
             if (!estimation::minimal::similarity_3_point<double>::solve(&source[0], &target[0], 3, hypothesis_rotation, hypothesis_translation, hypothesis_scale)) {
                 continue;
             }
+            if (fixed_scale) {
+                hold_unit_scale(&source[0], &target[0], 3, hypothesis_rotation, hypothesis_translation, hypothesis_scale);
+            }
             const size_t supported = support(hypothesis_rotation, hypothesis_translation, hypothesis_scale, nullptr);
             if (supported <= best) {
                 continue;
@@ -388,6 +418,9 @@ namespace mapping {
         double refit_translation[3];
         double refit_scale = 0.0;
         if (estimation::minimal::similarity_3_point<double>::solve(source.data(), target.data(), inliers.size(), refit_rotation, refit_translation, refit_scale)) {
+            if (fixed_scale) {
+                hold_unit_scale(source.data(), target.data(), inliers.size(), refit_rotation, refit_translation, refit_scale);
+            }
             const size_t refit_supported = support(refit_rotation, refit_translation, refit_scale, nullptr);
             if (refit_supported >= best) {
                 best = refit_supported;
@@ -488,12 +521,18 @@ namespace mapping {
         return ((loop_error_x * loop_error_x) + (loop_error_y * loop_error_y) <= bound_squared) && ((current_error_x * current_error_x) + (current_error_y * current_error_y) <= bound_squared);
     }
 
-    math::sim3<double> loop_closure::refine_similarity(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const keyframe& candidate, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, const std::vector<unsigned char>& seeded, const size_t seeded_count, const math::sim3<double>& initial) {
+    math::sim3<double> loop_closure::refine_similarity(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const keyframe& candidate, const std::vector<estimation::correspondence_3d_3d<double>>& correspondences, const std::vector<std::pair<size_t, size_t>>& pair_records, const std::vector<unsigned char>& seeded, const size_t seeded_count, const math::sim3<double>& initial, const bool fixed_scale) {
         optimisation::factor_graph refinement;
-        double parameters[8] = { initial.transformation().translation()[0], initial.transformation().translation()[1], initial.transformation().translation()[2], initial.transformation().rotation().get_quaternion()[1], initial.transformation().rotation().get_quaternion()[2], initial.transformation().rotation().get_quaternion()[3], initial.transformation().rotation().get_quaternion()[0], initial.scale() };
+        double parameters[8] = { initial.transformation().translation()[0], initial.transformation().translation()[1], initial.transformation().translation()[2], initial.transformation().rotation().get_quaternion()[1], initial.transformation().rotation().get_quaternion()[2], initial.transformation().rotation().get_quaternion()[3], initial.transformation().rotation().get_quaternion()[0], fixed_scale ? 1.0 : initial.scale() };
         optimisation::vertex similarity_vertex{ optimisation::vertices::similarity() };
         similarity_vertex.set_parameters(&parameters[0], 8);
         optimisation::vertex* const vertex = refinement.add_vertex(static_cast<optimisation::vertex&&>(similarity_vertex));
+        if (fixed_scale) {
+            optimisation::edge prior{ optimisation::edges::similarity_scale_prior(1.0) };
+            prior.add_vertex(vertex);
+            prior.set_information(math::matrix<double, 0, 0>::identity(1, 1) * fixed_scale_information);
+            refinement.add_edge(static_cast<optimisation::edge&&>(prior));
+        }
         const optimisation::loss lossfunction(optimisation::losses::huber(math::sqrt(loop_closure::reprojection_inlier_bound_squared)));
         const auto add_edge = [&](const math::matrix<double, 3, 1>& location, const sensor::model& observer_camera, const math::se3<double>& observer_pose, const bool inverted, const float pixel_x, const float pixel_y) -> optimisation::edge* {
             optimisation::edge factor{ optimisation::edges::similarity_reprojection(sensor::camera::model<double>(observer_camera), location, observer_pose, inverted) };
@@ -534,7 +573,7 @@ namespace mapping {
             static_cast<void>(refinement.solve(loop_closure::refine_rounds, true));
         }
         const double* const refined = vertex->get_parameters();
-        return math::sim3<double>(math::se3<double>(math::so3<double>(refined[6], refined[3], refined[4], refined[5]), { { refined[0], refined[1], refined[2] } }), refined[7]);
+        return math::sim3<double>(math::se3<double>(math::so3<double>(refined[6], refined[3], refined[4], refined[5]), { { refined[0], refined[1], refined[2] } }), fixed_scale ? 1.0 : refined[7]);
     }
 
     size_t loop_closure::confirm(const math::se3<double>& pose, const sensor::model& camera, const record* const keyframe_records, const size_t keyframe_records_size, const keyframe& candidate, math::sim3<double>& correction, std::vector<correspondence>& matches) const {
@@ -554,7 +593,7 @@ namespace mapping {
             return 0;
         }
         const std::vector<unsigned char> seeded(correspondences.size(), static_cast<unsigned char>(1));
-        const math::sim3<double> refined = loop_closure::refine_similarity(pose, camera, keyframe_records, candidate, correspondences, pair_records, seeded, correspondences.size(), correction);
+        const math::sim3<double> refined = loop_closure::refine_similarity(pose, camera, keyframe_records, candidate, correspondences, pair_records, seeded, correspondences.size(), correction, this->fixed_scale);
         const double scale_change = refined.scale() / correction.scale();
         if (!(scale_change <= loop_closure::max_confirmation_scale_change) || !(scale_change >= 1.0 / loop_closure::max_confirmation_scale_change)) {
             return 0;
@@ -727,10 +766,22 @@ namespace mapping {
         std::vector<size_t> inliers(correspondences.size());
         size_t inliers_size = 0;
         estimation::robust::solver::similarity<double>::model_type model{};
-        const bool solved = this->reprojection_hypotheses ? loop_closure::reprojection_consensus(pose, camera, candidate, keyframe_records, correspondences, pair_records, model.rotation, model.translation, model.scale, inliers_size) : estimation::robust::solver::similarity<double>::solve(correspondences.data(), correspondences.size(), inlier_threshold, residuals.data(), inliers.data(), inliers_size, model);
+        const bool solved = this->reprojection_hypotheses ? loop_closure::reprojection_consensus(pose, camera, candidate, keyframe_records, correspondences, pair_records, this->fixed_scale, model.rotation, model.translation, model.scale, inliers_size) : estimation::robust::solver::similarity<double>::solve(correspondences.data(), correspondences.size(), inlier_threshold, residuals.data(), inliers.data(), inliers_size, model);
         if (!solved) {
             core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d rejected, no similarity fits its %zu shared landmarks (%zu by id).", keyframe_id, candidate_id, correspondences.size(), shared_by_id);
             return false;
+        }
+        if (this->fixed_scale && !this->reprojection_hypotheses && (inliers_size > 0)) {
+            std::vector<double> source(inliers_size * 3);
+            std::vector<double> target(inliers_size * 3);
+            for (size_t i = 0; i < inliers_size; ++i) {
+                for (size_t axis = 0; axis < 3; ++axis) {
+                    source[(i * 3) + axis] = correspondences[inliers[i]].lhs[axis];
+                    target[(i * 3) + axis] = correspondences[inliers[i]].rhs[axis];
+                }
+            }
+            const double fitted_rotation[9] = { model.rotation[0][0], model.rotation[0][1], model.rotation[0][2], model.rotation[1][0], model.rotation[1][1], model.rotation[1][2], model.rotation[2][0], model.rotation[2][1], model.rotation[2][2] };
+            hold_unit_scale(source.data(), target.data(), inliers_size, fitted_rotation, model.translation, model.scale);
         }
 
         const math::matrix<double, 3, 3> rotation = { { { model.rotation[0][0], model.rotation[0][1], model.rotation[0][2] },
@@ -781,9 +832,9 @@ namespace mapping {
         // hypothesis, none the refinement over every pair, 28 the refinement from the explained ones).
         const std::vector<unsigned char> every(correspondences.size(), static_cast<unsigned char>(1));
         const bool seed = this->refine_from_hypothesis && (explained_count >= 3);
-        correction = loop_closure::refine_similarity(pose, camera, keyframe_records, candidate, correspondences, pair_records, seed ? explained : every, seed ? explained_count : correspondences.size(), hypothesis);
+        correction = loop_closure::refine_similarity(pose, camera, keyframe_records, candidate, correspondences, pair_records, seed ? explained : every, seed ? explained_count : correspondences.size(), hypothesis, this->fixed_scale);
         if (!seed && (explained_count >= 3) && (count_inliers(correction) < hypothesis_inliers)) {
-            const math::sim3<double> reseeded = loop_closure::refine_similarity(pose, camera, keyframe_records, candidate, correspondences, pair_records, explained, explained_count, hypothesis);
+            const math::sim3<double> reseeded = loop_closure::refine_similarity(pose, camera, keyframe_records, candidate, correspondences, pair_records, explained, explained_count, hypothesis, this->fixed_scale);
             if (count_inliers(reseeded) > count_inliers(correction)) {
                 core::logger::log(core::logger::level::debug, "Loop candidate keyframe %d -> %d refined again from the %zu pairs its first similarity explains.", keyframe_id, candidate_id, explained_count);
                 correction = reseeded;
@@ -970,6 +1021,14 @@ namespace mapping {
 
     void loop_closure::set_provisional_loops(const bool enabled) {
         this->provisional_loops = enabled;
+    }
+
+    void loop_closure::set_fixed_scale(const bool enabled) {
+        this->fixed_scale = enabled;
+    }
+
+    bool loop_closure::get_fixed_scale() const {
+        return this->fixed_scale;
     }
 
     void loop_closure::set_loop_confirmations(const size_t count) {

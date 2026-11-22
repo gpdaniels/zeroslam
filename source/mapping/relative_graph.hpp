@@ -141,7 +141,8 @@ namespace mapping {
         void synchronise(const mapping::map& reconstruction, const std::vector<std::pair<int, size_t>>& keyframes);
 
         // Links the frames of a loop by the similarity taking the child's coordinates into the parent's, returning its index.
-        int add_loop(const int parent, const int child, const math::sim3<double>& child_to_parent);
+        // A loop in a map with metric scale is rigid, and its link keeps the scale of one as the chain's links do.
+        int add_loop(const int parent, const int child, const math::sim3<double>& child_to_parent, const bool similarity = true);
 
         // Adapts the graph to the latest changes. The region is the frames nearest the seeds, and outwards from them every
         // frame whose reprojection error has changed since it was last adjusted. The transforms into the active frames, any
