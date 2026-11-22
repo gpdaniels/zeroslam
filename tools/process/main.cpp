@@ -16,6 +16,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "cdr.hpp"
 #include "dataset.hpp"
+#include "depth.hpp"
 #include "file.hpp"
 #include "mcap.hpp"
 #include "metrics.hpp"
@@ -288,6 +289,7 @@ int main(int argc, char* argv[]) {
     std::vector<const char*> settings;
     std::vector<std::string> camera_names;
     double perturbation[2] = { 0.0, 0.0 };
+    process_depth::options depth_options;
     for (int i = 1; i < argc; ++i) {
         const auto matches = [&](const char* name) {
             return std::strcmp(argv[i], name) == 0;
@@ -377,6 +379,11 @@ int main(int argc, char* argv[]) {
             }
             verbosity = static_cast<int>(level);
         }
+        else if (bool depth_failed = false; process_depth::parse_option(argc, argv, i, depth_options, depth_failed)) {
+            if (depth_failed) {
+                return EXIT_FAILURE;
+            }
+        }
         else if (argv[i][0] == '-') {
             std::fprintf(stderr, "Unknown option: %s\n", argv[i]);
             return EXIT_FAILURE;
@@ -398,6 +405,7 @@ int main(int argc, char* argv[]) {
         std::printf("    --verbose - Optional log verbosity (0=silent, 1=errors, 2=warnings, 3=notes, 4=progress, 5=debug), default is 1.\n");
         std::printf("    --truth   - Optional ground truth trajectory (TUM format); the run ends with absolute, relative and scale drift figures against it.\n");
         std::printf("    --live    - Skip the final global adjustment: the trajectory is the one tracked live, as the viewer shows it.\n");
+        process_depth::print_usage();
         std::printf("    --focal-scale - Optional factor on the scene's focal lengths, to run from a wrong calibration (see the calibration key).\n");
         std::printf("    --config  - Optional slam configuration setting (repeatable), see the library's configuration keys.\n");
         std::printf("    --cameras - Optional cameras run together as a rig, e.g. image_01,image_02, the first the primary camera whose poses are\n");
@@ -431,6 +439,15 @@ int main(int argc, char* argv[]) {
     if (info_channel == nullptr) {
         std::fprintf(stderr, "The scene has no camera info channel for the intrinsics.\n");
         return EXIT_FAILURE;
+    }
+
+    process_depth::feeder depth_feeder;
+    if (!depth_feeder.prepare(reader, depth_options, 1, camera_names.size(), error)) {
+        std::fprintf(stderr, "%s.\n", error.c_str());
+        return EXIT_FAILURE;
+    }
+    if (depth_feeder.enabled()) {
+        log(4, "Depth camera: %s, noise %g + %g d + %g d^2 m, range %g to %g m", depth_feeder.topic(), depth_options.noise[0], depth_options.noise[1], depth_options.noise[2], depth_options.range[0], depth_options.range[1]);
     }
 
     log(4, "Loading slam system...");
@@ -482,6 +499,7 @@ int main(int argc, char* argv[]) {
             const mcap::message_type* const img_msg = &buffered;
             if (skip_count > 0) {
                 --skip_count;
+                depth_feeder.clear();
                 continue;
             }
             if (camera.parameters_length == 0) {
@@ -510,7 +528,7 @@ int main(int argc, char* argv[]) {
                 rig.sensor_id = sensor_id;
                 rig.parameters_length = static_cast<int>(sizeof(camera));
                 rig.parameters_data = &camera;
-                if (slam.set_sensor_rig(&rig, 1) != zeroslam_return_success) {
+                if (depth_feeder.set_sensor_rig(slam, rig) != zeroslam_return_success) {
                     std::fprintf(stderr, "The library rejected the camera rig.\n");
                     return false;
                 }
@@ -535,7 +553,7 @@ int main(int argc, char* argv[]) {
             measurement.sensor_id = sensor_id;
             measurement.measurement_length = static_cast<int>(image.width * image.height);
             measurement.measurement_data = colour ? greyscale.data() : image.data.data();
-            const zeroslam_return_enum result = slam.set_sensor_data(&measurement, 1);
+            const zeroslam_return_enum result = depth_feeder.set_sensor_data(slam, reader, measurement, image.width, image.height);
             if (result != zeroslam_return_success) {
                 std::fprintf(stderr, "The library rejected frame %zu: %s.\n", frames + 1, zeroslam_return_enum_to_string(result));
                 return false;
@@ -585,6 +603,7 @@ int main(int argc, char* argv[]) {
             }
         }
         current_timestamp = message_time;
+        depth_feeder.note(entry.channel_id, message_number);
 
         if (entry.channel_id == info_channel->id) {
             mcap::message_type message;
@@ -704,6 +723,9 @@ int main(int argc, char* argv[]) {
     if (truth_path != nullptr) {
         if (!print_evaluation(truth_path, poses, timestamps.size())) {
             return EXIT_FAILURE;
+        }
+        if (depth_feeder.enabled()) {
+            process_depth::print_rigid_evaluation(truth_path, poses);
         }
     }
 

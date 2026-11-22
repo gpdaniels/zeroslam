@@ -92,6 +92,7 @@ The `tools/api-c`, `tools/api-cpp` and `tools/api-python` demonstrations walk th
 1. `zeroslam_create` a system, and optionally `zeroslam_set_configuration` it (see "Configuration").
 2. `zeroslam_set_sensor_rig`, before any data, with one or more `zeroslam_sensor_camera` entries (up to 16; the other sensor types are rejected): each a non-zero id and either a `zeroslam_sensor_parameters_camera_struct` of the image size, the focal lengths, the principal point in the pixel-centre frame (see "Pixel coordinates"), and the distortion `[k1 k2 p1 p2 k3 k4 k5 k6]` (zeros for an undistorted pinhole), or a `zeroslam_sensor_parameters_camera_model_struct` of the image size, a `zeroslam_camera_model_enum` and that model's parameters (see "Camera models"). The entry's `parameters_length` is the size of the struct it points to, which tells the two apart. The first camera is the primary camera, whose poses are reported. With several cameras, optionally `zeroslam_set_sensor_extrinsics` next (see "Camera rigs").
 3. `zeroslam_set_sensor_data` with each frame: the camera's id, a nanosecond timestamp that increases strictly from frame to frame, and `width * height` bytes of row major 8 bit greyscale pixels. A batch is validated whole before any of it is processed.
+   A single camera may have a depth camera registered to it, its frames given the same way (see "Depth cameras").
 4. `zeroslam_get_pose` (the newest posed frame) or `zeroslam_get_pose_at_timestamp` (the frame with exactly that timestamp) at any time, and `zeroslam_finalise` at the end of a run for a last global adjustment. `zeroslam_get_camera_calibration` gives a camera's calibration as the system holds it, in a `zeroslam_sensor_parameters_camera_model_struct` of the rig's model: the rig's, refined when the `calibration` key asks for it (see "Calibrating the camera"). Poses follow "Coordinate conventions": frames before initialisation completes, and frames dropped while tracking was lost, have no pose, and the covariance is not estimated yet (it is zero).
 5. `zeroslam_get_map_chunk` (every landmark, the position arguments are not used yet), `zeroslam_get_map_lines`, `zeroslam_get_map_keyframes`, `zeroslam_get_map_edges` (the covisibility and loop edges between keyframes, by timestamp) and `zeroslam_get_map_voxels` (the voxel map of the current map's landmarks as of the newest keyframe: the voxel size, and each occupied voxel's lowest corner and landmark count) export the map.
 6. `zeroslam_destroy` the system.
@@ -195,6 +196,21 @@ Cameras that share their view across a baseline (a stereo pair) initialise from 
 With `calibration` on, each camera of the rig is calibrated as the primary camera is, with an intrinsics vertex of its own that its observations take after its extrinsic.
 Relocalisation, loop detection and lines run on the primary camera, and `adjustment=relative` adjusts the primary camera's observations alone (the final global adjustment takes every camera's). The square root solver takes the extrinsic vertices as it does the poses.
 
+### Depth cameras ###
+
+A single camera's rig may also hold one `zeroslam_sensor_depth` entry, a depth camera registered to the camera (`zeroslam_sensor_parameters_depth_struct`): its images are the camera's size and pixel grid, as the aligned depth of a structured light or stereo camera comes (TUM RGB-D, the OAK-D), so pixel `(u, v)` holds the depth of what the camera's pixel `(u, v)` sees.
+It names its `camera_id`, the `encoding` (16 bit unsigned values of `scale` metres each, or 32 bit float metres; zero is no measurement), the `measure` (`axial`, the z of the point in the camera frame, or `radial`, the distance along the pixel's ray), the range of depths taken, the noise model, the standard deviation `noise_constant + noise_linear d + noise_quadratic d^2` metres of a depth `d` (the Kinect's random error is about `1.425e-3 d^2`), and the `pairing_tolerance` in nanoseconds.
+A depth is turned into a point by scaling the ray the camera model unprojects the pixel to, so it composes with every camera model.
+Depth frames have timestamps that increase among their own, and a camera frame takes the one nearest it in time within the tolerance from those given before it or in the same call; depth that comes after its camera frame is not used.
+`zeroslam::registered_depth` (C++) and `zeroslam.registered_depth` (python) fill the parameters with the Kinect's model.
+
+With a depth camera the map has metric scale (the property a stereo rig gives it too): it starts from the first frame with depth at 100 or more of its tracks, with no second view, and its landmarks take their depths from the keyframes' depth images (and are triangulated where there is no depth, as beyond the range).
+Each observation's depth is a factor in the adjustments beside its reprojection, the difference of the measured and predicted inverse depths weighted by the noise model, with a robust loss of its own, so that a depth off at an occluding edge loses its weight without the bearing; a depth beside a jump of more than 5% in the depth image is not taken, and one that disagrees with the adjusted map is dropped.
+The frames' poses are refined with their depths too, no baseline holds the scale, and a loop is a rigid motion rather than a similarity.
+With `adjustment=relative` the depths start the map, make the landmarks and refine the poses, and loops are rigid links, but the relative adjustment takes no depth factors: only the final global adjustment does, and the map drifts further.
+A scene's depth camera is a `mono16` (millimetres) or `32FC1` (metres) image topic `/sensor/depth_[01-99]` registered to `image_01`, which the importers store at the times of its frames.
+A depth camera in a rig of several cameras, and depth registered to a camera through an extrinsic, are not taken yet.
+
 ## Scene format ##
 
 A scene is one mcap file, `datasets/[dataset]/[scene].mcap`, holding:
@@ -292,6 +308,7 @@ cmake --build . --parallel 4
 ```
 
 The options are `--frames [count]` (the first frames only), `--skip [count]` (ignore the first frames), `--verbose [0-5]` (the log level, default `1`), `--truth [trajectory.txt]` (end with the absolute, relative and per metre errors against a TUM trajectory), `--live` (skip the final global adjustment, so the trajectory is the one tracked live), `--focal-scale [factor]` (scale the scene's focal lengths, to run from a wrong calibration), `--config key=value` (repeatable), `--cameras image_01,image_02` (run several cameras of the scene as a rig, the first the primary camera, each at its extrinsic on `/tf`, see "Camera rigs") and `--perturb-extrinsics degrees,metres` (start every camera's extrinsic but the primary's turned and shifted off the calibration, for `--config extrinsics=refine`).
+`--depth` gives the library the scene's depth camera (`/sensor/depth_01`) with each frame, a metric RGB-D map whose errors against `--truth` are also given without a fitted scale; `--depth-noise c0,c1,c2` sets its noise model (default `0.002,0,0.005`, fitted on TUM RGB-D fr1_desk, whose depth carries the registration and timing errors of the Kinect besides its random error) and `--depth-range min,max` the depths taken (default `0.1,10` metres).
 The run ends by printing the camera's calibration as the system holds it (`Calibration: [model] fx ... fy ... cx ... cy ...` and the rest of its parameters), the scene's unless `--config calibration=...` refined it.
 
 ## Evaluating a trajectory ##
@@ -314,6 +331,9 @@ cmake --build . --parallel 4
 # Anchor the alignment on the first pose pair (the default), or on the two centroids for the least squares fit.
 ./runtime/Release/zeroslam evaluate trajectory_gt.txt trajectory_eval_1.txt --first
 ./runtime/Release/zeroslam evaluate trajectory_gt.txt trajectory_eval_1.txt --centroid
+
+# Align without a scale, for a trajectory with metric scale (rgb-d, stereo).
+./runtime/Release/zeroslam evaluate trajectory_gt.txt trajectory_eval_1.txt --centroid --rigid
 
 # Fail (exit code 1) when an aligned rmse exceeds 5 cm.
 ./runtime/Release/zeroslam evaluate trajectory_gt.txt trajectory_eval_1.txt --max-rmse 0.05
@@ -387,6 +407,7 @@ cmake --build . --parallel 4
 The `gui` tool plays a scene through the SLAM system live, drawing the image with its features, the landmarks, lines, voxels, keyframes, covisibility and loop edges, and the trajectory against the scene's ground truth with live metrics (see "Coordinate conventions" for the `Scale To Truth` and `Align To Truth` controls).
 It also saves a finished map (`--save-map`) and displays a saved map instead of running the system (`--load-map`), and `--play`, `--screenshot [file]`, `--screenshot-after [frames]` and `--exit-after [frames]` script it.
 `--config key=value` starts it with a front end setting it offers in its controls: `tracker`, `lines`, `culling`, `association`, `detector`, `descriptor`, `flow` and `local_map`; the controls otherwise start at the library's defaults (`--help` lists them). `--cameras image_01,image_02` runs several cameras as a rig, the first the one shown.
+`--depth` gives the system the scene's depth camera with each frame of a single camera, as the `process` tool does.
 It needs OpenGL, with X11 on linux, Cocoa on macOS and Win32 on windows.
 ```
 cd build
@@ -461,6 +482,7 @@ cmake --build . --parallel 4
 
 The run's outputs go to `--work-dir` (default `./zeroslam-regression-work/[name]`) and the results are appended to `--log` (default `./regression.log`).
 `--name` and `--commit` override the recorded scene name and commit (default the git `HEAD`), `--config key=value` and `--cameras` are forwarded to the `process` tool, `--first` or `--centroid` picks the alignment anchor, and `--tools-dir` points at the other tools.
+`--depth` processes with the scene's depth camera and evaluates without a scale, recorded as `[name]+depth`.
 
 ## License ##
 

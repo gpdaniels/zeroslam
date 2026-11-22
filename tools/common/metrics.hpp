@@ -130,7 +130,8 @@ namespace metrics {
         const std::vector<dataset::trajectory_pose>& ground_truth,
         const std::vector<dataset::trajectory_pose>& estimated,
         const bool overlap_first_pose,
-        const long long association_tolerance_nanoseconds = default_association_tolerance_nanoseconds
+        const long long association_tolerance_nanoseconds = default_association_tolerance_nanoseconds,
+        const bool fit_scale = true
     ) {
         result output;
         dataset::associate_trajectories(ground_truth, estimated, association_tolerance_nanoseconds, output.pairs);
@@ -159,7 +160,7 @@ namespace metrics {
         double prior_rotation[9];
         const bool prior = first_pair_rotation(ground_truth[output.pairs.front().first], estimated[output.pairs.front().second], &prior_rotation[0]);
 
-        if (!alignment::absolute_orientation(truth[0].data(), truth[1].data(), truth[2].data(), count, estimate[0].data(), estimate[1].data(), estimate[2].data(), count, output.transform.scale, output.transform.rotation, output.transform.translation, overlap_first_pose, prior ? &prior_rotation[0] : nullptr, &output.alignment_conditioning)) {
+        if (!alignment::absolute_orientation(truth[0].data(), truth[1].data(), truth[2].data(), count, estimate[0].data(), estimate[1].data(), estimate[2].data(), count, output.transform.scale, output.transform.rotation, output.transform.translation, overlap_first_pose, prior ? &prior_rotation[0] : nullptr, &output.alignment_conditioning, fit_scale)) {
             return output;
         }
         output.alignment_degenerate = (output.alignment_conditioning < alignment::degenerate_conditioning);
