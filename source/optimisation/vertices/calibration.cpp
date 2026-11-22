@@ -19,32 +19,41 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "core/assert.hpp"
 
 namespace {
-    // The vertex policy of a calibration with the given number of free values, which the vertex needs at compile time.
-    template <int free_count>
+    // The vertex policy of a calibration, its local dimensions the count of free values, which the vertex takes when it is made.
     class calibration_values final {
     public:
         constexpr static const char* name = optimisation::vertices::calibration::name;
         constexpr static const int parameter_count = optimisation::vertices::calibration::parameter_count;
-        constexpr static const int local_count = free_count;
+        constexpr static const int local_count = 1;
+
+    private:
+        int free_count;
 
     public:
+        explicit calibration_values(const int free_count_value)
+            : free_count(free_count_value) {
+        }
+
+        int get_parameter_count() const {
+            return calibration_values::parameter_count;
+        }
+
+        int get_local_count() const {
+            return (this->free_count > 0) ? this->free_count : 1;
+        }
+
         void plus(double* const parameters, const double* const delta) const {
             const unsigned int mask = optimisation::vertices::calibration::mask(parameters);
             int local = 0;
             for (size_t value = 0; value < optimisation::vertices::calibration::maximum_values; ++value) {
                 if ((mask & (1u << value)) != 0u) {
-                    ASSERT(local < free_count, "A calibration vertex must have a local dimension for each free value.");
+                    ASSERT(local < this->free_count, "A calibration vertex must have a local dimension for each free value.");
                     parameters[value] += delta[local];
                     ++local;
                 }
             }
         }
     };
-
-    template <int free_count>
-    optimisation::vertex make_calibration_vertex() {
-        return optimisation::vertex(calibration_values<free_count>());
-    }
 }
 
 namespace optimisation::vertices {
@@ -61,33 +70,7 @@ namespace optimisation::vertices {
         }
         parameters[calibration::mask_index] = static_cast<double>(mask);
 
-        vertex result;
-        switch (free_count) {
-            case 2:
-                result = make_calibration_vertex<2>();
-                break;
-            case 3:
-                result = make_calibration_vertex<3>();
-                break;
-            case 4:
-                result = make_calibration_vertex<4>();
-                break;
-            case 5:
-                result = make_calibration_vertex<5>();
-                break;
-            case 6:
-                result = make_calibration_vertex<6>();
-                break;
-            case 7:
-                result = make_calibration_vertex<7>();
-                break;
-            case 8:
-                result = make_calibration_vertex<8>();
-                break;
-            default:
-                result = make_calibration_vertex<1>();
-                break;
-        }
+        vertex result{ calibration_values(free_count) };
         const bool set = result.set_parameters(&parameters[0], static_cast<size_t>(calibration::parameter_count));
         ASSERT(set, "A calibration vertex takes its values and its mask.");
         static_cast<void>(set);

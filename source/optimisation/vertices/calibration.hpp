@@ -28,8 +28,9 @@ namespace optimisation::vertices {
     // A vector of up to eight calibration parameters, such as a wheel odometer's radii and steering gain, of which only those
     // in a mask are free. The parameters are the values followed by the mask (bit i for value i, as a double), so that the edges,
     // which see only a vertex's parameters, read which values move and in which order they take the local dimensions: one local
-    // dimension per free value, in the order of the values, so that the solver sees a block of exactly the free values and no
-    // singular dimensions for the held ones. A vertex with no free value is made fixed.
+    // dimension per free value, in the order of the values, the count given to the vertex when it is made, so that the solver
+    // sees a block of exactly the free values and no singular dimensions for the held ones. A vertex with no free value is made
+    // fixed.
     class calibration final {
     public:
         constexpr static const char* name = "calibration";
