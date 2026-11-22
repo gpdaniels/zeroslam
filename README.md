@@ -90,7 +90,7 @@ The interface is the C API in `include/zeroslam/zeroslam.h`, wrapped for C++ by 
 The `tools/api-c`, `tools/api-cpp` and `tools/api-python` demonstrations walk through every call.
 
 1. `zeroslam_create` a system, and optionally `zeroslam_set_configuration` it (see "Configuration").
-2. `zeroslam_set_sensor_rig`, before any data, with exactly one `zeroslam_sensor_camera` entry (the system is monocular, and the other sensor types are rejected): a non-zero id and either a `zeroslam_sensor_parameters_camera_struct` of the image size, the focal lengths, the principal point in the pixel-centre frame (see "Pixel coordinates"), and the distortion `[k1 k2 p1 p2 k3 k4 k5 k6]` (zeros for an undistorted pinhole), or a `zeroslam_sensor_parameters_camera_model_struct` of the image size, a `zeroslam_camera_model_enum` and that model's parameters (see "Camera models"). The entry's `parameters_length` is the size of the struct it points to, which tells the two apart.
+2. `zeroslam_set_sensor_rig`, before any data, with one or more `zeroslam_sensor_camera` entries (up to 16; the other sensor types are rejected): each a non-zero id and either a `zeroslam_sensor_parameters_camera_struct` of the image size, the focal lengths, the principal point in the pixel-centre frame (see "Pixel coordinates"), and the distortion `[k1 k2 p1 p2 k3 k4 k5 k6]` (zeros for an undistorted pinhole), or a `zeroslam_sensor_parameters_camera_model_struct` of the image size, a `zeroslam_camera_model_enum` and that model's parameters (see "Camera models"). The entry's `parameters_length` is the size of the struct it points to, which tells the two apart. The first camera is the primary camera, whose poses are reported. With several cameras, optionally `zeroslam_set_sensor_extrinsics` next (see "Camera rigs").
 3. `zeroslam_set_sensor_data` with each frame: the camera's id, a nanosecond timestamp that increases strictly from frame to frame, and `width * height` bytes of row major 8 bit greyscale pixels. A batch is validated whole before any of it is processed.
 4. `zeroslam_get_pose` (the newest posed frame) or `zeroslam_get_pose_at_timestamp` (the frame with exactly that timestamp) at any time, and `zeroslam_finalise` at the end of a run for a last global adjustment. `zeroslam_get_camera_calibration` gives a camera's calibration as the system holds it, in a `zeroslam_sensor_parameters_camera_model_struct` of the rig's model: the rig's, refined when the `calibration` key asks for it (see "Calibrating the camera"). Poses follow "Coordinate conventions": frames before initialisation completes, and frames dropped while tracking was lost, have no pose, and the covariance is not estimated yet (it is zero).
 5. `zeroslam_get_map_chunk` (every landmark, the position arguments are not used yet), `zeroslam_get_map_lines`, `zeroslam_get_map_keyframes`, `zeroslam_get_map_edges` (the covisibility and loop edges between keyframes, by timestamp) and `zeroslam_get_map_voxels` (the voxel map of the current map's landmarks as of the newest keyframe: the voxel size, and each occupied voxel's lowest corner and landmark count) export the map.
@@ -168,6 +168,7 @@ The `process` and `regression` tools pass any setting through with `--config key
 | `solver` | `dense_schur` | The bundle adjustment's linear solver: `dense_schur`, `square_root` (landmarks eliminated by QR), or `automatic` (square root once there are enough poses). Graphs the square root solver cannot take fall back to the dense one. |
 | `solver_precision` | `double` | The linear solver's precision, `double` or `single`. |
 | `calibration` | `off` | Refine the camera's calibration in the adjustments of the whole map, see "Calibrating the camera": `focal` the focal lengths, `focal_centre` and the principal point, `intrinsics` and the leading distortion terms (`k1 k2 p1 p2`), `all` every parameter, each on its own. |
+| `extrinsics` | `declared` | Which extrinsics of a camera rig the absolute adjustments refine (see "Camera rigs"): those `zeroslam_set_sensor_extrinsics` declared refined, none (`fixed`), or every camera's but the primary's (`refine`). |
 
 ### Calibrating the camera ###
 
@@ -185,6 +186,13 @@ Run from focal lengths 5% and 10% too long (`zeroslam process --focal-scale 1.05
 A monocular estimate of a focal length is good to a few percent, not to a checkerboard's accuracy: from every start the refinement reached the same value within a pixel or two on each sequence, 463 px on MH_01 for the 459 px of its calibration, and 536 to 541 px on fr1_desk and 526 to 529 px on fr1_xyz for the 517 px published for that camera.
 Started from the published calibration, it left fr1_desk at 1.9 cm, fr1_xyz at 1.2 cm and MH_01 at 1.7 cm.
 Any model's parameters are refined the same way: a synthetic adjustment recovers a Kannala-Brandt and a double sphere camera, started 6% long and with no distortion or another shape, to half a pixel over the whole image, but on the rendered circle of the wide angle test, which turns about the vertical only, `intrinsics` brought a double sphere camera nearer the truth (4.8 from 5.9 pixels rms over its field) and not to it, its focal length trading against its shape.
+
+### Camera rigs ###
+
+Several synchronised cameras run as one rig. `zeroslam_set_sensor_extrinsics` gives each sensor its extrinsic, the sensor-to-body pose `[x y z qx qy qz qw]` (the scene's `ego -> sensor/[name]`), and whether it is refined; a sensor given none sits at the body's origin, held. Each frame is one image of every camera with the same timestamp, in one `zeroslam_set_sensor_data` batch or over several calls; a camera given twice in a frame, or a newer image before a frame is whole, is refused.
+The map's frames are posed in the primary camera's frame, whose extrinsic the gauge holds, so the reported poses stay the primary camera's and a rig of one camera is the monocular system. The other cameras' images are views of those frames: each camera tracks its own features, its tracks link to the same landmarks by projection through its extrinsic, the rig's pose comes from every camera's tracks (a generalised perspective solve, then a joint refinement), and each camera's observations enter the adjustments through its extrinsic (the `extrinsic` vertex, refined or held).
+Cameras that share their view across a baseline (a stereo pair) initialise from a single frame, triangulate new landmarks across the baseline at every keyframe, and give the map a metric scale: no scale gauge is held and loops close as rigid transforms. A refined extrinsic keeps the distance from the primary camera it was declared at, the map's scale. Cameras that share no view initialise from two frames as one camera does and keep a monocular map's scale, which their baseline measures only through the rig's turns; on a planar path the turn of their extrinsic about the path's axis is not observable either.
+Relocalisation, loop detection and lines run on the primary camera, and `adjustment=relative` adjusts the primary camera's observations alone (the final global adjustment takes every camera's). The square root solver takes the extrinsic vertices as it does the poses.
 
 ## Scene format ##
 
@@ -282,7 +290,7 @@ cmake --build . --parallel 4
 ./runtime/Release/zeroslam process ../datasets/tum-rgbd/fr1_xyz.mcap --config descriptor=teblid --config lines=on
 ```
 
-The options are `--frames [count]` (the first frames only), `--skip [count]` (ignore the first frames), `--verbose [0-5]` (the log level, default `1`), `--truth [trajectory.txt]` (end with the absolute, relative and per metre errors against a TUM trajectory), `--live` (skip the final global adjustment, so the trajectory is the one tracked live), `--focal-scale [factor]` (scale the scene's focal lengths, to run from a wrong calibration) and `--config key=value` (repeatable).
+The options are `--frames [count]` (the first frames only), `--skip [count]` (ignore the first frames), `--verbose [0-5]` (the log level, default `1`), `--truth [trajectory.txt]` (end with the absolute, relative and per metre errors against a TUM trajectory), `--live` (skip the final global adjustment, so the trajectory is the one tracked live), `--focal-scale [factor]` (scale the scene's focal lengths, to run from a wrong calibration), `--config key=value` (repeatable), `--cameras image_01,image_02` (run several cameras of the scene as a rig, the first the primary camera, each at its extrinsic on `/tf`, see "Camera rigs") and `--perturb-extrinsics degrees,metres` (start every camera's extrinsic but the primary's turned and shifted off the calibration, for `--config extrinsics=refine`).
 The run ends by printing the camera's calibration as the system holds it (`Calibration: [model] fx ... fy ... cx ... cy ...` and the rest of its parameters), the scene's unless `--config calibration=...` refined it.
 
 ## Evaluating a trajectory ##
@@ -377,7 +385,7 @@ cmake --build . --parallel 4
 
 The `gui` tool plays a scene through the SLAM system live, drawing the image with its features, the landmarks, lines, voxels, keyframes, covisibility and loop edges, and the trajectory against the scene's ground truth with live metrics (see "Coordinate conventions" for the `Scale To Truth` and `Align To Truth` controls).
 It also saves a finished map (`--save-map`) and displays a saved map instead of running the system (`--load-map`), and `--play`, `--screenshot [file]`, `--screenshot-after [frames]` and `--exit-after [frames]` script it.
-`--config key=value` starts it with a front end setting it offers in its controls: `tracker`, `lines`, `culling`, `association`, `detector`, `descriptor`, `flow` and `local_map`; the controls otherwise start at the library's defaults (`--help` lists them).
+`--config key=value` starts it with a front end setting it offers in its controls: `tracker`, `lines`, `culling`, `association`, `detector`, `descriptor`, `flow` and `local_map`; the controls otherwise start at the library's defaults (`--help` lists them). `--cameras image_01,image_02` runs several cameras as a rig, the first the one shown.
 It needs OpenGL, with X11 on linux, Cocoa on macOS and Win32 on windows.
 ```
 cd build
@@ -451,7 +459,7 @@ cmake --build . --parallel 4
 ```
 
 The run's outputs go to `--work-dir` (default `./zeroslam-regression-work/[name]`) and the results are appended to `--log` (default `./regression.log`).
-`--name` and `--commit` override the recorded scene name and commit (default the git `HEAD`), `--config key=value` is forwarded to the `process` tool, `--first` or `--centroid` picks the alignment anchor, and `--tools-dir` points at the other tools.
+`--name` and `--commit` override the recorded scene name and commit (default the git `HEAD`), `--config key=value` and `--cameras` are forwarded to the `process` tool, `--first` or `--centroid` picks the alignment anchor, and `--tools-dir` points at the other tools.
 
 ## License ##
 
