@@ -26,6 +26,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -357,6 +358,57 @@ int main(int argc, char* argv[]) {
         zeroslam_sensor_rig_struct two[2] = { rig, rig };
         two[1].sensor_id = 2;
         REQUIRE(zeroslam_set_sensor_rig(system, &two[0], 2) == zeroslam_return_failure_invalid_rig_sensor);
+        REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
+    }
+
+    {
+        // Any camera model through the model struct, each checked: its count, its parameters' range, finiteness, the size.
+        zeroslam_system* system = nullptr;
+        REQUIRE(zeroslam_create(&system) == zeroslam_return_success);
+        REQUIRE(zeroslam_camera_model_parameter_count(zeroslam_camera_model_radial_tangential) == 12);
+        REQUIRE(zeroslam_camera_model_parameter_count(zeroslam_camera_model_invalid) == 0);
+        REQUIRE(std::strcmp(zeroslam_camera_model_enum_to_string(zeroslam_camera_model_double_sphere), "double sphere") == 0);
+        zeroslam_sensor_parameters_camera_model_struct camera{};
+        camera.width = 64;
+        camera.height = 48;
+        camera.model = zeroslam_camera_model_kannala_brandt;
+        camera.parameters_length = 8;
+        const double fisheye[8] = { 30.0, 30.0, 32.0, 24.0, 0.01, -0.002, 0.0, 0.0 };
+        std::memcpy(&camera.parameters[0], &fisheye[0], sizeof(fisheye));
+        zeroslam_sensor_rig_struct rig{};
+        rig.type = zeroslam_sensor_camera;
+        rig.sensor_id = 1;
+        rig.parameters_length = static_cast<int>(sizeof(camera));
+        rig.parameters_data = &camera;
+        camera.parameters_length = 7;
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig, 1) == zeroslam_return_failure_invalid_rig_sensor);
+        camera.parameters_length = 8;
+        camera.parameters[0] = -30.0;
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig, 1) == zeroslam_return_failure_invalid_rig_sensor);
+        camera.parameters[0] = std::numeric_limits<double>::quiet_NaN();
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig, 1) == zeroslam_return_failure_invalid_rig_sensor);
+        camera.parameters[0] = 30.0;
+        const int unknown_model = 99;
+        std::memcpy(&camera.model, &unknown_model, sizeof(unknown_model));
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig, 1) == zeroslam_return_failure_invalid_rig_sensor);
+        camera.model = zeroslam_camera_model_kannala_brandt;
+        camera.width = 0;
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig, 1) == zeroslam_return_failure_invalid_rig_sensor);
+        camera.width = 64;
+        rig.parameters_length = static_cast<int>(sizeof(camera)) - 8;
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig, 1) == zeroslam_return_failure_invalid_rig_sensor);
+        rig.parameters_length = static_cast<int>(sizeof(camera));
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig, 1) == zeroslam_return_success);
+        std::vector<unsigned char> pixels(64 * 48, 128);
+        zeroslam_sensor_data_struct data{};
+        data.timestamp = 1;
+        data.sensor_id = 1;
+        data.measurement_length = 64 * 48;
+        data.measurement_data = pixels.data();
+        REQUIRE(zeroslam_set_sensor_data(system, &data, 1) == zeroslam_return_success);
+        data.measurement_length = 64 * 47;
+        data.timestamp = 2;
+        REQUIRE(zeroslam_set_sensor_data(system, &data, 1) == zeroslam_return_failure_invalid_sensor_data);
         REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
     }
 
