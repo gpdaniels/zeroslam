@@ -145,6 +145,19 @@ namespace optimisation {
             }
         }
 
+        // The Jacobian of an observation by a further pose block, for an observation that depends on more than one, such as a
+        // rig camera's on the rig's pose and on the camera's extrinsic. The observation is set first.
+        void set_observation_pose(const int observation_slot, const int pose_slot, const type* jacobian_pose, const type* whitening) {
+            ASSERT((observation_slot >= 0) && ((2 * observation_slot) + 1 < this->observation_rows), "Observation slot out of bounds.");
+            ASSERT((pose_slot >= 0) && (pose_slot < static_cast<int>(this->pose_offsets.size())), "Pose slot out of bounds.");
+            for (int r = 0; r < 2; ++r) {
+                type* const target = this->storage.data() + (static_cast<size_t>((2 * observation_slot) + r) * static_cast<size_t>(this->total_cols));
+                for (int c = 0; c < 6; ++c) {
+                    target[(6 * pose_slot) + c] = (whitening[(2 * r) + 0] * jacobian_pose[c]) + (whitening[(2 * r) + 1] * jacobian_pose[6 + c]);
+                }
+            }
+        }
+
         template <typename output_type>
         void accumulate_gradient(output_type* vector_b) const {
             for (size_t slot = 0; slot < this->pose_offsets.size(); ++slot) {

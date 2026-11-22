@@ -571,5 +571,36 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    {
+        // An observation through two pose blocks, a rig camera's through the rig's pose and the camera's extrinsic, holds
+        // both whitened Jacobians in its rows and leaves the third block empty.
+        optimisation::landmark_block<double> block;
+        const int pose_offsets[3] = { 0, 6, 12 };
+        block.configure(1, 3, true, 18, &pose_offsets[0], 3);
+        double jacobian_pose[12];
+        double jacobian_extrinsic[12];
+        for (int i = 0; i < 12; ++i) {
+            jacobian_pose[i] = 1.0 + i;
+            jacobian_extrinsic[i] = -0.5 * i;
+        }
+        const double jacobian_landmark[6] = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 };
+        const double residual[2] = { 0.5, -0.25 };
+        const double whitening[4] = { 2.0, 0.0, 0.0, 2.0 };
+        block.set_observation(0, 0, &jacobian_pose[0], &jacobian_landmark[0], &residual[0], &whitening[0]);
+        block.set_observation_pose(0, 2, &jacobian_extrinsic[0], &whitening[0]);
+        for (int r = 0; r < 2; ++r) {
+            const double* const row = block.row(r);
+            for (int c = 0; c < 6; ++c) {
+                REQUIRE(row[c] == 2.0 * jacobian_pose[(6 * r) + c]);
+                REQUIRE(row[6 + c] == 0.0);
+                REQUIRE(row[12 + c] == 2.0 * jacobian_extrinsic[(6 * r) + c]);
+            }
+            for (int c = 0; c < 3; ++c) {
+                REQUIRE(row[18 + c] == 2.0 * jacobian_landmark[(3 * r) + c]);
+            }
+            REQUIRE(row[21] == 2.0 * residual[r]);
+        }
+    }
+
     return EXIT_SUCCESS;
 }

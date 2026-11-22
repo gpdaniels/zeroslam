@@ -481,14 +481,16 @@ namespace optimisation {
                     ++marginalised_count;
                     marginalised_dimensions = node->get_local_dimensions();
                 }
-                else {
+                else if (!node->is_fixed()) {
                     ++general_count;
                 }
             }
             if (marginalised_count == 0) {
                 continue;
             }
-            if ((marginalised_count != 1) || (general_count > 1) || (marginalised_dimensions > factor_graph::maximum_landmark_dimensions) || (factor->get_residual().rows() != 2)) {
+            // A landmark edge may hold several general vertices, a rig camera's the rig's pose and the camera's extrinsic: each
+            // free one is a pose block of the landmark's block, up to three, and a fixed one is no column at all.
+            if ((marginalised_count != 1) || (general_count > 3) || (marginalised_dimensions > factor_graph::maximum_landmark_dimensions) || (factor->get_residual().rows() != 2)) {
                 return false;
             }
         }
@@ -1216,13 +1218,26 @@ namespace optimisation {
                 const math::matrix<double, 0, 0>* jacobian_pose = nullptr;
                 const math::matrix<double, 0, 0>* jacobian_landmark = nullptr;
                 int pose_slot = -1;
+                // The free general vertices after the first, written into their own pose blocks once the observation is set.
+                const math::matrix<double, 0, 0>* further_jacobians[2] = { nullptr, nullptr };
+                int further_slots[2] = { -1, -1 };
+                size_t further_count = 0;
                 for (size_t i = 0; i < edge_vertices.size(); ++i) {
                     if (edge_vertices[i]->is_marginalised()) {
                         jacobian_landmark = &jacobians[i];
                     }
                     else if (!edge_vertices[i]->is_fixed()) {
-                        jacobian_pose = &jacobians[i];
-                        pose_slot = static_cast<int>(std::lower_bound(pose_offsets.begin(), pose_offsets.end(), edge_vertices[i]->get_ordering_id()) - pose_offsets.begin());
+                        const int slot_of_vertex = static_cast<int>(std::lower_bound(pose_offsets.begin(), pose_offsets.end(), edge_vertices[i]->get_ordering_id()) - pose_offsets.begin());
+                        if (jacobian_pose == nullptr) {
+                            jacobian_pose = &jacobians[i];
+                            pose_slot = slot_of_vertex;
+                        }
+                        else {
+                            ASSERT(further_count < 2, "A landmark edge holds at most three free general vertices.");
+                            further_jacobians[further_count] = &jacobians[i];
+                            further_slots[further_count] = slot_of_vertex;
+                            ++further_count;
+                        }
                     }
                 }
                 const double* const robust_information = this->edge_weights.data() + this->edge_weights_begin[edge_index];
@@ -1257,6 +1272,12 @@ namespace optimisation {
                 residual_values[0] = static_cast<scalar>(factor->get_residual()[0][0]);
                 residual_values[1] = static_cast<scalar>(factor->get_residual()[1][0]);
                 block.set_observation(static_cast<int>(slot), (jacobian_pose != nullptr) ? pose_slot : -1, pose_values, landmark_values, residual_values, whitening);
+                for (size_t further = 0; further < further_count; ++further) {
+                    for (size_t i = 0; i < 12; ++i) {
+                        pose_values[i] = static_cast<scalar>(further_jacobians[further]->data()[i]);
+                    }
+                    block.set_observation_pose(static_cast<int>(slot), further_slots[further], pose_values, whitening);
+                }
             }
         });
 
