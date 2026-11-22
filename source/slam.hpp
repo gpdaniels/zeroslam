@@ -65,6 +65,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/edges/reprojection.hpp"
 #include "optimisation/edges/rig_reprojection.hpp"
 #include "optimisation/factor_graph.hpp"
+#include "optimisation/inertial_initialisation.hpp"
 #include "optimisation/loss.hpp"
 #include "optimisation/losses/huber.hpp"
 #include "optimisation/vertex.hpp"
@@ -73,6 +74,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/vertices/pose.hpp"
 #include "optimisation/vertices/similarity.hpp"
 #include "sensor/camera.hpp"
+#include "sensor/imu/measurement.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -168,6 +170,13 @@ public:
     // A rig of several cameras (slam_rig.hpp): declared before any frame, then one image of every camera per frame.
     void set_rig(const mapping::rig& rig);
     void process_rig_frame(const std::vector<sensor::model>& cameras, const std::vector<image::image>& images);
+
+    // An imu (slam_inertial.hpp): a sensor of the rig declared after it, its samples given in time order, and each frame's time
+    // given by set_frame_timestamp before the frame.
+    void set_imu(const int sensor_id, const sensor::imu::parameters& noise, const math::se3<double>& body_from_imu, const bool refined);
+    bool add_imu_sample(const sensor::imu::sample& sample);
+    void set_frame_timestamp(const long long timestamp);
+    bool inertial_initialised() const;
 
 private:
     tracking_state state_ = tracking_state::initialising;
@@ -762,6 +771,7 @@ private:
 
         // The solve reports the steps it took: none when it fails, and none when there is nothing to correct, the two keyframes
         // being where the loop puts them already. The error the graph starts from tells the one from the other.
+        this->inertial_loop_edges(graph, vertices);
         const double error_before = graph.get_current_chi();
         if ((graph.solve(50, true) == 0) && !(error_before <= slam::loop_consistent_error)) {
             core::logger::log(core::logger::level::warn, "Loop %d -> %d not closed, the pose graph did not converge.", keyframe_id, loop.keyframe_id);
@@ -793,6 +803,7 @@ private:
             frame.rotation = pose.rotation().get_matrix();
             frame.translation = pose.translation();
         }
+        this->inertial_loop_corrected(previous_poses, corrected);
         // The loop detector's held keyframes go with the map, their records as each saw them, so that the next loop against
         // one does not measure this correction again (KITTI 05: after a loop rescaled the map by 0.37, the next ones read
         // 1.8 against records from before it).
@@ -1996,6 +2007,7 @@ private:
         this->reinitialising_ = true;
         this->last_tracked_frame_id_ = frame_current.id;
         core::logger::log(core::logger::level::note, "Lost for %d frames: frame %d anchors a new submap, initialising again.", this->lost_frames_, frame_current.id);
+        this->inertial_submap_started();
     }
 
     void start_submap(const mapping::frame& frame_current) {
@@ -2156,6 +2168,31 @@ private:
     static void count_frames_once(const std::vector<mapping::map::observation>& landmark_observations, std::vector<int>& observing_frames);
     // A loop on a metric map is rigid, its scale the measurements'.
     static math::sim3<double> loop_measurement(const math::sim3<double>& relative, const bool metric_scale);
+
+    // The imu, defined in slam_inertial.hpp. A chain of keyframes initialises once it holds this many over this long, the window
+    // it uses capped, and is refined again these many seconds after; the imu carries up to this many frames the tracks lose.
+    long long next_frame_timestamp_ = 0;
+    bool next_frame_timestamped_ = false;
+    std::vector<long long> inertial_refinements_;
+    static constexpr int inertial_blind_frames_tolerated = 40;
+    static constexpr size_t inertial_initialisation_keyframes = 10;
+    static constexpr double inertial_initialisation_seconds = 2.0;
+    static constexpr size_t inertial_window_maximum = 60;
+    static constexpr double inertial_refinement_seconds[2] = { 5.0, 15.0 };
+    static constexpr double inertial_refinement_accelerometer_deviation = 0.01;
+    static constexpr double inertial_refinement_scale_change = 0.2;
+    static constexpr double inertial_loop_gravity_information = 1.0e6;
+    void inertial_frame_added(const mapping::frame& frame);
+    bool inertial_predict(mapping::frame& frame);
+    int blind_frames_allowed() const;
+    void inertial_keyframes_added();
+    void inertial_submap_started();
+    void scale_component(const size_t component, const math::matrix<double, 3, 1>& centre, const double scale);
+    bool inertial_estimate(const std::vector<int>& window, const bool fixed_scale, const double accelerometer_deviation, optimisation::inertial_initialisation::result& result);
+    void inertial_apply(const std::vector<int>& window, const optimisation::inertial_initialisation::result& result, const bool rescale, const bool set_gravity);
+    void inertial_after_keyframe(const mapping::frame& frame_current);
+    void inertial_loop_edges(optimisation::factor_graph& graph, const std::unordered_map<int, optimisation::vertex*>& vertices);
+    void inertial_loop_corrected(const std::unordered_map<int, math::se3<double>>& previous_poses, const std::unordered_map<int, math::sim3<double>>& corrected);
 
     static constexpr double triangulation_parallax_degrees_minimum = 1.0;
 
@@ -3693,6 +3730,7 @@ private:
         this->reconstruction.add_frame(static_cast<mapping::frame&&>(frame));
         mapping::frame& frame_added = this->reconstruction.frames.at(frame_id);
         this->frame_submaps_[frame_id] = this->tracking_submap_;
+        this->inertial_frame_added(frame_added);
 
         this->loop_closure_.set_hamming_scale(this->frontend.descriptor_distance_scale());
         this->loop_closure_.set_place_recognition((this->frontend.place_recognition == mapping::frame::settings::place_recognition_kind::ibow) ? mapping::place_recognition::engine::ibow : mapping::place_recognition::engine::hbst);
@@ -4111,7 +4149,7 @@ private:
                 }
             }
             if (!pnp_success) {
-                if (this->blind_frames_ >= slam::blind_frames_tolerated) {
+                if (this->blind_frames_ >= this->blind_frames_allowed()) {
                     core::logger::log(core::logger::level::warn, "Tracking lost at frame %d, no tracks own a landmark: relocalising; %zu frames the motion model posed are dropped.", frame_current.id, this->blind_frame_ids_.size());
                     this->state_ = tracking_state::initialising;
                     for (const int blind_id : this->blind_frame_ids_) {
@@ -4145,6 +4183,7 @@ private:
                         frame_current.rotation,
                         frame_current.translation
                     );
+                    this->inertial_predict(frame_current);
                     if (this->frontend.association != mapping::frame::settings::association_kind::klt) {
                         const size_t recovered = this->track_local_map(frame_current, slam::local_map_recovery_radius, false, nullptr, true);
                         size_t recovered_correspondences = 0;
@@ -4181,6 +4220,9 @@ private:
                 }
                 else {
                     core::logger::log(core::logger::level::warn, "PnP FAILED (%zu correspondencies): no prior tracked pose available (frame %d).", pnp_correspondencies_size, frame_current.id);
+                }
+                if (!pnp_success && this->inertial_predict(frame_current)) {
+                    core::logger::log(core::logger::level::warn, "Frame %d posed by the imu.", frame_current.id);
                 }
             }
 
@@ -4246,6 +4288,7 @@ private:
         ++this->keyframes_since_global_adjustment_;
         this->last_keyframe_id_ = frame_current.id;
         this->relocalised_keyframe_id_ = -1;
+        this->inertial_keyframes_added();
 
         {
             const size_t strays = this->unlink_strays(frame_current);
@@ -4470,6 +4513,7 @@ private:
         if (this->frontend.cull_keyframes) {
             this->cull_keyframes(frame_current.id, 2 * broad_ba_window);
         }
+        this->inertial_after_keyframe(frame_current);
 
         {
             std::vector<mapping::loop_closure::record> records;
@@ -4597,6 +4641,7 @@ private:
     }
 };
 
+#include "slam_inertial.hpp"
 #include "slam_rig.hpp"
 
 #endif // ZEROSLAM_SLAM_HPP
