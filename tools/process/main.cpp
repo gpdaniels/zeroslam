@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "file.hpp"
 #include "mcap.hpp"
 #include "metrics.hpp"
+#include "rig.hpp"
 #include "rotation.hpp"
 #include "zeroslam/zeroslam.hpp"
 
@@ -285,6 +286,8 @@ int main(int argc, char* argv[]) {
     bool live = false;
     double focal_scale = 1.0;
     std::vector<const char*> settings;
+    std::vector<std::string> camera_names;
+    double perturbation[2] = { 0.0, 0.0 };
     for (int i = 1; i < argc; ++i) {
         const auto matches = [&](const char* name) {
             return std::strcmp(argv[i], name) == 0;
@@ -352,6 +355,17 @@ int main(int argc, char* argv[]) {
                 return EXIT_FAILURE;
             }
         }
+        else if (matches("--cameras") || matches("--perturb-extrinsics")) {
+            const bool names = matches("--cameras");
+            const char* text = nullptr;
+            if (!take_value(text)) {
+                return EXIT_FAILURE;
+            }
+            if (!(names ? process_rig::parse_names(text, camera_names) : process_rig::parse_perturbation(text, perturbation))) {
+                std::fprintf(stderr, "Invalid value for %s: '%s' (expected names such as image_01,image_02, or degrees,metres).\n", argv[i - 1], text);
+                return EXIT_FAILURE;
+            }
+        }
         else if (matches("--verbose")) {
             size_t level = 0;
             if (!take_count(level, 0, "must be 0 to 5")) {
@@ -386,6 +400,10 @@ int main(int argc, char* argv[]) {
         std::printf("    --live    - Skip the final global adjustment: the trajectory is the one tracked live, as the viewer shows it.\n");
         std::printf("    --focal-scale - Optional factor on the scene's focal lengths, to run from a wrong calibration (see the calibration key).\n");
         std::printf("    --config  - Optional slam configuration setting (repeatable), see the library's configuration keys.\n");
+        std::printf("    --cameras - Optional cameras run together as a rig, e.g. image_01,image_02, the first the primary camera whose poses are\n");
+        std::printf("                written, each at its 'ego -> sensor/[name]' extrinsic of /tf.\n");
+        std::printf("    --perturb-extrinsics - Optional turn and shift (degrees,metres) of every camera's extrinsic but the primary's, to start\n");
+        std::printf("                the extrinsic refinement (--config extrinsics=refine) off the calibration.\n");
         return EXIT_SUCCESS;
     }
 
@@ -444,7 +462,11 @@ int main(int argc, char* argv[]) {
     long long current_timestamp = -1;
 
     const std::vector<mcap::message_index_type>& message_index = reader.get_message_index();
-    const size_t total_messages = message_index.size();
+    // A rig is fed apart (rig.hpp), and the single camera's pass then has nothing to read.
+    if ((camera_names.size() > 1) && !process_rig::feed(reader, slam, camera_names, perturbation, frame_limit, skip_count, verbosity, shutdown_requested, focal_scale, timestamps, frames, camera)) {
+        return EXIT_FAILURE;
+    }
+    const size_t total_messages = (camera_names.size() > 1) ? 0 : message_index.size();
     size_t processed_messages = 0;
 
     auto process_buffered_images = [&]() {

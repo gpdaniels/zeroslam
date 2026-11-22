@@ -121,6 +121,7 @@ namespace {
         std::printf("        --commit [hash]        - Commit hash recorded in the log (default: the git HEAD of the tools directory).\n");
         std::printf("        --frames [count]       - Process only the first [count] frames of the scene.\n");
         std::printf("        --config [key=value]   - Slam configuration setting forwarded to the process tool (repeatable).\n");
+        std::printf("        --cameras [names]      - Cameras run together as a rig, forwarded to the process tool (e.g. image_01,image_02).\n");
         std::printf("        --first                - Anchor the evaluation alignment on the first pose pair (the default).\n");
         std::printf("        --centroid             - Anchor the evaluation alignment on the two centroids instead.\n");
         std::printf("The tool validates the scene, runs the SLAM system on it, evaluates the recorded trajectory\n");
@@ -139,6 +140,7 @@ int main(int argc, char* argv[]) {
     std::string commit_override;
     std::string frames_override;
     std::vector<std::string> config_settings;
+    std::string cameras;
     bool overlap_first_pose = true;
 
     for (int i = 1; i < argc; ++i) {
@@ -190,6 +192,10 @@ int main(int argc, char* argv[]) {
             if (!take_value(setting))
                 return EXIT_FAILURE;
             config_settings.push_back(setting);
+        }
+        else if (matches("--cameras")) {
+            if (!take_value(cameras))
+                return EXIT_FAILURE;
         }
         else if (matches("--first") || matches("-f")) {
             overlap_first_pose = true;
@@ -392,6 +398,9 @@ int main(int argc, char* argv[]) {
     }
     for (const std::string& setting : config_settings) {
         process_command += " --config " + platform::quote_for_shell(setting);
+    }
+    if (!cameras.empty()) {
+        process_command += " --cameras " + platform::quote_for_shell(cameras);
     }
     process_command += " 2>&1";
 

@@ -187,6 +187,8 @@ namespace {
         const front_end_settings defaults = library_defaults();
         std::printf("        --config [key=value]   - A front end setting to start with: tracker=klt|extrema, lines=on|off, culling=on|off, association=klt|match|both, detector=fast|mser|harris|klt|forstner|rohr|kenney, descriptor=orb|teblid|bsift|teblid512|bsift512, flow=intensity|wavelet or local_map=covisible|voxels|both|fallback (repeatable).\n");
         std::printf("                                 Unset ones start at the library's defaults: tracker=%s lines=%s culling=%s association=%s detector=%s descriptor=%s flow=%s local_map=%s.\n", (defaults.tracker == 1) ? "extrema" : "klt", defaults.lines ? "on" : "off", defaults.culling ? "on" : "off", association_names[defaults.association], detector_names[defaults.detector], descriptor_names[defaults.descriptor], defaults.wavelet ? "wavelet" : "intensity", local_map_names[defaults.local_map]);
+        std::printf("        --cameras [names]      - Cameras run together as a rig, e.g. image_01,image_02: the first is the one shown and posed,\n");
+        std::printf("                                 each sits at its 'ego -> sensor/[name]' extrinsic of /tf.\n");
         std::printf("        --help                 - Show this message.\n");
     }
 
@@ -701,6 +703,8 @@ namespace {
         std::atomic<int> descriptor_choice{ 0 };
         std::atomic<bool> wavelet_flow{ false };
         std::atomic<int> local_map_choice{ 0 };
+        // The cameras run together with the fed channel as a rig, by sensor name, the fed channel's first; set before start.
+        std::vector<std::string> rig_cameras;
 
     private:
         std::thread thread;
@@ -754,7 +758,7 @@ namespace {
             this->applied_local_map = local_map;
         }
 
-        bool describe_rig(const scene::image_channel& channel_fed) {
+        static zeroslam_sensor_parameters_camera_model_struct camera_of(const scene::image_channel& channel_fed) {
             zeroslam_sensor_parameters_camera_model_struct camera{};
             camera.width = static_cast<int>(channel_fed.width);
             camera.height = static_cast<int>(channel_fed.height);
@@ -763,12 +767,61 @@ namespace {
             for (std::size_t i = 0; i < channel_fed.camera_model_parameter_count; ++i) {
                 camera.parameters[i] = channel_fed.camera_model_parameters[i];
             }
+            return camera;
+        }
+
+        bool describe_rig(const scene::image_channel& channel_fed) {
+            zeroslam_sensor_parameters_camera_model_struct camera = slam_worker::camera_of(channel_fed);
             zeroslam_sensor_rig_struct rig{};
             rig.type = zeroslam_sensor_camera;
             rig.sensor_id = slam_worker::sensor_id;
             rig.parameters_length = static_cast<int>(sizeof(camera));
             rig.parameters_data = &camera;
             return this->system.set_sensor_rig(&rig, 1) == zeroslam_return_success;
+        }
+
+        // The fed channel and the further cameras as one rig, each at its mounting on the ego.
+        bool describe_rig(const scene::scene& loaded, const std::vector<int>& channels) {
+            std::vector<zeroslam_sensor_parameters_camera_model_struct> cameras(channels.size());
+            std::vector<zeroslam_sensor_rig_struct> rig(channels.size());
+            std::vector<zeroslam_sensor_extrinsics_struct> extrinsics(channels.size());
+            for (std::size_t i = 0; i < channels.size(); ++i) {
+                const scene::image_channel& camera_channel = loaded.image_channels()[static_cast<std::size_t>(channels[i])];
+                if (!camera_channel.has_intrinsics) {
+                    return false;
+                }
+                cameras[i] = slam_worker::camera_of(camera_channel);
+                rig[i].type = zeroslam_sensor_camera;
+                rig[i].sensor_id = slam_worker::sensor_id + static_cast<int>(i);
+                rig[i].parameters_length = static_cast<int>(sizeof(cameras[i]));
+                rig[i].parameters_data = &cameras[i];
+                extrinsics[i].sensor_id = rig[i].sensor_id;
+                extrinsics[i].refinement = zeroslam_extrinsic_fixed;
+                for (int axis = 0; axis < 3; ++axis) {
+                    extrinsics[i].pose[axis] = camera_channel.mounting.translation[axis];
+                }
+                for (int component = 0; component < 4; ++component) {
+                    extrinsics[i].pose[3 + component] = camera_channel.mounting.rotation[component];
+                }
+            }
+            return (this->system.set_sensor_rig(rig.data(), static_cast<int>(rig.size())) == zeroslam_return_success) && (this->system.set_sensor_extrinsics(extrinsics.data(), static_cast<int>(extrinsics.size())) == zeroslam_return_success);
+        }
+
+        // The channels of the rig's further cameras, or none when a name is not a channel of the scene.
+        std::vector<int> further_channels(const scene::scene& loaded) const {
+            std::vector<int> channels;
+            for (std::size_t name = 1; name < this->rig_cameras.size(); ++name) {
+                for (std::size_t i = 0; i < loaded.image_channels().size(); ++i) {
+                    if (loaded.image_channels()[i].sensor_name == this->rig_cameras[name]) {
+                        channels.push_back(static_cast<int>(i));
+                        break;
+                    }
+                }
+            }
+            if ((channels.size() + 1) != this->rig_cameras.size()) {
+                channels.clear();
+            }
+            return channels;
         }
 
         void capture(const double process_seconds, const long long frame_timestamp_nanoseconds) {
@@ -923,8 +976,11 @@ namespace {
                     std::this_thread::sleep_for(std::chrono::milliseconds(4));
                     continue;
                 }
+                const std::vector<int> further = this->further_channels(*loaded);
                 if (!rig_described) {
-                    rig_described = this->describe_rig(channel_fed);
+                    std::vector<int> rig_channels(1, channel_index);
+                    rig_channels.insert(rig_channels.end(), further.begin(), further.end());
+                    rig_described = further.empty() ? this->describe_rig(channel_fed) : this->describe_rig(*loaded, rig_channels);
                     if (!rig_described) {
                         std::fprintf(stderr, "The library rejected the camera of channel %d.\n", channel_index);
                         this->pending_time_nanoseconds.store(-1);
@@ -944,13 +1000,31 @@ namespace {
                     continue;
                 }
                 this->apply_configuration();
-                zeroslam_sensor_data_struct measurement{};
-                measurement.timestamp = decoded.timestamp_nanoseconds;
-                measurement.sensor_id = slam_worker::sensor_id;
-                measurement.measurement_length = static_cast<int>(decoded.grey.size());
-                measurement.measurement_data = decoded.grey.data();
+                // The further cameras' images of the same moment; a moment one of them lacks is not fed.
+                std::vector<scene::decoded_image> further_decoded(further.size());
+                bool synchronised = true;
+                for (std::size_t i = 0; (i < further.size()) && synchronised; ++i) {
+                    const scene::image_channel& other = loaded->image_channels()[static_cast<std::size_t>(further[i])];
+                    const std::vector<long long>::const_iterator found = std::lower_bound(other.log_times.begin(), other.log_times.end(), message_time);
+                    synchronised = (found != other.log_times.end()) && (*found == message_time) && loaded->decode_image(other, static_cast<std::size_t>(found - other.log_times.begin()), further_decoded[i]);
+                }
+                if (!synchronised) {
+                    ++fed_messages;
+                    continue;
+                }
+                std::vector<zeroslam_sensor_data_struct> measurements(1 + further.size());
+                measurements[0].timestamp = decoded.timestamp_nanoseconds;
+                measurements[0].sensor_id = slam_worker::sensor_id;
+                measurements[0].measurement_length = static_cast<int>(decoded.grey.size());
+                measurements[0].measurement_data = decoded.grey.data();
+                for (std::size_t i = 0; i < further.size(); ++i) {
+                    measurements[1 + i].timestamp = decoded.timestamp_nanoseconds;
+                    measurements[1 + i].sensor_id = slam_worker::sensor_id + 1 + static_cast<int>(i);
+                    measurements[1 + i].measurement_length = static_cast<int>(further_decoded[i].grey.size());
+                    measurements[1 + i].measurement_data = further_decoded[i].grey.data();
+                }
                 const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
-                const zeroslam_return_enum fed = this->system.set_sensor_data(&measurement, 1);
+                const zeroslam_return_enum fed = this->system.set_sensor_data(measurements.data(), static_cast<int>(measurements.size()));
                 const double elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
                 if (fed != zeroslam_return_success) {
                     std::fprintf(stderr, "The library rejected frame %d: %s.\n", fed_messages, zeroslam_return_enum_to_string(fed));
@@ -1300,6 +1374,7 @@ int main(int argc, char* argv[]) {
     long long screenshot_after_frames = 30;
     long long exit_after_frames = -1;
     bool autoplay = false;
+    std::vector<std::string> rig_camera_names;
     front_end_settings initial = library_defaults();
     for (int i = 1; i < argc; ++i) {
         const auto take_string = [&](const char* const name, std::string& destination) -> bool {
@@ -1353,6 +1428,23 @@ int main(int argc, char* argv[]) {
             if (!apply_setting(initial, setting)) {
                 std::fprintf(stderr, "Unknown --config setting: %s (tracker=klt|extrema, lines=on|off, culling=on|off, association=klt|match|both, detector=fast|mser|harris|klt|forstner|rohr|kenney, descriptor=orb|teblid|bsift|teblid512|bsift512, flow=intensity|wavelet)\n", setting.c_str());
                 return EXIT_FAILURE;
+            }
+        }
+        else if (std::strcmp(argv[i], "--cameras") == 0) {
+            std::string names;
+            if (!take_string("--cameras", names)) {
+                return EXIT_FAILURE;
+            }
+            rig_camera_names.clear();
+            std::size_t begin = 0;
+            while (begin <= names.size()) {
+                const std::size_t end = std::min(names.find(',', begin), names.size());
+                if (end == begin) {
+                    std::fprintf(stderr, "Invalid value for --cameras: '%s' (expected names such as image_01,image_02).\n", names.c_str());
+                    return EXIT_FAILURE;
+                }
+                rig_camera_names.push_back(names.substr(begin, end - begin));
+                begin = end + 1;
             }
         }
         else if (std::strcmp(argv[i], "--exit-after") == 0) {
@@ -1523,7 +1615,14 @@ int main(int argc, char* argv[]) {
         else {
             std::fprintf(stderr, "Failed to load the scene '%s': %s.\n", &scene_path_text[0], scene_error.c_str());
         }
-        worker.channel.store(primary_visual_channel(loaded_scene));
+        int fed_channel = primary_visual_channel(loaded_scene);
+        for (std::size_t i = 0; !rig_camera_names.empty() && (i < loaded_scene.image_channels().size()); ++i) {
+            if (loaded_scene.image_channels()[i].sensor_name == rig_camera_names.front()) {
+                fed_channel = static_cast<int>(i);
+            }
+        }
+        worker.rig_cameras = rig_camera_names;
+        worker.channel.store(fed_channel);
         worker.playback_time_nanoseconds.store(timeline.time_nanoseconds);
         worker.pending_time_nanoseconds.store(-1);
         worker.start(loaded_scene);
