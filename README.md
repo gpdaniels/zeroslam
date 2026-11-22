@@ -195,12 +195,26 @@ Cameras that share their view across a baseline (a stereo pair) initialise from 
 With `calibration` on, each camera of the rig is calibrated as the primary camera is, with an intrinsics vertex of its own that its observations take after its extrinsic.
 Relocalisation, loop detection and lines run on the primary camera, and `adjustment=relative` adjusts the primary camera's observations alone (the final global adjustment takes every camera's). The square root solver takes the extrinsic vertices as it does the poses.
 
+### Wheel odometry ###
+
+A wheel odometer is a rig entry of type `zeroslam_sensor_wheel_odometry` beside the cameras, with a `zeroslam_sensor_parameters_wheel_odometry_struct`:
+- the model: an Ackermann (car-like) vehicle measured by a wheel on its rear axle (or the mean of the rear wheels, or the drive shaft) or by a front wheel, whose calibration is the wheel radius, the wheelbase, the steering gain and the steering offset (steering angle = gain * reading + offset), or a differential drive, whose calibration is the left and right wheel radii and the track width, in metres and radians;
+- `free_mask`, bit `i` refining calibration parameter `i`, with a prior of `parameter_deviations[i]` about the declared value (zero for none);
+- the noise: the wheel slip, the lateral slip, the heading, the height and the tilt as standard deviations after one metre (they grow with the square root of the distance), the steering reading's per reading, and the least translation and rotation of any interval;
+- `extrinsic_deviations`, a prior on the extrinsic's rotation and translation about the odometry frame's axes (zero for none).
+
+Its extrinsic, the odometry frame's pose on the body (x forward, y left, z up, the origin at the rear axle's centre or the middle of the drive axle), is given with `zeroslam_set_sensor_extrinsics` like a camera's and refined when asked. Its samples are `zeroslam_set_sensor_data` entries of three doubles, the cumulative rotation in radians of the measured (or left) wheel and of the right wheel and the steering reading, in time order among the cameras' images; encoder ticks are turned into radians by the caller.
+The samples between each two frames of an adjustment are integrated into the planar motion of the odometry frame, its covariance and its Jacobian by the calibration, and each adjustment that moves landmarks takes an odometry edge between each two consecutive frames it holds, sharing one calibration and the extrinsic, so the calibration and the extrinsic are refined with the map; a motion is integrated again when the calibration moves past its first order correction, and merged from the two on either side of a culled keyframe. The initialisation is scaled to the distance the odometry says the camera moved, which makes the map metric (no scale gauge is held and loops close as rigid transforms), and a frame the tracks do not pose is predicted by the odometry. `zeroslam_get_odometry_calibration` reports the calibration and the extrinsic as the system holds them.
+With a monocular camera a turn shows only the distance rolled over the wheelbase (or the track width), so hold one measured length; for small steering angles the gain shows only with the radius, so hold it or give it a tight prior. Planar motion cannot show the height of the odometry frame above the plane of motion: refining the extrinsic needs a tight deviation on its last component.
+On a rendered drive of 30 m, a radius declared 6% small and no steering offset for 0.03 rad come out within 0.3% and 0.0005 rad, and the map within 0.4% of metric scale.
+
 ## Scene format ##
 
 A scene is one mcap file, `datasets/[dataset]/[scene].mcap`, holding:
 - Raw image messages (`sensor_msgs/msg/Image`: `mono8` or `rgb8` for the cameras the system runs on, `mono16` or `32FC1` for depth) in uncompressed or lz4 compressed chunks (zstd chunks are rejected).
 - Camera intrinsics as one camera info message per frame on `/sensor/[name]/camera_info`, with no rectification (`R` the identity, `P` = `[K | 0]`) and the principal point in the pixel-centre frame (see "Coordinate conventions" below): `K` holds `fx fy cx cy`, `distortion_model` names one of the camera models and `d` holds its own parameters (see "Camera models"): `plumb_bob` (`k1 k2 p1 p2 [k3]`), `rational_polynomial` (`k1 k2 p1 p2 k3 k4 k5 k6`, or with the thin prism `s1 s2 s3 s4` and the tilt `tau_x tau_y` after them), `equidistant` (`k1 k2 k3 k4`), `fov` (`w`), `unified` (`xi`), `extended_unified` (`alpha beta`), `double_sphere` (`xi alpha`) or `fisheye_624` (`k0 .. k5 p0 p1 s0 .. s3`). A distortion that folds back on itself, where the radial factor stops growing or reaches a pole of the rational model, limits the model to the radius inside that point; rays and pixels beyond it are treated as not visible.
 - IMU messages.
+- Wheel odometry as `sensor_msgs/msg/JointState` messages on `/sensor/wheel_[01-99]`, the three positions the cumulative rotations of the measured (or left) wheel and the right wheel in radians and the steering reading, with one `std_msgs/msg/String` on `/sensor/wheel_[01-99]/parameters` of `key=value` words: `model` (`ackermann_rear_axle`, `ackermann_front_wheel` or `differential_drive`), `parameters`, `free_mask`, `parameter_deviations`, `noise` and `extrinsic_deviations`, numbers separated by commas, the noise the library's by default (see "Wheel odometry").
 - A ground truth trajectory on `/tf` as `root -> ego`, when the dataset has one.
 
 Sensors are topics named `/sensor/[type]_[01-99]` (`image_01`, `image_02`, ... for cameras; `imu_01`, ... for imus; `lidar_01`, `gnss_01`...) and each sensor's frame carries its full name (e.g. `sensor/image_01`).
@@ -218,7 +232,8 @@ scene/
 │   ├── image_01.txt  # Per frame:    `[timestamp] [x] [y] [z] [qx] [qy] [qz] [qw] [model] [fx] [fy] [cx] [cy] [distortion...]`
 │   ├── image_02/     # The second camera's frames.
 │   ├── image_02.txt  # The second camera's model/intrinsics/extrinsics.
-│   └── imu_01.txt    # Per sample:   `[timestamp] [x] [y] [z] [qx] [qy] [qz] [qw] [wx] [wy] [wz] [ax] [ay] [az]`
+│   ├── imu_01.txt    # Per sample:   `[timestamp] [x] [y] [z] [qx] [qy] [qz] [qw] [wx] [wy] [wz] [ax] [ay] [az]`
+│   └── wheel_01.txt  # `# [parameters]`, then per sample: `[timestamp] [x] [y] [z] [qx] [qy] [qz] [qw] [rotation_0] [rotation_1] [steering]`
 └── trajectory.txt    # Ground truth: `[timestamp] [x] [y] [z] [qx] [qy] [qz] [qw]`
 ```
 
@@ -293,6 +308,7 @@ cmake --build . --parallel 4
 
 The options are `--frames [count]` (the first frames only), `--skip [count]` (ignore the first frames), `--verbose [0-5]` (the log level, default `1`), `--truth [trajectory.txt]` (end with the absolute, relative and per metre errors against a TUM trajectory), `--live` (skip the final global adjustment, so the trajectory is the one tracked live), `--focal-scale [factor]` (scale the scene's focal lengths, to run from a wrong calibration), `--config key=value` (repeatable), `--cameras image_01,image_02` (run several cameras of the scene as a rig, the first the primary camera, each at its extrinsic on `/tf`, see "Camera rigs") and `--perturb-extrinsics degrees,metres` (start every camera's extrinsic but the primary's turned and shifted off the calibration, for `--config extrinsics=refine`).
 The run ends by printing the camera's calibration as the system holds it (`Calibration: [model] fx ... fy ... cx ... cy ...` and the rest of its parameters), the scene's unless `--config calibration=...` refined it.
+`--wheel wheel_01` runs the scene's wheel odometer with a single camera (see "Wheel odometry"), and writes its refined calibration and extrinsic to `odometry.txt`; the regression tool forwards it.
 
 ## Evaluating a trajectory ##
 
