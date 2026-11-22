@@ -108,6 +108,28 @@ namespace sensor::camera {
     }
 
     template <typename type>
+    bool kannala_brandt<type>::get_parameter_roles(parameter_role* const roles, const size_t roles_length) const {
+        if ((roles == nullptr) || (roles_length != kannala_brandt::parameter_count)) {
+            return false;
+        }
+        // All four of k1 to k4: the model is for wide lenses, which need them all.
+        const parameter_role layout[kannala_brandt::parameter_count] = {
+            parameter_role::focal_length,
+            parameter_role::focal_length,
+            parameter_role::principal_point,
+            parameter_role::principal_point,
+            parameter_role::distortion,
+            parameter_role::distortion,
+            parameter_role::distortion,
+            parameter_role::distortion
+        };
+        for (size_t index = 0; index < kannala_brandt::parameter_count; ++index) {
+            roles[index] = layout[index];
+        }
+        return true;
+    }
+
+    template <typename type>
     type kannala_brandt<type>::get_maximum_angle() const {
         return this->maximum_angle;
     }

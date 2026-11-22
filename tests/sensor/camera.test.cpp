@@ -41,6 +41,9 @@ int main(int argc, char* argv[]) {
 
     {
         static_assert(sensor::pinhole::parameter_count == 4, "The pinhole alias must name the pinhole camera.");
+        static_assert(sensor::camera::pinhole_opencv<double>::parameter_count <= sensor::model::maximum_parameter_count, "The largest model must fit a buffer of the maximum parameter count.");
+        static_assert(sensor::camera::fisheye_624<double>::parameter_count <= sensor::model::maximum_parameter_count, "The largest model must fit a buffer of the maximum parameter count.");
+        static_assert(sizeof(sensor::camera::pinhole_opencv<double>) <= sensor::model::maximum_size, "The largest model must fit the erased model.");
         const double parameters[12] = { 0.8, 0.8, 0.5, 0.375, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
         const sensor::model model(sensor::camera::pinhole_radial_tangential<double>(parameters, 12));
         REQUIRE(model.get_parameter_count() == 12);
@@ -85,6 +88,18 @@ int main(int argc, char* argv[]) {
             // A wrong count leaves the model as it was.
             REQUIRE(!sensor::camera::make_model(entry.name, &entry.parameters[0], entry.count - 1, model));
             REQUIRE(std::strcmp(model.name(), entry.name) == 0);
+            // Every model says what its parameters are: the focal lengths and principal point first, then distortion.
+            sensor::camera::parameter_role roles[18];
+            REQUIRE(!model.get_parameter_roles(&roles[0], entry.count + 1));
+            REQUIRE(model.get_parameter_roles(&roles[0], entry.count));
+            REQUIRE(roles[0] == sensor::camera::parameter_role::focal_length);
+            REQUIRE(roles[1] == sensor::camera::parameter_role::focal_length);
+            REQUIRE(roles[2] == sensor::camera::parameter_role::principal_point);
+            REQUIRE(roles[3] == sensor::camera::parameter_role::principal_point);
+            for (size_t index = 4; index < entry.count; ++index) {
+                REQUIRE((roles[index] == sensor::camera::parameter_role::distortion) || (roles[index] == sensor::camera::parameter_role::distortion_higher));
+            }
+            REQUIRE((entry.count == 4) || (roles[4] == sensor::camera::parameter_role::distortion));
             double intrinsics[4];
             sensor::camera::pinhole_of(model, intrinsics);
             REQUIRE(intrinsics[2] == entry.parameters[2]);

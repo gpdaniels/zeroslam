@@ -219,6 +219,38 @@ namespace sensor::camera {
     }
 
     template <typename type>
+    bool pinhole_opencv<type>::get_parameter_roles(parameter_role* const roles, const size_t roles_length) const {
+        if ((roles == nullptr) || (roles_length != pinhole_opencv::parameter_count)) {
+            return false;
+        }
+        // k1 k2 p1 p2 as the radial tangential model has them; k3, the rational k4 k5 k6, the thin prism and the tilt only a wide or unusual lens needs.
+        const parameter_role layout[pinhole_opencv::parameter_count] = {
+            parameter_role::focal_length,
+            parameter_role::focal_length,
+            parameter_role::principal_point,
+            parameter_role::principal_point,
+            parameter_role::distortion,
+            parameter_role::distortion,
+            parameter_role::distortion,
+            parameter_role::distortion,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher
+        };
+        for (size_t index = 0; index < pinhole_opencv::parameter_count; ++index) {
+            roles[index] = layout[index];
+        }
+        return true;
+    }
+
+    template <typename type>
     bool pinhole_opencv<type>::distort(
         const type* const undistorted_xy,
         type* const distorted_xy,

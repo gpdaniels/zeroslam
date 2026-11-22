@@ -57,6 +57,17 @@ public:
         return true;
     }
 
+    bool get_pinhole(double* const pinhole_parameters, const size_t pinhole_parameters_length) const {
+        if ((pinhole_parameters == nullptr) || (pinhole_parameters_length != 4)) {
+            return false;
+        }
+        pinhole_parameters[0] = 1.0;
+        pinhole_parameters[1] = 1.0;
+        pinhole_parameters[2] = 0.0;
+        pinhole_parameters[3] = 0.0;
+        return true;
+    }
+
     bool project(const double* const point_xyz, double* const point_xy, double* const jacobian_projection, double* const jacobian_parameters) const {
         static_cast<void>(jacobian_projection);
         static_cast<void>(jacobian_parameters);

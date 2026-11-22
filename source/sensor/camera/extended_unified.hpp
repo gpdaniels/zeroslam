@@ -18,6 +18,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #ifndef ZEROSLAM_SENSOR_CAMERA_EXTENDED_UNIFIED_HPP
 #define ZEROSLAM_SENSOR_CAMERA_EXTENDED_UNIFIED_HPP
 
+#include "sensor/camera/parameter_role.hpp"
+
 namespace {
     using size_t = decltype(sizeof(0));
 }
@@ -54,6 +56,8 @@ namespace sensor::camera {
         bool get_parameters(type* const parameters, const size_t parameters_length) const;
 
         bool get_pinhole(type* const pinhole_parameters, const size_t pinhole_parameters_length) const;
+
+        bool get_parameter_roles(parameter_role* const roles, const size_t roles_length) const;
 
         bool project(
             const type* const point_xyz,

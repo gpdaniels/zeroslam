@@ -117,6 +117,36 @@ namespace sensor::camera {
     }
 
     template <typename type>
+    bool fisheye_624<type>::get_parameter_roles(parameter_role* const roles, const size_t roles_length) const {
+        if ((roles == nullptr) || (roles_length != fisheye_624::parameter_count)) {
+            return false;
+        }
+        // k0 to k3 as Kannala-Brandt has them and the tangential p0 p1; k4 k5 and the thin prism are the refinements of a factory calibration.
+        const parameter_role layout[fisheye_624::parameter_count] = {
+            parameter_role::focal_length,
+            parameter_role::focal_length,
+            parameter_role::principal_point,
+            parameter_role::principal_point,
+            parameter_role::distortion,
+            parameter_role::distortion,
+            parameter_role::distortion,
+            parameter_role::distortion,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher,
+            parameter_role::distortion,
+            parameter_role::distortion,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher,
+            parameter_role::distortion_higher
+        };
+        for (size_t index = 0; index < fisheye_624::parameter_count; ++index) {
+            roles[index] = layout[index];
+        }
+        return true;
+    }
+
+    template <typename type>
     type fisheye_624<type>::get_maximum_angle() const {
         return this->maximum_angle;
     }

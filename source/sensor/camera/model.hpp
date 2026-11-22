@@ -59,7 +59,7 @@ namespace sensor::camera {
     public:
         constexpr static const size_t maximum_size = 256;
         constexpr static const size_t maximum_alignment = 16;
-        // No model has more parameters than this, so a caller can size a buffer for any of them.
+        // No model of the library has more parameters than this, so a caller can size a buffer for any of them.
         constexpr static const size_t maximum_parameter_count = 32;
 
     private:
@@ -168,7 +168,6 @@ namespace sensor::camera {
             static_assert(model::is_model<model_type>::value, "A camera model provides name, get_parameter_count, set_parameters, get_parameters, get_pinhole, project and unproject.");
             static_assert(sizeof(model_type) <= model::maximum_size, "The camera model must fit the storage of the erased model.");
             static_assert(alignof(model_type) <= model::maximum_alignment, "The camera model must not need more alignment than the erased model provides.");
-            static_assert(model_type::parameter_count <= model::maximum_parameter_count, "The camera model must not have more parameters than the erased model allows.");
             new (static_cast<void*>(this->storage), static_cast<model*>(nullptr)) model_type(camera_model);
         }
 

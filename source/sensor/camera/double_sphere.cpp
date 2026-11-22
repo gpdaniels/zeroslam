@@ -94,6 +94,26 @@ namespace sensor::camera {
     }
 
     template <typename type>
+    bool double_sphere<type>::get_parameter_roles(parameter_role* const roles, const size_t roles_length) const {
+        if ((roles == nullptr) || (roles_length != double_sphere::parameter_count)) {
+            return false;
+        }
+        // xi and alpha, which together shape the projection.
+        const parameter_role layout[double_sphere::parameter_count] = {
+            parameter_role::focal_length,
+            parameter_role::focal_length,
+            parameter_role::principal_point,
+            parameter_role::principal_point,
+            parameter_role::distortion,
+            parameter_role::distortion
+        };
+        for (size_t index = 0; index < double_sphere::parameter_count; ++index) {
+            roles[index] = layout[index];
+        }
+        return true;
+    }
+
+    template <typename type>
     bool double_sphere<type>::project(
         const type* const point_xyz,
         type* const point_xy,

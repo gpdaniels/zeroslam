@@ -140,6 +140,25 @@ namespace sensor::camera {
     }
 
     template <typename type>
+    bool field_of_view<type>::get_parameter_roles(parameter_role* const roles, const size_t roles_length) const {
+        if ((roles == nullptr) || (roles_length != field_of_view::parameter_count)) {
+            return false;
+        }
+        // The one distortion parameter w.
+        const parameter_role layout[field_of_view::parameter_count] = {
+            parameter_role::focal_length,
+            parameter_role::focal_length,
+            parameter_role::principal_point,
+            parameter_role::principal_point,
+            parameter_role::distortion
+        };
+        for (size_t index = 0; index < field_of_view::parameter_count; ++index) {
+            roles[index] = layout[index];
+        }
+        return true;
+    }
+
+    template <typename type>
     bool field_of_view<type>::project(
         const type* const point_xyz,
         type* const point_xy,
