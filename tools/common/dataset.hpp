@@ -23,6 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "file.hpp"
 #include "mcap.hpp"
 #include "paths.hpp"
+#include "wheel.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -196,6 +197,8 @@ namespace dataset {
     struct mcap_scene_information {
         std::vector<camera_information> cameras;
         std::vector<imu_information> imus;
+        // The wheel odometers' names (wheel.hpp reads them).
+        std::vector<std::string> wheels;
         std::size_t primary_camera = 0;
         std::size_t poses = 0;
         // The measurements below let a tool decide whether the file fully round trips
@@ -487,7 +490,11 @@ namespace dataset {
         // Any channel beyond those recognised above cannot be represented by the directory
         // form, so a round trip would lose it.
         for (const mcap::channel_type& channel : reader.get_channels()) {
-            const bool recognised = (camera_of_image[channel.id] >= 0) || (camera_of_info[channel.id] >= 0) || (imu_of_channel[channel.id] >= 0) || (&channel == dynamic_channel);
+            const bool wheel_topic = wheel::is_wheel_topic(channel.topic);
+            if (wheel_topic && wheel::is_wheel_name(channel.topic.substr(8))) {
+                information.wheels.push_back(channel.topic.substr(8));
+            }
+            const bool recognised = (camera_of_image[channel.id] >= 0) || (camera_of_info[channel.id] >= 0) || (imu_of_channel[channel.id] >= 0) || (&channel == dynamic_channel) || wheel_topic;
             if (!recognised) {
                 information.extra_topics.push_back(channel.topic);
             }

@@ -184,14 +184,18 @@ namespace process_depth {
             this->messages.clear();
         }
 
-        // Sets the rig of the camera, with the depth camera registered to it when there is one.
-        zeroslam_return_enum set_sensor_rig(const zeroslam::system& slam, const zeroslam_sensor_rig_struct& camera) {
-            zeroslam_sensor_rig_struct rig[2] = { camera, {} };
-            rig[1].type = zeroslam_sensor_depth;
-            rig[1].sensor_id = feeder::sensor_id;
-            rig[1].parameters_length = static_cast<int>(sizeof(this->parameters));
-            rig[1].parameters_data = &this->parameters;
-            return slam.set_sensor_rig(&rig[0], this->enabled() ? 2 : 1);
+        // Sets the rig of the camera, the first of the entries (the rest are the other sensors), with the depth camera registered
+        // to it when there is one.
+        zeroslam_return_enum set_sensor_rig(const zeroslam::system& slam, std::vector<zeroslam_sensor_rig_struct> rig) {
+            if (this->enabled()) {
+                zeroslam_sensor_rig_struct depth{};
+                depth.type = zeroslam_sensor_depth;
+                depth.sensor_id = feeder::sensor_id;
+                depth.parameters_length = static_cast<int>(sizeof(this->parameters));
+                depth.parameters_data = &this->parameters;
+                rig.push_back(depth);
+            }
+            return slam.set_sensor_rig(rig.data(), static_cast<int>(rig.size()));
         }
 
         // Gives the camera frame, with the depth frames held since the last one before it.

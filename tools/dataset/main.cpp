@@ -480,6 +480,7 @@ namespace {
             }
             sensor_names.push_back(imu.imu_name);
         }
+        sensor_names.insert(sensor_names.end(), scene.wheels.begin(), scene.wheels.end());
         // The /tf transforms are the ground truth frame tree, root -> ego -> sensor/[name] for
         // every sensor: the root -> ego transforms carry the trajectory of the body, and the
         // per message ego -> sensor/[name] extrinsics pose each sensor on it (so they can
@@ -627,6 +628,11 @@ namespace {
             std::fprintf(stderr, "Invalid scene: %s.\n", error.c_str());
             return false;
         }
+        std::vector<wheel::odometer> odometers;
+        if (!scene.wheels.empty() && !wheel::read_scene(reader, odometers, error)) {
+            std::fprintf(stderr, "Invalid scene: %s.\n", error.c_str());
+            return false;
+        }
         for (const dataset::camera_information& camera : scene.cameras) {
             const bool distorted = !camera.camera_infos_data.empty() && !camera.camera_infos_data.front().d.empty();
             const char* model = camera.camera_infos_data.empty() ? "unknown" : camera.camera_infos_data.front().distortion_model.c_str();
@@ -643,6 +649,9 @@ namespace {
         }
         for (const dataset::imu_information& imu : scene.imus) {
             std::printf("    imu:          %s, %zu samples\n", imu.imu_name.c_str(), imu.samples);
+        }
+        for (const wheel::odometer& odometer : odometers) {
+            std::printf("    wheel:        %s, %zu samples (%s)\n", odometer.name.c_str(), odometer.samples.size(), odometer.parameters.c_str());
         }
         std::printf("    frame tree:   root -> ego -> sensor/[name] (%zu transforms on /tf)\n", scene.dynamics.size());
         if (scene.poses == 0) {
@@ -801,6 +810,17 @@ namespace {
             }
             imu_samples += imu.samples;
         }
+        std::vector<wheel::odometer> odometers;
+        if (!scene.wheels.empty() && !wheel::read_scene(reader, odometers, error)) {
+            std::fprintf(stderr, "Invalid scene: %s.\n", error.c_str());
+            return EXIT_FAILURE;
+        }
+        for (const wheel::odometer& odometer : odometers) {
+            if (!wheel::write_directory(output_directory + "/sensor/" + odometer.name + ".txt", odometer)) {
+                std::fprintf(stderr, "Failed to write the data for '%s'.\n", odometer.name.c_str());
+                return EXIT_FAILURE;
+            }
+        }
         std::size_t poses = 0;
         if ((scene.poses > 0) && !dataset::write_trajectory(scene, output_directory + "/trajectory.txt", poses)) {
             std::fprintf(stderr, "Failed to write the ground truth.\n");
@@ -925,6 +945,7 @@ namespace {
         // Discover every sensor: a sensor/[name]/ frame directory paired with a
         std::vector<std::string> camera_names;
         std::vector<std::string> imu_names;
+        std::vector<std::string> wheel_names;
         {
             std::vector<std::string> entries;
             gtl::directory::list_directory(input_directory + "/sensor", entries);
@@ -938,6 +959,9 @@ namespace {
                 }
                 else if (dataset::inertial_type_of(name) != dataset::inertial_type::unknown) {
                     imu_names.push_back(name);
+                }
+                else if (wheel::is_wheel_name(name)) {
+                    wheel_names.push_back(name);
                 }
                 else {
                     std::fprintf(stderr, "Invalid scene directory: 'sensor/%s.txt' has no paired frame directory and is not a valid 'imu_01' to 'imu_99', 'accelerometer_01' to 'accelerometer_99', or 'gyroscope_01' to 'gyroscope_99' name.\n", name.c_str());
@@ -1104,6 +1128,16 @@ namespace {
                 writer.add_message(tf_channel, static_cast<unsigned int>(i), log_time, log_time, transform.data(), transform.size());
             }
             total_imu_samples += lines.size();
+        }
+        std::sort(wheel_names.begin(), wheel_names.end());
+        for (const std::string& wheel_name : wheel_names) {
+            wheel::odometer odometer;
+            std::string error;
+            if (!wheel::read_directory(input_directory + "/sensor/" + wheel_name + ".txt", wheel_name, odometer, error)) {
+                std::fprintf(stderr, "Invalid scene directory: %s.\n", error.c_str());
+                return EXIT_FAILURE;
+            }
+            wheel::write_scene(writer, tf_channel, odometer);
         }
         std::vector<dataset::trajectory_pose> poses;
         const std::string trajectory_path = input_directory + "/trajectory.txt";

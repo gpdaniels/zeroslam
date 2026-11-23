@@ -22,6 +22,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "metrics.hpp"
 #include "rig.hpp"
 #include "rotation.hpp"
+#include "wheel_feed.hpp"
 #include "zeroslam/zeroslam.hpp"
 
 #if defined(_MSC_VER)
@@ -288,6 +289,7 @@ int main(int argc, char* argv[]) {
     double focal_scale = 1.0;
     std::vector<const char*> settings;
     std::vector<std::string> camera_names;
+    std::string wheel_name;
     double perturbation[2] = { 0.0, 0.0 };
     process_depth::options depth_options;
     process_imu::settings imu;
@@ -386,6 +388,13 @@ int main(int argc, char* argv[]) {
         else if (matches("--imu-refine")) {
             imu.refine = true;
         }
+        else if (matches("--wheel")) {
+            const char* text = nullptr;
+            if (!take_value(text)) {
+                return EXIT_FAILURE;
+            }
+            wheel_name = text;
+        }
         else if (matches("--verbose")) {
             size_t level = 0;
             if (!take_count(level, 0, "must be 0 to 5")) {
@@ -433,6 +442,8 @@ int main(int argc, char* argv[]) {
         std::printf("    --imu     - Optional imu run with the cameras, e.g. imu_01, at its 'ego -> sensor/[name]' extrinsic of /tf.\n");
         std::printf("    --imu-noise - Optional imu noise densities: gyroscope, accelerometer, gyroscope walk, accelerometer walk (default EuRoC's).\n");
         std::printf("    --imu-refine - Refine the imu's extrinsic.\n");
+        std::printf("    --wheel   - Optional wheel odometer of the scene run with the camera or the rig, e.g. wheel_01; its refined calibration\n");
+        std::printf("                is written to odometry.txt.\n");
         return EXIT_SUCCESS;
     }
 
@@ -469,6 +480,15 @@ int main(int argc, char* argv[]) {
     }
     if (depth_feeder.enabled()) {
         log(4, "Depth camera: %s, noise %g + %g d + %g d^2 m, range %g to %g m", depth_feeder.topic(), depth_options.noise[0], depth_options.noise[1], depth_options.noise[2], depth_options.range[0], depth_options.range[1]);
+    }
+
+    wheel_feed::feeder odometer_feed;
+    if (!wheel_name.empty()) {
+        if (!odometer_feed.open(reader, wheel_name, error)) {
+            std::fprintf(stderr, "Invalid wheel odometer: %s.\n", error.c_str());
+            return EXIT_FAILURE;
+        }
+        wheel_feed::registered() = &odometer_feed;
     }
 
     log(4, "Loading slam system...");
@@ -554,7 +574,9 @@ int main(int argc, char* argv[]) {
                 rig.sensor_id = sensor_id;
                 rig.parameters_length = static_cast<int>(sizeof(camera));
                 rig.parameters_data = &camera;
-                if (depth_feeder.set_sensor_rig(slam, rig) != zeroslam_return_success) {
+                std::vector<zeroslam_sensor_rig_struct> rig_entries(1, rig);
+                odometer_feed.declare(rig_entries);
+                if ((depth_feeder.set_sensor_rig(slam, rig_entries) != zeroslam_return_success) || !odometer_feed.set_extrinsic(slam, false)) {
                     std::fprintf(stderr, "The library rejected the camera rig.\n");
                     return false;
                 }
@@ -574,6 +596,10 @@ int main(int argc, char* argv[]) {
             timestamps.push_back(static_cast<long long>(img_msg->log_time));
             log(4, "Starting frame %zu", frames + 1);
             std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+            if (!odometer_feed.feed_until(slam, timestamps.back())) {
+                std::fprintf(stderr, "The library rejected the wheel samples before frame %zu.\n", frames + 1);
+                return false;
+            }
             zeroslam_sensor_data_struct measurement{};
             measurement.timestamp = timestamps.back();
             measurement.sensor_id = sensor_id;
@@ -684,6 +710,10 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
+    if (!odometer_feed.feed_until(slam, (timestamps.empty() ? 0 : timestamps.back()) + 1000000000ll)) {
+        std::fprintf(stderr, "The library rejected the last wheel samples.\n");
+        return EXIT_FAILURE;
+    }
     if (!live) {
         log(4, "Finalising the map...");
         if (slam.finalise() != zeroslam_return_success) {
@@ -693,6 +723,9 @@ int main(int argc, char* argv[]) {
     }
     if (camera_names.size() > 1) {
         process_rig::report_extrinsics(slam);
+    }
+    if (!odometer_feed.write_calibration(slam, "odometry.txt")) {
+        std::fprintf(stderr, "Failed to write the odometry calibration.\n");
     }
     log(4, "Saving map and camera trajectory...");
 

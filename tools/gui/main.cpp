@@ -28,6 +28,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "scene.hpp"
 #include "triple_buffer.hpp"
 #include "ui.hpp"
+#include "wheel_feed.hpp"
 #include "window.hpp"
 #include "zeroslam/zeroslam.hpp"
 
@@ -193,6 +194,7 @@ namespace {
         std::printf("        --cameras [names]      - Cameras run together as a rig, e.g. image_01,image_02: the first is the one shown and posed,\n");
         std::printf("                                 each sits at its 'ego -> sensor/[name]' extrinsic of /tf.\n");
         std::printf("        --imu [name]           - An imu run with the cameras, e.g. imu_01, at its 'ego -> sensor/[name]' extrinsic of /tf.\n");
+        std::printf("        --wheel [name]         - The scene's wheel odometer run with the cameras, e.g. wheel_01.\n");
         std::printf("        --help                 - Show this message.\n");
     }
 
@@ -713,11 +715,15 @@ namespace {
         std::atomic<bool> depth_enabled{ false };
         // An imu run with the cameras, by sensor name (imu.hpp); set before start.
         std::string rig_imu;
+        // The scene and the name of a wheel odometer run with the cameras (--wheel), read again at each start.
+        std::string wheel_scene;
+        std::string wheel_name;
 
     private:
         std::thread thread;
         std::atomic<bool> stop_requested{ false };
         zeroslam::system system;
+        wheel_feed::feeder wheel;
         constexpr static const int sensor_id = 1;
         std::vector<gui::render_snapshot::frame> fed_frames;
         std::vector<zeroslam_point_struct> points;
@@ -788,7 +794,9 @@ namespace {
             rig.sensor_id = slam_worker::sensor_id;
             rig.parameters_length = static_cast<int>(sizeof(camera));
             rig.parameters_data = &camera;
-            return gui::depth_feed::set_sensor_rig(this->system, rig, this->depth_enabled.load()) == zeroslam_return_success;
+            std::vector<zeroslam_sensor_rig_struct> entries(1, rig);
+            this->wheel.declare(entries);
+            return (gui::depth_feed::set_sensor_rig(this->system, entries, this->depth_enabled.load()) == zeroslam_return_success) && this->wheel.set_extrinsic(this->system, false);
         }
 
         // The fed channel and the further cameras as one rig, each at its mounting on the ego.
@@ -818,7 +826,8 @@ namespace {
             if (!gui_imu::append(loaded, this->rig_imu, this->imu_parameters, rig, extrinsics)) {
                 return false;
             }
-            return (this->system.set_sensor_rig(rig.data(), static_cast<int>(rig.size())) == zeroslam_return_success) && (this->system.set_sensor_extrinsics(extrinsics.data(), static_cast<int>(extrinsics.size())) == zeroslam_return_success);
+            this->wheel.declare(rig);
+            return (this->system.set_sensor_rig(rig.data(), static_cast<int>(rig.size())) == zeroslam_return_success) && (this->system.set_sensor_extrinsics(extrinsics.data(), static_cast<int>(extrinsics.size())) == zeroslam_return_success) && this->wheel.set_extrinsic(this->system, false);
         }
 
         // The channels of the rig's further cameras, or none when a name is not a channel of the scene.
@@ -976,6 +985,11 @@ namespace {
                     fed_messages = 0;
                     fed_channel = channel_index;
                     rig_described = false;
+                    std::string wheel_error;
+                    if (!this->wheel_name.empty() && !this->wheel.open_path(this->wheel_scene, this->wheel_name, wheel_error)) {
+                        std::fprintf(stderr, "Invalid wheel odometer: %s.\n", wheel_error.c_str());
+                    }
+                    this->wheel.rewind();
                     this->pending_time_nanoseconds.store(-1);
                     this->capture(0.0, -1);
                     this->publish();
@@ -1042,6 +1056,9 @@ namespace {
                 this->depth.append(*loaded, decoded, this->depth_enabled.load() && further.empty(), measurements);
                 gui_imu::feed_until(this->system, *loaded, this->rig_imu, this->imu_next, decoded.timestamp_nanoseconds);
                 const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+                if (!this->wheel.feed_until(this->system, decoded.timestamp_nanoseconds)) {
+                    std::fprintf(stderr, "The library rejected the wheel samples before frame %d.\n", fed_messages);
+                }
                 const zeroslam_return_enum fed = this->system.set_sensor_data(measurements.data(), static_cast<int>(measurements.size()));
                 const double elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
                 if (fed != zeroslam_return_success) {
@@ -1395,6 +1412,7 @@ int main(int argc, char* argv[]) {
     bool use_depth = false;
     std::vector<std::string> rig_camera_names;
     std::string rig_imu_name;
+    std::string wheel_name;
     front_end_settings initial = library_defaults();
     for (int i = 1; i < argc; ++i) {
         const auto take_string = [&](const char* const name, std::string& destination) -> bool {
@@ -1473,6 +1491,11 @@ int main(int argc, char* argv[]) {
                 }
                 rig_camera_names.push_back(names.substr(begin, end - begin));
                 begin = end + 1;
+            }
+        }
+        else if (std::strcmp(argv[i], "--wheel") == 0) {
+            if (!take_string("--wheel", wheel_name)) {
+                return EXIT_FAILURE;
             }
         }
         else if (std::strcmp(argv[i], "--exit-after") == 0) {
@@ -1652,6 +1675,8 @@ int main(int argc, char* argv[]) {
         }
         worker.rig_cameras = rig_camera_names;
         worker.rig_imu = rig_imu_name;
+        worker.wheel_scene = &scene_path_text[0];
+        worker.wheel_name = wheel_name;
         worker.channel.store(fed_channel);
         worker.playback_time_nanoseconds.store(timeline.time_nanoseconds);
         worker.pending_time_nanoseconds.store(-1);

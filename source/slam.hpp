@@ -1635,6 +1635,12 @@ private:
             return false;
         }
         this->reckoning_.centre = reckoned_centre + (this->reckoned_velocity() * static_cast<double>(frame_current.id - this->reckoning_.frame_id));
+        // An odometer carries the centre on by the motion it measured since the frame posed last (mapping::odometry).
+        math::se3<double> odometry_motion;
+        if (this->posed_pose(posed_rotation, posed_centre) && this->reconstruction.wheel_odometry.camera_motion(this->reckoning_.posed_frame_id, frame_current.id, this->reconstruction.sensor_rig, odometry_motion)) {
+            const math::se3<double> carried = odometry_motion * math::se3<double>(posed_rotation, -(posed_rotation * posed_centre));
+            this->reckoning_.centre = -(math::transpose(carried.rotation().get_matrix()) * carried.translation());
+        }
         this->reckoning_.rotation = rotation;
         this->reckoning_.frame_id = frame_current.id;
         return true;
@@ -4128,6 +4134,8 @@ private:
                     translation = translation * (this->submap_speed_ * static_cast<double>(frame_current.id - frame_anchor.id) / length);
                 }
             }
+            // An odometer gives the map metres (mapping::odometry).
+            this->reconstruction.metric_scale = this->reconstruction.wheel_odometry.scale_initialisation(frame_anchor.id, frame_current.id, this->reconstruction.sensor_rig, translation) || this->reconstruction.metric_scale;
 
             frame_current.rotation = rotation * frame_anchor.rotation;
             frame_current.translation = (rotation * frame_anchor.translation) + translation;
@@ -4247,6 +4255,14 @@ private:
                         frame_current.rotation,
                         frame_current.translation
                     );
+                    // An odometer predicts the motion since the last frame better (mapping::odometry), and an initialised imu
+                    // better still: it poses the frame where nothing else does below, so it goes last here too.
+                    math::se3<double> odometry_motion;
+                    if (this->reconstruction.wheel_odometry.camera_motion(last_id, frame_current.id, this->reconstruction.sensor_rig, odometry_motion)) {
+                        const math::se3<double> predicted = odometry_motion * math::se3<double>(frame_last.rotation, frame_last.translation);
+                        frame_current.rotation = predicted.rotation().get_matrix();
+                        frame_current.translation = predicted.translation();
+                    }
                     this->inertial_predict(frame_current);
                     if (this->frontend.association != mapping::frame::settings::association_kind::klt) {
                         const size_t recovered = this->track_local_map(frame_current, slam::local_map_recovery_radius, false, nullptr, true);

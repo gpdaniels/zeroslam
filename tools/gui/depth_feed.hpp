@@ -50,18 +50,22 @@ namespace gui {
         scene::decoded_image decoded;
 
     public:
-        // Sets the rig of the camera, with the depth camera registered to it when enabled.
-        static zeroslam_return_enum set_sensor_rig(const zeroslam::system& system, const zeroslam_sensor_rig_struct& camera, const bool enabled) {
-            zeroslam_sensor_parameters_depth_struct depth = zeroslam::registered_depth(camera.sensor_id, zeroslam_depth_encoding_float_32, 1.0);
+        // Sets the rig of the camera, the first of the entries (the rest are the other sensors), with the depth camera registered
+        // to it when enabled.
+        static zeroslam_return_enum set_sensor_rig(const zeroslam::system& system, std::vector<zeroslam_sensor_rig_struct> rig, const bool enabled) {
+            zeroslam_sensor_parameters_depth_struct depth = zeroslam::registered_depth(rig.front().sensor_id, zeroslam_depth_encoding_float_32, 1.0);
             depth.noise_constant = depth_feed::noise_constant;
             depth.noise_quadratic = depth_feed::noise_quadratic;
             depth.pairing_tolerance = depth_feed::pairing_nanoseconds;
-            zeroslam_sensor_rig_struct rig[2] = { camera, {} };
-            rig[1].type = zeroslam_sensor_depth;
-            rig[1].sensor_id = depth_feed::sensor_id;
-            rig[1].parameters_length = static_cast<int>(sizeof(depth));
-            rig[1].parameters_data = &depth;
-            return system.set_sensor_rig(&rig[0], enabled ? 2 : 1);
+            if (enabled) {
+                zeroslam_sensor_rig_struct entry{};
+                entry.type = zeroslam_sensor_depth;
+                entry.sensor_id = depth_feed::sensor_id;
+                entry.parameters_length = static_cast<int>(sizeof(depth));
+                entry.parameters_data = &depth;
+                rig.push_back(entry);
+            }
+            return system.set_sensor_rig(rig.data(), static_cast<int>(rig.size()));
         }
 
         void reset() {

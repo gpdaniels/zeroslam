@@ -123,6 +123,7 @@ namespace {
         std::printf("        --config [key=value]   - Slam configuration setting forwarded to the process tool (repeatable).\n");
         std::printf("        --cameras [names]      - Cameras run together as a rig, forwarded to the process tool (e.g. image_01,image_02).\n");
         std::printf("        --imu [name]           - An imu run with the cameras, forwarded to the process tool (e.g. imu_01).\n");
+        std::printf("        --wheel [name]         - The scene's wheel odometer run with the camera, forwarded to the process tool (e.g. wheel_01).\n");
         std::printf("        --first                - Anchor the evaluation alignment on the first pose pair (the default).\n");
         std::printf("        --centroid             - Anchor the evaluation alignment on the two centroids instead.\n");
         std::printf("        --depth                - Process with the scene's depth camera (a metric RGB-D map) and evaluate\n");
@@ -146,6 +147,7 @@ int main(int argc, char* argv[]) {
     bool use_depth = false;
     std::string cameras;
     std::string imu;
+    std::string wheel;
     bool overlap_first_pose = true;
 
     for (int i = 1; i < argc; ++i) {
@@ -197,6 +199,10 @@ int main(int argc, char* argv[]) {
             if (!take_value(setting))
                 return EXIT_FAILURE;
             config_settings.push_back(setting);
+        }
+        else if (matches("--wheel")) {
+            if (!take_value(wheel))
+                return EXIT_FAILURE;
         }
         else if (matches("--cameras")) {
             if (!take_value(cameras))
@@ -416,6 +422,9 @@ int main(int argc, char* argv[]) {
     }
     if (use_depth) {
         process_command += " --depth";
+    }
+    if (!wheel.empty()) {
+        process_command += " --wheel " + platform::quote_for_shell(wheel);
     }
     if (!cameras.empty()) {
         process_command += " --cameras " + platform::quote_for_shell(cameras);
