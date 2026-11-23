@@ -95,6 +95,7 @@ typedef enum zeroslam_sensor_enum {
     zeroslam_sensor_remote_description = 0x00000400,
     zeroslam_sensor_camera = 0x00000800,
     zeroslam_sensor_depth = 0x00002000,
+    zeroslam_sensor_imu = 0x00004000,
     zeroslam_sensor_invalid = -1
 } zeroslam_sensor_enum;
 ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_enum) == 4, "For ABI compatibility the sizeof(zeroslam_sensor_enum) must be 4 bytes.")
@@ -121,6 +122,8 @@ static inline const char* zeroslam_sensor_enum_to_string(zeroslam_sensor_enum se
             return "camera";
         case zeroslam_sensor_depth:
             return "depth";
+        case zeroslam_sensor_imu:
+            return "imu";
         case zeroslam_sensor_invalid:
             return "invalid";
     }
@@ -262,6 +265,27 @@ typedef struct zeroslam_sensor_parameters_depth_struct {
     long long int pairing_tolerance;
 } zeroslam_sensor_parameters_depth_struct;
 ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_parameters_depth_struct) == 72, "For ABI compatibility the sizeof(zeroslam_sensor_parameters_depth_struct) must be 72 bytes.")
+
+// An imu's noise model, the continuous time densities its calibration publishes (rad/s/sqrt(Hz), m/s^2/sqrt(Hz), rad/s^2/sqrt(Hz)
+// and m/s^3/sqrt(Hz)), its sample rate (Hz), the magnitude of gravity (m/s^2, 0 for 9.81) and the offset of its clock from the
+// cameras' (seconds, the imu's time of a moment less the cameras'). See README.md "Inertial sensors".
+typedef struct zeroslam_sensor_parameters_imu_struct {
+    double gyroscope_noise_density;
+    double accelerometer_noise_density;
+    double gyroscope_random_walk;
+    double accelerometer_random_walk;
+    double rate;
+    double gravity;
+    double time_offset;
+} zeroslam_sensor_parameters_imu_struct;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_parameters_imu_struct) == 56, "For ABI compatibility the sizeof(zeroslam_sensor_parameters_imu_struct) must be 56 bytes.")
+
+// One imu sample in the imu's own frame, as measured: the angular velocity (rad/s) and the specific force (m/s^2).
+typedef struct zeroslam_sensor_measurement_imu_struct {
+    double angular_velocity[3];
+    double linear_acceleration[3];
+} zeroslam_sensor_measurement_imu_struct;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_measurement_imu_struct) == 48, "For ABI compatibility the sizeof(zeroslam_sensor_measurement_imu_struct) must be 48 bytes.")
 
 typedef struct zeroslam_sensor_rig_struct {
     zeroslam_sensor_enum type;

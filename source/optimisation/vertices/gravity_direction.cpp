@@ -1,0 +1,30 @@
+/*
+Copyright (C) 2026 Geoffrey Daniels. https://gpdaniels.com/
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, version 3 of the License only.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+#include "optimisation/vertices/gravity_direction.hpp"
+
+#include "math/lie.hpp"
+
+namespace optimisation::vertices {
+    void gravity_direction::plus(double* const parameters, const double* const delta) const {
+        const math::so3<double> current(parameters[3], parameters[0], parameters[1], parameters[2]);
+        const math::so3<double> next = (current * math::so3<double>::exp({ { delta[0], delta[1], 0.0 } })).normalised();
+        parameters[0] = next.get_quaternion()[1];
+        parameters[1] = next.get_quaternion()[2];
+        parameters[2] = next.get_quaternion()[3];
+        parameters[3] = next.get_quaternion()[0];
+    }
+}

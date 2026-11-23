@@ -21,6 +21,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "core/logger.hpp"
 #include "mapping/depth_factor.hpp"
 #include "mapping/frame.hpp"
+#include "mapping/inertial.hpp"
 #include "mapping/intrinsics_refinement.hpp"
 #include "mapping/line.hpp"
 #include "mapping/point.hpp"
@@ -93,6 +94,10 @@ namespace mapping {
         // The sensors and their extrinsics. The frames' poses are the reference camera's, and the observations of the other
         // cameras reach the frames through their extrinsics, which adjustments refine where the rig asks for it.
         mapping::rig sensor_rig;
+
+        // The imu of a visual inertial map (mapping::inertial): its samples and the keyframes' velocities and biases, which hold
+        // the adjustments with inertial edges once initialised.
+        mapping::inertial inertial_state;
 
         // Whether the map has a metric scale, which a rig's baseline gives it once the map is initialised across it (a stereo
         // pair): no scale gauge is then held, the measurements hold the scale themselves. The one property the pipeline asks
@@ -757,6 +762,7 @@ namespace mapping {
                     extrinsic_vertexes[camera] = ba.add_vertex(static_cast<optimisation::vertex&&>(node));
                 }
             }
+            const mapping::inertial::factors inertial_factors = this->inertial_state.add_factors(ba, camera_vertexes, this->frames, this->sensor_rig, fix_landmarks);
             // Add landmarks.
             int non_fixed_landmarks = 0;
             int non_fixed_edges = 0;
@@ -1422,6 +1428,7 @@ namespace mapping {
                 }
                 this->remove_outlier_observations(active_landmark_ids, relevant_frame_ids);
             }
+            this->inertial_state.read_factors(inertial_factors, this->sensor_rig);
         }
 
         // After the first pass of an adjustment, the depth factors beyond their bound leave the second pass, as the observations
