@@ -1053,7 +1053,7 @@ namespace {
                     measurements[1 + i].measurement_length = static_cast<int>(further_decoded[i].grey.size());
                     measurements[1 + i].measurement_data = further_decoded[i].grey.data();
                 }
-                this->depth.append(*loaded, decoded, this->depth_enabled.load() && further.empty(), measurements);
+                this->depth.append(*loaded, decoded, this->depth_enabled.load() && further.empty() && this->rig_imu.empty(), measurements);
                 gui_imu::feed_until(this->system, *loaded, this->rig_imu, this->imu_next, decoded.timestamp_nanoseconds);
                 const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
                 if (!this->wheel.feed_until(this->system, decoded.timestamp_nanoseconds)) {

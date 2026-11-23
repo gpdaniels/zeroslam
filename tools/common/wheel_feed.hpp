@@ -108,8 +108,9 @@ namespace wheel_feed {
     class feeder final {
     private:
         bool active = false;
-        // Clear of the cameras' ids, which the tools number from one, a rig having at most sixteen.
-        int sensor_id = 100;
+        // Clear of the cameras' ids, which the tools number from one, a rig having at most sixteen, and of the imu's, 100
+        // (process_imu::sensor_id, gui_imu::sensor_id).
+        int sensor_id = 101;
         wheel::odometer odometer;
         zeroslam_sensor_parameters_wheel_odometry_struct parameters = {};
         std::size_t next = 0;

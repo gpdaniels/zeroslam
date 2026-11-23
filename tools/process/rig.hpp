@@ -186,7 +186,7 @@ namespace process_rig {
             return;
         }
         for (const zeroslam_sensor_extrinsics_struct& extrinsic : extrinsics) {
-            std::printf("Extrinsic of camera %d (%s): [%.6f %.6f %.6f] [%.6f %.6f %.6f %.6f]\n", extrinsic.sensor_id, (extrinsic.refinement == zeroslam_extrinsic_refine) ? "refined" : "held", extrinsic.pose[0], extrinsic.pose[1], extrinsic.pose[2], extrinsic.pose[3], extrinsic.pose[4], extrinsic.pose[5], extrinsic.pose[6]);
+            std::printf("Extrinsic of sensor %d (%s): [%.6f %.6f %.6f] [%.6f %.6f %.6f %.6f]\n", extrinsic.sensor_id, (extrinsic.refinement == zeroslam_extrinsic_refine) ? "refined" : "held", extrinsic.pose[0], extrinsic.pose[1], extrinsic.pose[2], extrinsic.pose[3], extrinsic.pose[4], extrinsic.pose[5], extrinsic.pose[6]);
         }
     }
 

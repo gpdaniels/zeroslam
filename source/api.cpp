@@ -1194,9 +1194,10 @@ namespace {
     }
 
     // The data of a rig with an imu: the imu's samples reach the system as they come, between the cameras' frames, which go as
-    // they would without it. The rig, the imu among its sensors, is declared at the first data of either.
+    // they would without it. The rig, the imu and an odometer among its sensors, is declared at the first data of any; the
+    // odometer's samples, which go on with the cameras' frames, are checked whole with the batch as the imu's are.
     zeroslam_return_enum set_inertial_sensor_data(zeroslam_system* system, const zeroslam_sensor_data_struct* data, int length) {
-        if (!system->imu.accepts_samples(data, length)) {
+        if (!system->imu.accepts_samples(data, length) || (system->odometry.is_declared() && !system->odometry.accepts(data, length))) {
             return zeroslam_return_failure_invalid_sensor_data;
         }
         if (!system->any_data) {
@@ -1204,7 +1205,7 @@ namespace {
             for (const zeroslam_system::camera_entry& camera : system->cameras) {
                 sensor_ids.push_back(camera.sensor_id);
             }
-            system->slam_instance.set_rig(system->rig.make_rig(sensor_ids));
+            system->slam_instance.set_rig(system->odometry.with_odometer(system->rig.make_rig(sensor_ids)));
             system->slam_instance.set_imu(system->imu.sensor_id(), system->imu.noise(), system->imu.body_from_imu(), system->imu.refined());
             system->any_data = true;
         }
@@ -1254,7 +1255,9 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
             }
             return system->rig.make_rig(sensor_ids);
         };
-        return system->odometry.set_sensor_data(system->slam_instance, data, length, system->cameras.size() == 1, camera_runs, camera_rig);
+        // With an imu the rig, the odometer and the imu in it, was declared at the first data (set_inertial_sensor_data), and the
+        // odometer does not declare a single camera's rig again, which would leave the imu out of it.
+        return system->odometry.set_sensor_data(system->slam_instance, data, length, (system->cameras.size() == 1) && !system->imu.declared(), camera_runs, camera_rig);
     }
     if (system->cameras.size() > 1) {
         return set_rig_sensor_data(system, data, length);

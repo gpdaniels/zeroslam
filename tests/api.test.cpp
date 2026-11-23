@@ -1035,5 +1035,87 @@ int main(int argc, char* argv[]) {
         REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
     }
 
+    {
+        // A camera with a depth camera, an imu and a wheel odometer: each takes its own id, and no two sensors share one.
+        const int width = 64;
+        const int height = 48;
+        zeroslam_sensor_parameters_camera_struct camera{};
+        camera.width = width;
+        camera.height = height;
+        camera.focal_x = 50.0;
+        camera.focal_y = 50.0;
+        camera.centre_x = 32.0;
+        camera.centre_y = 24.0;
+        zeroslam_sensor_parameters_depth_struct depth = zeroslam::registered_depth(1, zeroslam_depth_encoding_float_32, 1.0);
+        zeroslam_sensor_parameters_imu_struct imu{ 1.6968e-04, 2.0e-03, 1.9393e-05, 3.0e-03, 200.0, 0.0, 0.0 };
+        zeroslam_sensor_parameters_wheel_odometry_struct odometer{};
+        odometer.model = zeroslam_odometry_differential_drive;
+        odometer.parameters[0] = 0.1;
+        odometer.parameters[1] = 0.1;
+        odometer.parameters[2] = 0.5;
+        const double noise[8] = { 0.01, 0.002, 0.005, 0.002, 0.01, 0.005, 0.001, 0.0005 };
+        for (size_t i = 0; i < 8; ++i) {
+            odometer.noise[i] = noise[i];
+        }
+        zeroslam_sensor_rig_struct rig[4] = {
+            { zeroslam_sensor_camera, 1, static_cast<int>(sizeof(camera)), &camera },
+            { zeroslam_sensor_depth, 2, static_cast<int>(sizeof(depth)), &depth },
+            { zeroslam_sensor_imu, 3, static_cast<int>(sizeof(imu)), &imu },
+            { zeroslam_sensor_wheel_odometry, 4, static_cast<int>(sizeof(odometer)), &odometer }
+        };
+        zeroslam_system* system = nullptr;
+        REQUIRE(zeroslam_create(&system) == zeroslam_return_success);
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig[0], 4) == zeroslam_return_success);
+        const int shared[][2] = { { 2, 3 }, { 2, 4 }, { 3, 4 }, { 4, 1 }, { 3, 1 } };
+        for (const int (&pair)[2] : shared) {
+            const int kept = rig[pair[0] - 1].sensor_id;
+            rig[pair[0] - 1].sensor_id = rig[pair[1] - 1].sensor_id;
+            REQUIRE(zeroslam_set_sensor_rig(system, &rig[0], 4) == zeroslam_return_failure_invalid_rig_sensor);
+            rig[pair[0] - 1].sensor_id = kept;
+        }
+
+        // Without the depth camera. The imu's and the odometer's extrinsics may come alone, after the camera's, and leave it be.
+        rig[1] = rig[0];
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig[1], 3) == zeroslam_return_success);
+        zeroslam_sensor_extrinsics_struct extrinsics[3] = {};
+        for (int i = 0; i < 3; ++i) {
+            extrinsics[i].sensor_id = (i == 0) ? 1 : (i + 2);
+            extrinsics[i].refinement = zeroslam_extrinsic_fixed;
+            extrinsics[i].pose[i] = 0.25;
+            extrinsics[i].pose[6] = 1.0;
+        }
+        REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[0], 1) == zeroslam_return_success);
+        REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[1], 1) == zeroslam_return_success);
+        REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[2], 1) == zeroslam_return_success);
+        zeroslam_sensor_extrinsics_struct reported[2] = {};
+        int reported_length = 2;
+        REQUIRE(zeroslam_get_sensor_extrinsics(system, &reported[0], &reported_length) == zeroslam_return_success);
+        REQUIRE((reported_length == 2) && (reported[0].sensor_id == 1) && (math::abs(reported[0].pose[0] - 0.25) < 1.0e-12) && (reported[1].sensor_id == 3) && (math::abs(reported[1].pose[1] - 0.25) < 1.0e-12));
+        zeroslam_odometry_calibration_struct calibration{};
+        REQUIRE(zeroslam_get_odometry_calibration(system, &calibration) == zeroslam_return_success);
+        REQUIRE((calibration.sensor_id == 4) && (math::abs(calibration.pose[2] - 0.25) < 1.0e-12));
+
+        // The odometer's samples are checked whole with a batch, as the imu's are: none of a batch is taken when one is refused.
+        zeroslam_sensor_measurement_imu_struct still{};
+        still.linear_acceleration[1] = -9.81;
+        double wheels[3] = { 0.0, 0.0, 0.0 };
+        std::vector<unsigned char> pixels(static_cast<size_t>(width * height), 128);
+        zeroslam_sensor_data_struct batch[3] = {
+            { 1000, 3, static_cast<int>(sizeof(still)), &still },
+            { 1000, 4, 16, &wheels[0] },
+            { 2000, 1, width * height, pixels.data() }
+        };
+        REQUIRE(zeroslam_set_sensor_data(system, &batch[0], 3) == zeroslam_return_failure_invalid_sensor_data);
+        batch[1].measurement_length = static_cast<int>(sizeof(wheels));
+        for (int frame = 0; frame < 5; ++frame) {
+            REQUIRE(zeroslam_set_sensor_data(system, &batch[0], 3) == zeroslam_return_success);
+            for (zeroslam_sensor_data_struct& entry : batch) {
+                entry.timestamp += 2000;
+            }
+        }
+
+        REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
+    }
+
     return EXIT_SUCCESS;
 }

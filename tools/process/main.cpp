@@ -474,6 +474,11 @@ int main(int argc, char* argv[]) {
     }
 
     process_depth::feeder depth_feeder;
+    // An imu is fed with the cameras as a rig (rig.hpp), which gives no depth camera.
+    if (depth_options.enabled && imu.enabled()) {
+        std::fprintf(stderr, "--depth takes a single camera without an imu, not with --imu.\n");
+        return EXIT_FAILURE;
+    }
     if (!depth_feeder.prepare(reader, depth_options, 1, camera_names.size(), error)) {
         std::fprintf(stderr, "%s.\n", error.c_str());
         return EXIT_FAILURE;
