@@ -39,7 +39,8 @@ namespace alignment {
         double optimal_translation[3],
         const bool overlap_first = false,
         const double* const prior_rotation = nullptr,
-        double* const conditioning = nullptr
+        double* const conditioning = nullptr,
+        const bool fit_scale = true
     ) {
         if ((ground_truth_size != estimated_size) || (ground_truth_size < 3)) {
             return false;
@@ -137,7 +138,8 @@ namespace alignment {
                 correlation += optimal_rotation[column][row] * covariance[row][column];
             }
         }
-        optimal_scale = (estimated_variance > 0.0) ? (correlation / estimated_variance) : 1.0;
+        // Without the scale fitted the rotation is the same and the alignment rigid, for an estimate that claims metric scale.
+        optimal_scale = (fit_scale && (estimated_variance > 0.0)) ? (correlation / estimated_variance) : 1.0;
         for (size_t row = 0; row < 3; ++row) {
             optimal_translation[row] = ground_truth_anchor[row];
             for (size_t column = 0; column < 3; ++column) {

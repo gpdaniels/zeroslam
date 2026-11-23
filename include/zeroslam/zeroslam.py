@@ -45,7 +45,19 @@ class zeroslam_sensor_enum(_enum.IntEnum):
     zeroslam_sensor_remote_bearing = 0x00000200
     zeroslam_sensor_remote_description = 0x00000400
     zeroslam_sensor_camera = 0x00000800
+    zeroslam_sensor_depth = 0x00002000
     zeroslam_sensor_invalid = -1
+
+class zeroslam_depth_encoding_enum(_enum.IntEnum):
+    zeroslam_depth_encoding_unsigned_16 = 0
+    zeroslam_depth_encoding_float_32 = 1
+
+class zeroslam_depth_measure_enum(_enum.IntEnum):
+    zeroslam_depth_measure_axial = 0
+    zeroslam_depth_measure_radial = 1
+
+class zeroslam_depth_registration_enum(_enum.IntEnum):
+    zeroslam_depth_registration_camera = 0
 
 
 class zeroslam_sensor_parameters_camera_struct(_ctypes.Structure):
@@ -95,6 +107,22 @@ class zeroslam_sensor_parameters_camera_model_struct(_ctypes.Structure):
         ("model", _ctypes.c_int),
         ("parameters_length", _ctypes.c_int),
         ("parameters", _ctypes.c_double * 32)
+    ]
+
+class zeroslam_sensor_parameters_depth_struct(_ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("camera_id", _ctypes.c_int),
+        ("encoding", _ctypes.c_int),
+        ("measure", _ctypes.c_int),
+        ("registration", _ctypes.c_int),
+        ("scale", _ctypes.c_double),
+        ("minimum_depth", _ctypes.c_double),
+        ("maximum_depth", _ctypes.c_double),
+        ("noise_constant", _ctypes.c_double),
+        ("noise_linear", _ctypes.c_double),
+        ("noise_quadratic", _ctypes.c_double),
+        ("pairing_tolerance", _ctypes.c_int64)
     ]
 
 class zeroslam_sensor_rig_struct(_ctypes.Structure):
@@ -238,6 +266,7 @@ class zeroslam_map_edges_struct(_ctypes.Structure):
 
 assert _ctypes.sizeof(zeroslam_sensor_parameters_camera_struct) == 104
 assert _ctypes.sizeof(zeroslam_sensor_parameters_camera_model_struct) == 272
+assert _ctypes.sizeof(zeroslam_sensor_parameters_depth_struct) == 72
 assert _ctypes.sizeof(zeroslam_sensor_rig_struct) == 12 + _ctypes.sizeof(_ctypes.c_void_p)
 assert _ctypes.sizeof(zeroslam_sensor_extrinsics_struct) == 64
 assert _ctypes.sizeof(zeroslam_sensor_data_struct) == 16 + _ctypes.sizeof(_ctypes.c_void_p)
@@ -388,6 +417,25 @@ zeroslam_get_map_voxels = _wrap("zeroslam_get_map_voxels", [
 
 ################################################################################
 
+def registered_depth(camera_id, encoding, scale):
+    """The parameters of a depth camera registered to the rig's camera camera_id (on its pixel grid, as aligned depth comes),
+    measuring the depth along the optical axis between 0.1 and 10 m with the Kinect's noise model, 1.425e-3 d^2 metres, its
+    frames paired with the camera's within half a 30 Hz frame. Any field can be changed after."""
+    parameters = zeroslam_sensor_parameters_depth_struct()
+    parameters.camera_id = camera_id
+    parameters.encoding = int(encoding)
+    parameters.measure = int(zeroslam_depth_measure_enum.zeroslam_depth_measure_axial)
+    parameters.registration = int(zeroslam_depth_registration_enum.zeroslam_depth_registration_camera)
+    parameters.scale = scale
+    parameters.minimum_depth = 0.1
+    parameters.maximum_depth = 10.0
+    parameters.noise_constant = 0.0
+    parameters.noise_linear = 0.0
+    parameters.noise_quadratic = 1.425e-3
+    parameters.pairing_tolerance = 16000000
+    return parameters
+
+
 class system:
     def __init__(self):
         self._handle = _ctypes.POINTER(zeroslam_system)()
@@ -468,6 +516,10 @@ __all__ = [
     "zeroslam_camera_model_enum",
     "zeroslam_camera_model_parameter_count",
     "zeroslam_sensor_parameters_camera_model_struct",
+    "zeroslam_depth_encoding_enum",
+    "zeroslam_depth_measure_enum",
+    "zeroslam_depth_registration_enum",
+    "zeroslam_sensor_parameters_depth_struct",
     "zeroslam_sensor_rig_struct",
     "zeroslam_extrinsic_enum",
     "zeroslam_sensor_extrinsics_struct",
@@ -501,5 +553,6 @@ __all__ = [
     "zeroslam_get_map_edges",
     "zeroslam_get_map_keyframes",
     "zeroslam_get_map_voxels",
+    "registered_depth",
     "system"
 ]

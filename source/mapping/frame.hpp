@@ -29,6 +29,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "math/matrix.hpp"
 #include "optimisation/factor_graph.hpp"
 #include "sensor/camera.hpp"
+#include "sensor/depth.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -192,6 +193,10 @@ namespace mapping {
         // frame of its own camera and image whose pose is that camera's: the frame's pose through the camera's extrinsic, set
         // by mapping::map::pose_views. Empty for a monocular rig. The frame's own pose is the rig's, its reference camera's.
         std::vector<frame> views;
+
+        // The depth image registered to the frame's camera, empty when the frame came without one. A keyframe keeps it, as the
+        // observations added to it later sample their depths from it; any other frame lets it go once it is processed.
+        sensor::depth depth;
 
     public:
         float to_level0_x(const float level_x, const size_t level) const {

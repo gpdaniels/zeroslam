@@ -322,13 +322,13 @@ namespace mapping {
         }
     }
 
-    int relative_graph::add_loop(const int parent, const int child, const math::sim3<double>& child_to_parent) {
+    int relative_graph::add_loop(const int parent, const int child, const math::sim3<double>& child_to_parent, const bool similarity) {
         if ((parent == child) || (this->nodes.count(parent) == 0) || (this->nodes.count(child) == 0)) {
             return -1;
         }
         math::sim3<double> transform = child_to_parent;
         transform.transformation().rotation() = transform.transformation().rotation().normalised();
-        return this->add_link(parent, child, transform, true);
+        return this->add_link(parent, child, transform, similarity);
     }
 
     void relative_graph::search(const int source, const std::vector<int>* const targets) {
@@ -622,6 +622,9 @@ namespace mapping {
                         measured.pixel[0] = obs.point[0];
                         measured.pixel[1] = obs.point[1];
                         measured.sigma = mapping::map::observation_sigma(frame, obs);
+                        if (reconstruction.metric_scale && (obs.depth > 0.0)) {
+                            mapping::depth_factor::relative_observation(frame, obs.depth, measured);
+                        }
                         for (const step_type& taken : steps) {
                             const std::unordered_map<int, int>::const_iterator transform_it = transform_of_link.find(taken.transform);
                             int transform = (transform_it != transform_of_link.end()) ? transform_it->second : -1;
@@ -664,7 +667,7 @@ namespace mapping {
 
             // Without two static frames seeing enough of the active points the scale of the region is free, so the length of
             // the transform joining its oldest frame to the map, or failing that the first it solves for, is held.
-            if (scale_links < relative_graph::scale_links_minimum) {
+            if (!reconstruction.metric_scale && (scale_links < relative_graph::scale_links_minimum)) {
                 int held = -1;
                 int oldest = active_frames.front();
                 for (const int frame_id : active_frames) {

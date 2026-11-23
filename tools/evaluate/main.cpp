@@ -34,12 +34,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace {
     void print_usage(const char* const program_name) {
-        std::printf("Usage: %s <ground_truth.txt> [estimate.txt] [estimate.txt] [--first|--centroid] [--max-rmse <m>] [--plot <axes>]...\n", program_name);
+        std::printf("Usage: %s <ground_truth.txt> [estimate.txt] [estimate.txt] [--first|--centroid] [--rigid] [--max-rmse <m>] [--plot <axes>]...\n", program_name);
         std::printf("  ground_truth.txt: the reference trajectory in the TUM format\n");
         std::printf("  estimate.txt:     up to two estimated trajectories to align and compare, paired with the\n");
         std::printf("                    reference by timestamp (nearest within %.3f s)\n", static_cast<double>(metrics::default_association_tolerance_nanoseconds) * 1.0e-9);
         std::printf("  --first:          constrain the first pose pair to overlap (the default)\n");
         std::printf("  --centroid:       align about the two centroids instead, the least-squares best fit\n");
+        std::printf("  --rigid:          align without a scale, for an estimate with metric scale (rgb-d, stereo)\n");
         std::printf("  --max-rmse:       exit with failure if any aligned ATE rmse exceeds this bound (metres)\n");
         std::printf("  --plot:           write trajectory_[axis].ppm for each axis of 'x', 'y', 'z' (e.g. 'xyz', 'xy', 'z')\n");
     }
@@ -103,6 +104,7 @@ int main(const int argc, char* argv[]) {
     std::string ground_truth_filename;
     std::vector<std::string> estimated_filenames;
     bool should_overlap_first_pose = true;
+    bool fit_scale = true;
     bool rmse_gate_enabled = false;
     double rmse_gate_maximum = 0.0;
     std::vector<std::string> requested_plot_axes;
@@ -128,6 +130,9 @@ int main(const int argc, char* argv[]) {
         }
         else if (matches("--centroid") || matches("-c")) {
             should_overlap_first_pose = false;
+        }
+        else if (matches("--rigid") || matches("-r")) {
+            fit_scale = false;
         }
         else if (matches("--max-rmse")) {
             const char* text = nullptr;
@@ -196,7 +201,7 @@ int main(const int argc, char* argv[]) {
         }
         std::printf("Loaded: %s (%zu poses)\n", estimated_filename.c_str(), estimated_trajectory.size());
 
-        const metrics::result evaluation = metrics::evaluate(ground_truth_trajectory, estimated_trajectory, should_overlap_first_pose);
+        const metrics::result evaluation = metrics::evaluate(ground_truth_trajectory, estimated_trajectory, should_overlap_first_pose, metrics::default_association_tolerance_nanoseconds, fit_scale);
         std::printf("Associated: %zu of %zu estimated poses with a ground truth pose (%zu of %zu, within %.3f s)\n", evaluation.pairs.size(), estimated_trajectory.size(), evaluation.pairs.size(), ground_truth_trajectory.size(), static_cast<double>(metrics::default_association_tolerance_nanoseconds) * 1.0e-9);
         if (evaluation.pairs.size() < 3) {
             std::fprintf(stderr, "Need at least 3 associated poses\n");

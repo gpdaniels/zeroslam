@@ -250,6 +250,36 @@ namespace dataset {
         return false;
     }
 
+    // The scene's depth camera: the raw image channel on the lowest numbered /sensor/depth_[01-99] topic.
+    inline const mcap::channel_type* find_depth_channel(const mcap& reader) {
+        const mcap::channel_type* depth_channel = nullptr;
+        for (const mcap::channel_type& channel : reader.get_channels()) {
+            const mcap::schema_type* schema = reader.find_schema(channel.schema_id);
+            if ((schema == nullptr) || (schema->name != "sensor_msgs/msg/Image") || (channel.topic.rfind("/sensor/", 0) != 0)) {
+                continue;
+            }
+            if (is_valid_sensor_name(channel.topic.substr(8), "depth") && ((depth_channel == nullptr) || (channel.topic < depth_channel->topic))) {
+                depth_channel = &channel;
+            }
+        }
+        return depth_channel;
+    }
+
+    // How a depth image's encoding stores metres: 32FC1 as metres in floats, mono16 as millimetres (the ros convention).
+    inline bool depth_encoding_scale(const std::string& encoding, bool& floating_point, double& scale) {
+        if (encoding == "32FC1") {
+            floating_point = true;
+            scale = 1.0;
+            return true;
+        }
+        if (encoding == "mono16") {
+            floating_point = false;
+            scale = 1.0 / 1000.0;
+            return true;
+        }
+        return false;
+    }
+
     inline bool camera_info_to_parameters(
         const cdr::camera_info& information,
         double* const parameters,

@@ -124,6 +124,8 @@ namespace {
         std::printf("        --cameras [names]      - Cameras run together as a rig, forwarded to the process tool (e.g. image_01,image_02).\n");
         std::printf("        --first                - Anchor the evaluation alignment on the first pose pair (the default).\n");
         std::printf("        --centroid             - Anchor the evaluation alignment on the two centroids instead.\n");
+        std::printf("        --depth                - Process with the scene's depth camera (a metric RGB-D map) and evaluate\n");
+        std::printf("                                 without fitting a scale.\n");
         std::printf("The tool validates the scene, runs the SLAM system on it, evaluates the recorded trajectory\n");
         std::printf("against the ground truth, and appends one line of results to the log file. The recorded metrics\n");
         std::printf("never fail the run: the exit code only reflects operational failures.\n");
@@ -140,6 +142,7 @@ int main(int argc, char* argv[]) {
     std::string commit_override;
     std::string frames_override;
     std::vector<std::string> config_settings;
+    bool use_depth = false;
     std::string cameras;
     bool overlap_first_pose = true;
 
@@ -202,6 +205,9 @@ int main(int argc, char* argv[]) {
         }
         else if (matches("--centroid") || matches("-c")) {
             overlap_first_pose = false;
+        }
+        else if (matches("--depth")) {
+            use_depth = true;
         }
         else if (argv[i][0] == '-') {
             std::fprintf(stderr, "Unknown option: %s\n", argv[i]);
@@ -356,6 +362,9 @@ int main(int argc, char* argv[]) {
 
     // The log file is space separated, keep the recorded fields to single tokens.
     std::string dataset_name = dataset_name_override.empty() ? scene_name : dataset_name_override;
+    if (use_depth && dataset_name_override.empty()) {
+        dataset_name += "+depth";
+    }
     for (char& character : dataset_name) {
         if ((character == ' ') || (character == '\t')) {
             character = '_';
@@ -399,6 +408,9 @@ int main(int argc, char* argv[]) {
     for (const std::string& setting : config_settings) {
         process_command += " --config " + platform::quote_for_shell(setting);
     }
+    if (use_depth) {
+        process_command += " --depth";
+    }
     if (!cameras.empty()) {
         process_command += " --cameras " + platform::quote_for_shell(cameras);
     }
@@ -422,6 +434,9 @@ int main(int argc, char* argv[]) {
     std::printf("\nEvaluating the trajectory...\n");
     std::string evaluate_command = platform::quote_for_shell(make_absolute(evaluate_binary)) + " " + platform::quote_for_shell(make_absolute(ground_truth_path)) + " " + platform::quote_for_shell(make_absolute(trajectory_path));
     evaluate_command += overlap_first_pose ? " --first" : " --centroid";
+    if (use_depth) {
+        evaluate_command += " --rigid";
+    }
     evaluate_command += " 2>&1";
     std::string evaluate_output;
     int evaluate_exit_code = -1;

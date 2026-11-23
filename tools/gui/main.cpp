@@ -14,6 +14,7 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "depth_feed.hpp"
 #include "graph.hpp"
 #include "icon.hpp"
 #include "image_texture.hpp"
@@ -184,6 +185,7 @@ namespace {
         std::printf("        --exit-after [n]       - Exit after n rendered frames.\n");
         std::printf("        --load-map [file]      - Display a saved map instead of running the slam system.\n");
         std::printf("        --save-map [file]      - Write the built map out when the run ends.\n");
+        std::printf("        --depth                - Give the scene's depth camera with each frame of a single camera: a metric RGB-D map.\n");
         const front_end_settings defaults = library_defaults();
         std::printf("        --config [key=value]   - A front end setting to start with: tracker=klt|extrema, lines=on|off, culling=on|off, association=klt|match|both, detector=fast|mser|harris|klt|forstner|rohr|kenney, descriptor=orb|teblid|bsift|teblid512|bsift512, flow=intensity|wavelet or local_map=covisible|voxels|both|fallback (repeatable).\n");
         std::printf("                                 Unset ones start at the library's defaults: tracker=%s lines=%s culling=%s association=%s detector=%s descriptor=%s flow=%s local_map=%s.\n", (defaults.tracker == 1) ? "extrema" : "klt", defaults.lines ? "on" : "off", defaults.culling ? "on" : "off", association_names[defaults.association], detector_names[defaults.detector], descriptor_names[defaults.descriptor], defaults.wavelet ? "wavelet" : "intensity", local_map_names[defaults.local_map]);
@@ -705,6 +707,8 @@ namespace {
         std::atomic<int> local_map_choice{ 0 };
         // The cameras run together with the fed channel as a rig, by sensor name, the fed channel's first; set before start.
         std::vector<std::string> rig_cameras;
+        // Whether the scene's depth camera goes with a single camera's frames (--depth, depth_feed.hpp); set before start.
+        std::atomic<bool> depth_enabled{ false };
 
     private:
         std::thread thread;
@@ -714,6 +718,7 @@ namespace {
         std::vector<gui::render_snapshot::frame> fed_frames;
         std::vector<zeroslam_point_struct> points;
         std::vector<zeroslam_line_struct> lines;
+        gui::depth_feed depth;
         std::vector<zeroslam_edge_struct> edges;
         std::vector<long long> keyframes;
         std::vector<zeroslam_voxel_struct> voxels;
@@ -777,7 +782,7 @@ namespace {
             rig.sensor_id = slam_worker::sensor_id;
             rig.parameters_length = static_cast<int>(sizeof(camera));
             rig.parameters_data = &camera;
-            return this->system.set_sensor_rig(&rig, 1) == zeroslam_return_success;
+            return gui::depth_feed::set_sensor_rig(this->system, rig, this->depth_enabled.load()) == zeroslam_return_success;
         }
 
         // The fed channel and the further cameras as one rig, each at its mounting on the ego.
@@ -957,6 +962,7 @@ namespace {
                     this->system = zeroslam::system();
                     this->applied_tracker = -1;
                     this->fed_frames.clear();
+                    this->depth.reset();
                     fed_messages = 0;
                     fed_channel = channel_index;
                     rig_described = false;
@@ -1023,6 +1029,7 @@ namespace {
                     measurements[1 + i].measurement_length = static_cast<int>(further_decoded[i].grey.size());
                     measurements[1 + i].measurement_data = further_decoded[i].grey.data();
                 }
+                this->depth.append(*loaded, decoded, this->depth_enabled.load() && further.empty(), measurements);
                 const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
                 const zeroslam_return_enum fed = this->system.set_sensor_data(measurements.data(), static_cast<int>(measurements.size()));
                 const double elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
@@ -1374,6 +1381,7 @@ int main(int argc, char* argv[]) {
     long long screenshot_after_frames = 30;
     long long exit_after_frames = -1;
     bool autoplay = false;
+    bool use_depth = false;
     std::vector<std::string> rig_camera_names;
     front_end_settings initial = library_defaults();
     for (int i = 1; i < argc; ++i) {
@@ -1399,6 +1407,9 @@ int main(int argc, char* argv[]) {
         }
         if (std::strcmp(argv[i], "--play") == 0) {
             autoplay = true;
+        }
+        else if (std::strcmp(argv[i], "--depth") == 0) {
+            use_depth = true;
         }
         else if (std::strcmp(argv[i], "--load-map") == 0) {
             if (!take_string("--load-map", load_map_path)) {
@@ -1518,6 +1529,7 @@ int main(int argc, char* argv[]) {
     char scene_path_text[1024] = {};
     std::snprintf(&scene_path_text[0], sizeof(scene_path_text), "%s", scene_path.c_str());
     slam_worker worker;
+    worker.depth_enabled.store(use_depth);
     playback timeline;
     std::chrono::steady_clock::time_point last_repaint = std::chrono::steady_clock::now();
 

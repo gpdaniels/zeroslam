@@ -378,5 +378,71 @@ int main(int argc, char* argv[]) {
         REQUIRE(result == zeroslam_return_success);
     }
 
+    {
+        /* A depth camera registered to the camera makes the map metric: the depth frames go with the camera frames. */
+        result = zeroslam_create(&system);
+        REQUIRE(result == zeroslam_return_success);
+        const int depth_sensor_id = 2;
+        zeroslam_sensor_parameters_depth_struct depth_parameters;
+        memset(&depth_parameters, 0, sizeof(depth_parameters));
+        depth_parameters.camera_id = sensor_id;
+        depth_parameters.encoding = zeroslam_depth_encoding_unsigned_16;
+        depth_parameters.measure = zeroslam_depth_measure_axial;
+        depth_parameters.registration = zeroslam_depth_registration_camera;
+        depth_parameters.scale = 0.001;
+        depth_parameters.minimum_depth = 0.1;
+        depth_parameters.maximum_depth = 10.0;
+        depth_parameters.noise_quadratic = 1.425e-3;
+        depth_parameters.pairing_tolerance = frame_interval / 2;
+        zeroslam_sensor_rig_struct rgbd[2];
+        memset(&rgbd[0], 0, sizeof(rgbd));
+        rgbd[0] = rig;
+        rgbd[1].type = zeroslam_sensor_depth;
+        rgbd[1].sensor_id = depth_sensor_id;
+        rgbd[1].parameters_length = (int)sizeof(depth_parameters);
+        rgbd[1].parameters_data = &depth_parameters;
+        result = zeroslam_set_sensor_rig(system, &rgbd[0], 2);
+        printf("set_sensor_rig (rgb-d): %s (%s, id %d, of camera %d)\n", zeroslam_return_enum_to_string(result), zeroslam_sensor_enum_to_string(rgbd[1].type), depth_sensor_id, sensor_id);
+        REQUIRE(result == zeroslam_return_success);
+
+        unsigned char* frame_pixels = (unsigned char*)malloc((size_t)(width * height));
+        unsigned short* millimetres = (unsigned short*)malloc(sizeof(unsigned short) * (size_t)(width * height));
+        REQUIRE((frame_pixels != NULL) && (millimetres != NULL));
+        for (int row = 0; row < height; ++row) {
+            const double ray_y = (((double)row + 0.5) - camera_parameters.centre_y) / camera_parameters.focal_y;
+            const double ray_y_magnitude = (ray_y < 0.0) ? -ray_y : ray_y;
+            const double depth = ((ray_y_magnitude * 6.0) <= 1.0) ? 6.0 : (1.0 / ray_y_magnitude);
+            for (int column = 0; column < width; ++column) {
+                millimetres[(row * width) + column] = (unsigned short)((depth * 1000.0) + 0.5);
+            }
+        }
+        for (int frame_index = 0; frame_index < frame_count; ++frame_index) {
+            render_corridor(frame_pixels, width, height, &camera_parameters, 0.05 * frame_index);
+            zeroslam_sensor_data_struct data[2];
+            memset(&data[0], 0, sizeof(data));
+            data[0].timestamp = 1000000000ll + (frame_interval * frame_index);
+            data[0].sensor_id = depth_sensor_id;
+            data[0].measurement_length = width * height * (int)sizeof(unsigned short);
+            data[0].measurement_data = millimetres;
+            data[1].timestamp = data[0].timestamp;
+            data[1].sensor_id = sensor_id;
+            data[1].measurement_length = width * height;
+            data[1].measurement_data = frame_pixels;
+            result = zeroslam_set_sensor_data(system, &data[0], 2);
+            REQUIRE(result == zeroslam_return_success);
+        }
+        free(millimetres);
+        free(frame_pixels);
+        zeroslam_pose_struct pose;
+        memset(&pose, 0, sizeof(pose));
+        result = zeroslam_get_pose(system, &pose);
+        printf("get_pose (rgb-d): %s\n", zeroslam_return_enum_to_string(result));
+        REQUIRE(result == zeroslam_return_success);
+        print_pose("newest pose, metres", &pose);
+        REQUIRE((pose.pose[0] > 0.85) && (pose.pose[0] < 1.05));
+        result = zeroslam_destroy(&system);
+        REQUIRE(result == zeroslam_return_success);
+    }
+
     return EXIT_SUCCESS;
 }

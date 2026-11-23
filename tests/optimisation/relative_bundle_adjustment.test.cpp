@@ -268,6 +268,78 @@ namespace {
     }
 }
 
+namespace {
+    // Gives every observation the depth of its landmark in the observing frame of the truth, axial or radial.
+    void add_depths(scene& setup, const bool radial) {
+        for (problem_type::observation& measured : setup.problem.observations) {
+            const math::matrix<double, 3, 1>& truth = setup.truth_landmarks[static_cast<size_t>(measured.landmark)];
+            problem_type check = setup.problem;
+            for (size_t index = 0; index < check.transforms.size(); ++index) {
+                check.transforms[index].estimate = setup.truth_transforms[index];
+            }
+            for (size_t row = 0; row < 3; ++row) {
+                check.landmarks[static_cast<size_t>(measured.landmark)].parameters[row] = truth[row];
+            }
+            measured.radial = radial;
+            measured.depth = 1.0;
+            double inverse_depth = 0.0;
+            REQUIRE(check.predict_inverse_depth(measured, inverse_depth));
+            measured.depth = 1.0 / inverse_depth;
+            measured.depth_sigma = 1.0e-3;
+        }
+    }
+
+    // Compares the depth's analytic jacobians with central differences of the predicted inverse depth.
+    void check_depth_jacobians(const problem_type& problem, const problem_type::observation& measured) {
+        double residual[2];
+        std::vector<math::matrix<double, 2, 7>> step_jacobians;
+        math::matrix<double, 2, 3> landmark_jacobian;
+        problem.linearise_depth(measured, residual, step_jacobians, landmark_jacobian);
+        double predicted = 0.0;
+        REQUIRE(problem.predict_inverse_depth(measured, predicted));
+        REQUIRE(std::fabs(residual[0] - ((1.0 / measured.depth) - predicted)) < 1e-12);
+        REQUIRE(residual[1] == 0.0);
+        const double epsilon = 1e-6;
+        for (size_t a = 0; a < measured.path.size(); ++a) {
+            const size_t transform_index = static_cast<size_t>(measured.path[a].transform);
+            math::matrix<double, 2, 7> expected = math::matrix<double, 2, 7>::zero();
+            for (size_t b = 0; b < measured.path.size(); ++b) {
+                if (static_cast<size_t>(measured.path[b].transform) == transform_index) {
+                    expected = expected + step_jacobians[b];
+                }
+            }
+            for (size_t parameter = 0; parameter < 7; ++parameter) {
+                math::matrix<double, 7, 1> delta = math::matrix<double, 7, 1>::zero();
+                delta[parameter] = epsilon;
+                problem_type plus = problem;
+                plus.transforms[transform_index].estimate = problem.transforms[transform_index].estimate * math::sim3<double>::exp(delta);
+                delta[parameter] = -epsilon;
+                problem_type minus = problem;
+                minus.transforms[transform_index].estimate = problem.transforms[transform_index].estimate * math::sim3<double>::exp(delta);
+                double value_plus = 0.0;
+                double value_minus = 0.0;
+                REQUIRE(plus.predict_inverse_depth(measured, value_plus));
+                REQUIRE(minus.predict_inverse_depth(measured, value_minus));
+                const double numeric = (value_plus - value_minus) / (2.0 * epsilon);
+                REQUIRE(std::fabs(numeric - expected[0][parameter]) < 1e-6 * (1.0 + std::fabs(numeric)));
+                REQUIRE(expected[1][parameter] == 0.0);
+            }
+        }
+        for (size_t parameter = 0; parameter < 3; ++parameter) {
+            problem_type plus = problem;
+            plus.landmarks[static_cast<size_t>(measured.landmark)].parameters[parameter] += epsilon;
+            problem_type minus = problem;
+            minus.landmarks[static_cast<size_t>(measured.landmark)].parameters[parameter] -= epsilon;
+            double value_plus = 0.0;
+            double value_minus = 0.0;
+            REQUIRE(plus.predict_inverse_depth(measured, value_plus));
+            REQUIRE(minus.predict_inverse_depth(measured, value_minus));
+            const double numeric = (value_plus - value_minus) / (2.0 * epsilon);
+            REQUIRE(std::fabs(numeric - landmark_jacobian[0][parameter]) < 1e-6 * (1.0 + std::fabs(numeric)));
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
@@ -324,6 +396,33 @@ int main(int argc, char* argv[]) {
                 break;
             }
         }
+    }
+
+    // The depths' jacobians match numeric differences, axial and radial, through every kind of path and the empty one.
+    for (const bool radial : { false, true }) {
+        scene setup = make_scene();
+        add_depths(setup, radial);
+        perturb(setup, true);
+        int checked = 0;
+        for (const problem_type::observation& measured : setup.problem.observations) {
+            if ((measured.path.size() >= 2) || measured.path.empty()) {
+                check_depth_jacobians(setup.problem, measured);
+                ++checked;
+            }
+        }
+        REQUIRE(checked > 50);
+    }
+
+    // With depths, every transform free and no prior, the depths hold the scale: a graph whose transforms and points are
+    // all started off, the loop's scale with them, comes back to the truth, which without the depths has no scale.
+    {
+        scene setup = make_scene();
+        add_depths(setup, false);
+        perturb(setup, true);
+        const problem_type::summary summary = setup.problem.solve(100);
+        REQUIRE(summary.active_transforms == 6);
+        REQUIRE(summary.final_cost < 1e-12);
+        REQUIRE(recovered(setup, 1e-6));
     }
 
     // With one transform held for the scale, the rest of the graph and the landmarks are recovered.

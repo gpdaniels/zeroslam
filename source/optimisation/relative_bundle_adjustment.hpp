@@ -76,6 +76,12 @@ namespace optimisation {
             double pixel[2] = { 0.0, 0.0 };
             double sigma = 1.0;
             std::vector<step> path;
+            // A depth in metres measured of the landmark in the observing frame, zero for none, as a residual of its own beside
+            // the reprojection: the measured inverse depth less the predicted one, rho / q_z (or rho / |q| for a radial depth)
+            // with q the base frame's scaled point in the observing frame, with the inverse depth's standard deviation.
+            double depth = 0.0;
+            double depth_sigma = 1.0;
+            bool radial = false;
         };
 
         // Holds a transform's translation length, which fixes the scale of a monocular map when no fixed transform does.
@@ -98,6 +104,8 @@ namespace optimisation {
 
         // sqrt(5.991), the 95% bound of a two dimensional reprojection error in units of its sigma.
         constexpr static const double default_huber = 2.4476519;
+        // sqrt(3.841), the 95% bound of a depth's error in units of its sigma.
+        constexpr static const double depth_huber = 1.9598;
 
         std::vector<sensor::model> cameras;
         std::vector<transform> transforms;
@@ -118,6 +126,13 @@ namespace optimisation {
         // The residual observed - predicted as the solver linearises it, with the jacobians of the prediction by each step's
         // transform, in path order and by all seven parameters (omega, upsilon, sigma) of its update, and by the landmark.
         void linearise(const observation& measured, double (&residual)[2], std::vector<math::matrix<double, 2, 7>>& step_jacobians, math::matrix<double, 2, 3>& landmark_jacobian) const;
+
+        // The same for the observation's depth: the residual's first row is the measured less the predicted inverse depth and
+        // the jacobians' first rows are of the predicted inverse depth, their second rows zero.
+        void linearise_depth(const observation& measured, double (&residual)[2], std::vector<math::matrix<double, 2, 7>>& step_jacobians, math::matrix<double, 2, 3>& landmark_jacobian) const;
+
+        // The inverse depth the observation's landmark is predicted at, as its depth is measured, false when not in front.
+        bool predict_inverse_depth(const observation& measured, double& inverse_depth) const;
 
         // The robust cost of every observation and prior under the current estimates.
         double cost(const double huber_delta = relative_bundle_adjustment::default_huber) const;

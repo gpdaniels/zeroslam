@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ZEROSLAM_MAPPING_MAP_HPP
 
 #include "core/logger.hpp"
+#include "mapping/depth_factor.hpp"
 #include "mapping/frame.hpp"
 #include "mapping/intrinsics_refinement.hpp"
 #include "mapping/line.hpp"
@@ -69,6 +70,9 @@ namespace mapping {
             // The camera of the rig that saw it (see mapping::rig::camera): 0 for the reference camera, the frame itself, and
             // otherwise the frame's view through that camera, frame.views[camera - 1].
             int camera = 0;
+            // The depth in metres the frame's depth image measured at the position in a map with metric scale (see
+            // mapping::depth_factor), zero when it has none there or it disagreed with the map.
+            double depth = 0.0;
         };
 
         struct line_observation final {
@@ -234,6 +238,7 @@ namespace mapping {
         void add_observation(const mapping::frame& frame, const mapping::point& landmark, size_t kp_index) {
             const feature::point& keypoint = frame.keypoints[kp_index];
             this->observations[landmark.id].push_back(observation{ frame.id, kp_index, math::matrix<double, 2, 1>{ { static_cast<double>(keypoint.x), static_cast<double>(keypoint.y) } }, keypoint.octave, keypoint.octave });
+            this->observations[landmark.id].back().depth = this->metric_scale ? mapping::depth_factor::sample(frame, static_cast<double>(keypoint.x), static_cast<double>(keypoint.y)) : 0.0;
         }
 
         bool merge_landmark(const int keep_id, const int drop_id) {
@@ -265,6 +270,9 @@ namespace mapping {
 
         void add_observation(int frame_id, const mapping::point& landmark, double x, double y, int octave = 0, int measurement_octave = 0, int camera = 0) {
             this->observations[landmark.id].push_back(observation{ frame_id, static_cast<size_t>(-1), math::matrix<double, 2, 1>{ { x, y } }, octave, measurement_octave, camera });
+            // A depth image is the reference camera's.
+            const std::unordered_map<int, mapping::frame>::const_iterator observing = (this->metric_scale && (camera == 0)) ? this->frames.find(frame_id) : this->frames.end();
+            this->observations[landmark.id].back().depth = (observing != this->frames.end()) ? mapping::depth_factor::sample(observing->second, x, y) : 0.0;
         }
 
         // A position measured on pyramid level L is 2^L times coarser than one refined at level 0, so it has 4^-L the information.
@@ -353,6 +361,9 @@ namespace mapping {
                         }
                         information[a][b] += weight * sum;
                     }
+                }
+                if (this->metric_scale && (obs.depth > 0.0)) {
+                    mapping::depth_factor::add_information(frame, landmark, obs.depth, information);
                 }
             }
             landmark.set_information(information, this->depth_direction_of(landmark));
@@ -758,6 +769,8 @@ namespace mapping {
             };
 
             std::vector<point_edge> point_edges;
+            // The observations' depths in a metric map, each beside its reprojection (see mapping::depth_factor).
+            std::vector<point_edge> depth_edges;
             // Without the landmarks free there is no first pass to drop gross observations, which pull a pose all the further
             // for being gross (one projecting far outside the view has an enormous Jacobian), so they stay out from the start.
             size_t gross_excluded = 0;
@@ -857,6 +870,14 @@ namespace mapping {
                     }
                     point_edges.push_back({ ba.add_edge(static_cast<optimisation::edge&&>(m)), landmark_id, frame_id, obs.camera });
                     ++non_fixed_edges;
+                    // A landmark the adjustment holds still without a depth, or at infinity, cannot take a depth measured of it.
+                    if (this->metric_scale && (obs.depth > 0.0) && !(fix_landmarks && ((landmark_record.uncertainty == mapping::point::uncertainty_kind::unbounded) || landmark_record.at_infinity()))) {
+                        optimisation::edge measured = mapping::depth_factor::make_edge(this->frames.at(frame_id), landmark_record, obs.depth);
+                        measured.add_vertex(camera_vertexes[frame_id]);
+                        measured.add_vertex(landmark_vertexes[landmark_id]);
+                        depth_edges.push_back({ ba.add_edge(static_cast<optimisation::edge&&>(measured)), landmark_id, frame_id, 0 });
+                        ++non_fixed_edges;
+                    }
                 }
             }
 
@@ -1170,6 +1191,7 @@ namespace mapping {
                         kept_edges.push_back(entry);
                     }
                 }
+                map::drop_depth_outliers(ba, dropped_observations, depth_edges);
                 for (const int landmark_id : map::ordered(landmark_vertexes)) {
                     optimisation::vertex* const vertex = landmark_vertexes.at(landmark_id);
                     const std::vector<optimisation::edge*> connected = ba.get_connected_edges(vertex);
@@ -1251,6 +1273,11 @@ namespace mapping {
                             }
                             information[a][b] += drho * sum;
                         }
+                    }
+                }
+                for (const point_edge& entry : depth_edges) {
+                    if ((landmark_vertexes.count(entry.landmark_id) != 0) && !landmark_vertexes.at(entry.landmark_id)->is_fixed()) {
+                        mapping::depth_factor::add_information(*entry.factor, informations[entry.landmark_id]);
                     }
                 }
                 for (auto& [landmark_id, information] : informations) {
@@ -1397,6 +1424,34 @@ namespace mapping {
             }
         }
 
+        // After the first pass of an adjustment, the depth factors beyond their bound leave the second pass, as the observations
+        // beyond theirs do, keeping their bearings; so do those whose reprojection left. Whether a depth stays in the map is
+        // judged after the adjustment (remove_outlier_observations).
+        template <typename point_edge_type>
+        static void drop_depth_outliers(optimisation::factor_graph& ba, const std::vector<point_edge_type>& dropped_observations, std::vector<point_edge_type>& depth_edges) {
+            if (depth_edges.empty()) {
+                return;
+            }
+            std::unordered_set<long long> dropped_pairs;
+            for (const point_edge_type& dropped : dropped_observations) {
+                if (dropped.camera == 0) {
+                    dropped_pairs.insert((static_cast<long long>(dropped.landmark_id) << 32) | static_cast<long long>(static_cast<unsigned int>(dropped.frame_id)));
+                }
+            }
+            std::vector<point_edge_type> kept;
+            kept.reserve(depth_edges.size());
+            for (const point_edge_type& entry : depth_edges) {
+                const bool reprojection_dropped = dropped_pairs.count((static_cast<long long>(entry.landmark_id) << 32) | static_cast<long long>(static_cast<unsigned int>(entry.frame_id))) != 0;
+                if (reprojection_dropped || (entry.factor->chi2() > mapping::depth_factor::inlier_bound_squared)) {
+                    ba.remove_edge(entry.factor);
+                }
+                else {
+                    kept.push_back(entry);
+                }
+            }
+            depth_edges = kept;
+        }
+
         static bool project_landmark(const sensor::model& camera, const math::matrix<double, 3, 3>& rotation, const math::matrix<double, 3, 1>& translation, const mapping::point& landmark, math::matrix<double, 2, 1>& pixel) {
             math::matrix<double, 3, 1> mapped;
             if (landmark.inverse_depth) {
@@ -1470,13 +1525,18 @@ namespace mapping {
                     }
                     if (keep) {
                         landmark_observations[write++] = obs;
+                        // A depth that disagrees with where the adjustment put the landmark goes, and its bearing stays.
+                        if (this->metric_scale && (obs.depth > 0.0) && (frame_it != this->frames.end()) && (frame_ids.count(obs.frame_id) != 0) && !mapping::depth_factor::agrees(frame_it->second, landmark_it->second, obs.depth)) {
+                            landmark_observations[write - 1].depth = 0.0;
+                        }
                     }
                     else {
                         ++removed;
                     }
                 }
                 landmark_observations.resize(write);
-                if (landmark_observations.size() < 2) {
+                // A landmark seen once is held by its measured depth.
+                if ((landmark_observations.size() < 2) && !((landmark_observations.size() == 1) && (landmark_observations.front().depth > 0.0))) {
                     this->observations.erase(observations_it);
                     this->landmarks.erase(landmark_id);
                 }

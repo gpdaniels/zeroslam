@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "api.hpp"
 
+#include "api_depth.hpp"
 #include "api_rig.hpp"
 #include "core/logger.hpp"
 #include "core/thread_pool.hpp"
@@ -62,6 +63,8 @@ struct zeroslam_system final {
     std::vector<camera_entry> cameras;
     // A rig of several cameras: their extrinsics and the frame that waits for the rest of its images (api_rig.hpp).
     api_rig rig;
+    // The depth cameras registered to the cameras, and their frames waiting for a camera frame.
+    api_depth depths;
 
     struct frame_record final {
         long long int timestamp;
@@ -985,10 +988,18 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_rig(zeroslam_system* 
         return zeroslam_return_failure_invalid_rig_sensor;
     }
     std::vector<zeroslam_system::camera_entry> cameras;
+    std::vector<api_depth::sensor> depths;
     for (int i = 0; i < length; ++i) {
         const zeroslam_sensor_rig_struct& entry = rig[i];
         if (entry.sensor_id == 0) {
             return zeroslam_return_failure_invalid_rig_sensor;
+        }
+        if (entry.type == zeroslam_sensor_depth) {
+            depths.push_back({});
+            if (!api_depth::parse(entry, depths.back())) {
+                return zeroslam_return_failure_invalid_rig_sensor;
+            }
+            continue;
         }
         if (entry.type != zeroslam_sensor_camera) {
             return zeroslam_return_failure_invalid_rig_sensor;
@@ -1021,8 +1032,17 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_rig(zeroslam_system* 
     if (!api_rig::cameras_supported(cameras.size())) {
         return zeroslam_return_failure_invalid_rig_sensor;
     }
+    // At most one depth camera, registered to a single camera, and no sensor id used twice.
+    for (const api_depth::sensor& depth : depths) {
+        if ((depths.size() > 1) || (cameras.size() != 1) || (depth.parameters.camera_id != cameras.front().sensor_id) || (depth.sensor_id == cameras.front().sensor_id)) {
+            return zeroslam_return_failure_invalid_rig_sensor;
+        }
+    }
     system->cameras.swap(cameras);
     system->rig.clear_extrinsics();
+    system->depths.set_sensors(depths);
+    // A depth camera measures the scale: the map is metric.
+    system->slam_instance.reconstruction.metric_scale = !depths.empty();
     return zeroslam_return_success;
 }
 
@@ -1131,12 +1151,32 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
         return set_rig_sensor_data(system, data, length);
     }
     std::vector<const zeroslam_system::camera_entry*> cameras(static_cast<size_t>(length), nullptr);
+    // Depth frames are checked, and held, apart from the camera frames, their timestamps increasing among their own.
+    std::vector<const api_depth::sensor*> depths(static_cast<size_t>(length), nullptr);
+    bool depth_seen = false;
+    long long int depth_next = 0;
+    system->depths.validation_start(depth_seen, depth_next);
+    int previous_camera = -1;
     for (int i = 0; i < length; ++i) {
         const zeroslam_sensor_data_struct& entry = data[i];
         if (entry.sensor_id == 0) {
             return zeroslam_return_failure_invalid_sensor_data;
         }
-        const bool follows_previous = (i > 0) ? (entry.timestamp > data[i - 1].timestamp) : (!system->any_data || (entry.timestamp > system->latest_timestamp));
+        const api_depth::sensor* const depth = system->depths.find(entry.sensor_id);
+        if (depth != nullptr) {
+            const zeroslam_system::camera_entry* camera = nullptr;
+            for (const zeroslam_system::camera_entry& existing : system->cameras) {
+                camera = (existing.sensor_id == depth->parameters.camera_id) ? &existing : camera;
+            }
+            if ((camera == nullptr) || !system->depths.follows(entry.timestamp, depth_seen, depth_next) || (entry.measurement_data == nullptr) || (entry.measurement_length < 0) || (static_cast<size_t>(entry.measurement_length) != api_depth::frame_length(*depth, camera->width, camera->height))) {
+                return zeroslam_return_failure_invalid_sensor_data;
+            }
+            depths[static_cast<size_t>(i)] = depth;
+            cameras[static_cast<size_t>(i)] = camera;
+            continue;
+        }
+        const bool follows_previous = (previous_camera >= 0) ? (entry.timestamp > data[previous_camera].timestamp) : (!system->any_data || (entry.timestamp > system->latest_timestamp));
+        previous_camera = i;
         if (!follows_previous) {
             return zeroslam_return_failure_invalid_sensor_data;
         }
@@ -1156,10 +1196,20 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
         }
         cameras[static_cast<size_t>(i)] = camera;
     }
+    // A camera frame pairs with a depth frame given with it, whichever comes first in the batch.
     for (int i = 0; i < length; ++i) {
+        if (depths[static_cast<size_t>(i)] != nullptr) {
+            system->depths.hold(*depths[static_cast<size_t>(i)], data[i].timestamp, cameras[static_cast<size_t>(i)]->width, cameras[static_cast<size_t>(i)]->height, data[i].measurement_data);
+        }
+    }
+    for (int i = 0; i < length; ++i) {
+        if (depths[static_cast<size_t>(i)] != nullptr) {
+            continue;
+        }
         const zeroslam_sensor_data_struct& entry = data[i];
         const zeroslam_system::camera_entry* const camera = cameras[static_cast<size_t>(i)];
         const image::image frame_image(static_cast<size_t>(camera->height), static_cast<size_t>(camera->width), static_cast<unsigned char*>(entry.measurement_data));
+        system->slam_instance.set_frame_depth(system->depths.take(camera->sensor_id, entry.timestamp));
         system->slam_instance.process_frame(camera->intrinsics, frame_image);
         system->frames.push_back({ entry.timestamp, system->slam_instance.reconstruction.next_frame_id - 1 });
         system->latest_timestamp = entry.timestamp;

@@ -94,6 +94,7 @@ typedef enum zeroslam_sensor_enum {
     zeroslam_sensor_remote_bearing = 0x00000200,
     zeroslam_sensor_remote_description = 0x00000400,
     zeroslam_sensor_camera = 0x00000800,
+    zeroslam_sensor_depth = 0x00002000,
     zeroslam_sensor_invalid = -1
 } zeroslam_sensor_enum;
 ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_enum) == 4, "For ABI compatibility the sizeof(zeroslam_sensor_enum) must be 4 bytes.")
@@ -118,6 +119,8 @@ static inline const char* zeroslam_sensor_enum_to_string(zeroslam_sensor_enum se
             return "remote description";
         case zeroslam_sensor_camera:
             return "camera";
+        case zeroslam_sensor_depth:
+            return "depth";
         case zeroslam_sensor_invalid:
             return "invalid";
     }
@@ -216,6 +219,49 @@ typedef struct zeroslam_sensor_parameters_camera_model_struct {
     double parameters[32];
 } zeroslam_sensor_parameters_camera_model_struct;
 ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_parameters_camera_model_struct) == 272, "For ABI compatibility the sizeof(zeroslam_sensor_parameters_camera_model_struct) must be 272 bytes.")
+
+// How a depth image's pixels are stored: 16 bit unsigned values of scale metres each (zero is no measurement), or 32 bit floats
+// of metres (zero or not finite is no measurement).
+typedef enum zeroslam_depth_encoding_enum {
+    zeroslam_depth_encoding_unsigned_16 = 0,
+    zeroslam_depth_encoding_float_32 = 1
+} zeroslam_depth_encoding_enum;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_depth_encoding_enum) == 4, "For ABI compatibility the sizeof(zeroslam_depth_encoding_enum) must be 4 bytes.")
+
+// What a depth is: the distance along the optical axis, the z of the point in the camera frame (structured light and stereo
+// cameras, TUM RGB-D, the OAK-D), or the distance along the pixel's ray from the camera centre (time of flight cameras).
+typedef enum zeroslam_depth_measure_enum {
+    zeroslam_depth_measure_axial = 0,
+    zeroslam_depth_measure_radial = 1
+} zeroslam_depth_measure_enum;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_depth_measure_enum) == 4, "For ABI compatibility the sizeof(zeroslam_depth_measure_enum) must be 4 bytes.")
+
+// How a depth image is related to its camera: registered to it, on the camera's own pixel grid as aligned depth comes, so
+// pixel (u, v) of the depth image is the depth of what pixel (u, v) of the camera sees. The only relation taken so far.
+typedef enum zeroslam_depth_registration_enum {
+    zeroslam_depth_registration_camera = 0
+} zeroslam_depth_registration_enum;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_depth_registration_enum) == 4, "For ABI compatibility the sizeof(zeroslam_depth_registration_enum) must be 4 bytes.")
+
+// A depth camera paired with a camera of the rig, whose images are the camera's size. Depths outside [minimum_depth,
+// maximum_depth] metres are taken as missing. The standard deviation of a depth d is noise_constant + noise_linear d +
+// noise_quadratic d^2 metres, a structured light camera's error growing with the square of the depth (the Kinect's is about
+// 1.425e-3 d^2). A camera frame takes the depth frame nearest it in time within pairing_tolerance nanoseconds, from those
+// given before it or with it.
+typedef struct zeroslam_sensor_parameters_depth_struct {
+    int camera_id;
+    int encoding;
+    int measure;
+    int registration;
+    double scale;
+    double minimum_depth;
+    double maximum_depth;
+    double noise_constant;
+    double noise_linear;
+    double noise_quadratic;
+    long long int pairing_tolerance;
+} zeroslam_sensor_parameters_depth_struct;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_parameters_depth_struct) == 72, "For ABI compatibility the sizeof(zeroslam_sensor_parameters_depth_struct) must be 72 bytes.")
 
 typedef struct zeroslam_sensor_rig_struct {
     zeroslam_sensor_enum type;
