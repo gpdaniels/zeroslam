@@ -50,6 +50,17 @@ namespace sensor::imu {
         math::matrix<double, 3, 1> accelerometer = math::matrix<double, 3, 1>::zero();
     };
 
+    // What an imu's calibration holds beyond its biases. A gyroscope is taken to have orthogonal axes, aligned with the
+    // accelerometer's and rightly scaled, and one matrix M for the whole run corrects where it does not, the scale errors of the
+    // three axes on its diagonal and their misalignments off it, after Van Meter and Paul, "SLAM Dunk: A Recipe for Long-Horizon
+    // Egocentric SLAM in the Wild" (2026). The angular velocity is
+    //   w = (I + M) * w_measured - b_g,
+    // so M is zero for a gyroscope taken as it is.
+    class intrinsics final {
+    public:
+        math::matrix<double, 3, 3> gyroscope = math::matrix<double, 3, 3>::zero();
+    };
+
     // The noise model of an imu, in the continuous time densities its calibration publishes (as Kalibr and the EuRoC datasets do),
     // and the magnitude of gravity. Each measurement is the true value plus its bias plus white noise of the noise density, and each
     // bias wanders as the integral of white noise of the random walk density. The defaults are those of the ADIS16448 of the EuRoC

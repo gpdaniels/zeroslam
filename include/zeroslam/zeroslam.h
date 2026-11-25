@@ -350,6 +350,16 @@ typedef struct zeroslam_odometry_calibration_struct {
 } zeroslam_odometry_calibration_struct;
 ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_odometry_calibration_struct) == 128, "For ABI compatibility the sizeof(zeroslam_odometry_calibration_struct) must be 128 bytes.")
 
+// The imu's own calibration as the system holds it: the matrix M that corrects its gyroscope's scale and the alignment of its axes,
+// row by row, the angular velocity being (I + M) * measured - bias. It is zero until an adjustment has refined it, which the
+// configuration's imu_calibration key asks for, and refinements counts the adjustments that have. See README.md "Inertial sensors".
+typedef struct zeroslam_imu_calibration_struct {
+    int sensor_id;
+    int refinements;
+    double gyroscope[9];
+} zeroslam_imu_calibration_struct;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_imu_calibration_struct) == 80, "For ABI compatibility the sizeof(zeroslam_imu_calibration_struct) must be 80 bytes.")
+
 typedef struct zeroslam_sensor_data_struct {
     long long int timestamp;
     int sensor_id;
@@ -469,6 +479,9 @@ ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sens
 
 // The wheel odometer's calibration and extrinsic as the system holds them; fails with invalid_rig_sensor without an odometer.
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_odometry_calibration(zeroslam_system* system, zeroslam_odometry_calibration_struct* calibration);
+
+// The imu's calibration as the system holds it; fails with invalid_rig_sensor without an imu.
+ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_imu_calibration(zeroslam_system* system, zeroslam_imu_calibration_struct* calibration);
 
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_finalise(zeroslam_system* system);
 

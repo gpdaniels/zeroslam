@@ -41,7 +41,7 @@ int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
 
-    // A default sample, bias and set of parameters.
+    // A default sample, bias, intrinsics and set of parameters.
     {
         const sensor::imu::sample sample;
         REQUIRE(sample.timestamp == 0);
@@ -52,6 +52,10 @@ int main(int argc, char* argv[]) {
             REQUIRE(sample.linear_acceleration[i] == 0.0);
             REQUIRE(bias.gyroscope[i] == 0.0);
             REQUIRE(bias.accelerometer[i] == 0.0);
+            // A gyroscope is taken as it is unless its matrix says otherwise.
+            for (size_t j = 0; j < 3; ++j) {
+                REQUIRE(sensor::imu::intrinsics().gyroscope[i][j] == 0.0);
+            }
         }
         REQUIRE(parameters.gyroscope_noise_density > 0.0);
         REQUIRE(parameters.accelerometer_noise_density > 0.0);

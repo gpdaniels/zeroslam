@@ -388,6 +388,9 @@ int main(int argc, char* argv[]) {
         else if (matches("--imu-refine")) {
             imu.refine = true;
         }
+        else if (matches("--imu-gyroscope")) {
+            settings.push_back("imu_calibration=gyroscope");
+        }
         else if (matches("--wheel")) {
             const char* text = nullptr;
             if (!take_value(text)) {
@@ -442,6 +445,7 @@ int main(int argc, char* argv[]) {
         std::printf("    --imu     - Optional imu run with the cameras, e.g. imu_01, at its 'ego -> sensor/[name]' extrinsic of /tf.\n");
         std::printf("    --imu-noise - Optional imu noise densities: gyroscope, accelerometer, gyroscope walk, accelerometer walk (default EuRoC's).\n");
         std::printf("    --imu-refine - Refine the imu's extrinsic.\n");
+        std::printf("    --imu-gyroscope - Refine the scale and misalignment of the imu's gyroscope (--config imu_calibration=gyroscope).\n");
         std::printf("    --wheel   - Optional wheel odometer of the scene run with the camera or the rig, e.g. wheel_01; its refined calibration\n");
         std::printf("                is written to odometry.txt.\n");
         return EXIT_SUCCESS;
@@ -737,6 +741,9 @@ int main(int argc, char* argv[]) {
     }
     if (camera_names.size() > 1) {
         process_rig::report_extrinsics(slam);
+    }
+    if (imu.enabled()) {
+        process_imu::report_calibration(slam);
     }
     if (!odometer_feed.write_calibration(slam, "odometry.txt")) {
         std::fprintf(stderr, "Failed to write the odometry calibration.\n");

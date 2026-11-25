@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ZEROSLAM_API_IMU_HPP
 
 #include "api.hpp"
+#include "mapping/inertial.hpp"
 #include "mapping/rig.hpp"
 #include "math/lie.hpp"
 #include "sensor/imu/measurement.hpp"
@@ -66,6 +67,10 @@ public:
     // Writes the imu's extrinsic after the cameras' at an index, as the system holds it once its data has come (refined where asked
     // for) and as declared before; nothing when there is no imu.
     void fill_extrinsic(const mapping::rig& held, zeroslam_sensor_extrinsics_struct* const extrinsics, const int index) const;
+
+    // Writes the imu's calibration as the system holds it, the gyroscope's matrix zero until an adjustment has refined it; false
+    // when there is no imu.
+    bool fill_calibration(const mapping::inertial& held, zeroslam_imu_calibration_struct* const calibration) const;
 
     // The noise model, the imu's pose on the body, and whether it is refined.
     sensor::imu::parameters noise() const;

@@ -261,6 +261,12 @@ namespace {
         return "declared";
     }
 
+    constexpr static const char configuration_key_imu_calibration[] = "imu_calibration";
+
+    const char* imu_calibration_name(const mapping::frame::settings& frontend) {
+        return (frontend.imu_calibration == mapping::frame::settings::imu_calibration_kind::gyroscope) ? "gyroscope" : "off";
+    }
+
     constexpr static const char* const anchor_names[4] = { "translation", "affine", "translation_illumination", "affine_illumination" };
 
     const char* anchor_name(const mapping::frame::settings& frontend) {
@@ -351,7 +357,7 @@ namespace {
         return std::snprintf(
             buffer,
             capacity,
-            "%s=%d\n%s=%s\n%s=%.9g\n%s=%s\n%s=%.9g\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n",
+            "%s=%d\n%s=%s\n%s=%.9g\n%s=%s\n%s=%.9g\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%d\n%s=%d\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n%s=%s\n",
             configuration_key_verbosity,
             core::logger::get_verbosity(),
             configuration_key_detector,
@@ -425,7 +431,9 @@ namespace {
             configuration_key_calibration,
             calibration_names[static_cast<int>(frontend.calibration)],
             configuration_key_extrinsics,
-            extrinsics_name(frontend)
+            extrinsics_name(frontend),
+            configuration_key_imu_calibration,
+            imu_calibration_name(frontend)
         );
     }
 
@@ -929,6 +937,17 @@ namespace {
                     return false;
                 }
             }
+            else if (token_equals(line, key_length, configuration_key_imu_calibration)) {
+                if (token_equals(value, value_length, "off")) {
+                    frontend.imu_calibration = mapping::frame::settings::imu_calibration_kind::off;
+                }
+                else if (token_equals(value, value_length, "gyroscope")) {
+                    frontend.imu_calibration = mapping::frame::settings::imu_calibration_kind::gyroscope;
+                }
+                else {
+                    return false;
+                }
+            }
             else if (token_equals(line, key_length, configuration_key_wavelet_seed)) {
                 if (token_equals(value, value_length, "rest")) {
                     frontend.wavelet_seed = feature::tracker::tracker::wavelet_seed_kind::rest;
@@ -1146,6 +1165,16 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_odometry_calibration(zerosla
         return zeroslam_return_failure_invalid_argument;
     }
     return system->odometry.fill_calibration(system->slam_instance.reconstruction, calibration) ? zeroslam_return_success : zeroslam_return_failure_invalid_rig_sensor;
+}
+
+zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_imu_calibration(zeroslam_system* system, zeroslam_imu_calibration_struct* calibration) {
+    if (system == nullptr) {
+        return zeroslam_return_failure_invalid_system;
+    }
+    if (calibration == nullptr) {
+        return zeroslam_return_failure_invalid_argument;
+    }
+    return system->imu.fill_calibration(system->slam_instance.reconstruction.inertial_state, calibration) ? zeroslam_return_success : zeroslam_return_failure_invalid_rig_sensor;
 }
 }
 

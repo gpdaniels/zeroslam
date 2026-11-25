@@ -766,7 +766,7 @@ namespace mapping {
                     extrinsic_vertexes[camera] = ba.add_vertex(static_cast<optimisation::vertex&&>(node));
                 }
             }
-            const mapping::inertial::factors inertial_factors = this->inertial_state.add_factors(ba, camera_vertexes, this->frames, this->sensor_rig, fix_landmarks);
+            const mapping::inertial::factors inertial_factors = this->inertial_state.add_factors(ba, camera_vertexes, this->frames, this->sensor_rig, fix_landmarks, local_window == 0);
             // Add landmarks.
             int non_fixed_landmarks = 0;
             int non_fixed_edges = 0;

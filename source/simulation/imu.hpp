@@ -171,6 +171,9 @@ namespace simulation {
             bool noise = true;
             bool random_walk = true;
             sensor::imu::bias initial_bias = sensor::imu::bias();
+            // The scale errors and the misalignment of the gyroscope's axes, as the matrix M that corrects them: the gyroscope
+            // measures the w for which (I + M) * w is the true angular velocity plus the bias. Zero for an ideal gyroscope.
+            sensor::imu::intrinsics intrinsics = sensor::imu::intrinsics();
         };
 
         class recording final {
@@ -195,11 +198,21 @@ namespace simulation {
             const double accelerometer_walk_sigma = math::sqrt(parameters.accelerometer_walk_variance(period_seconds));
             random_stream random(generation_options.seed);
             sensor::imu::bias current = generation_options.initial_bias;
+            const bool misaligned = generation_options.intrinsics.gyroscope != (math::matrix<double, 3, 3>::zero());
+            math::matrix<double, 3, 3> measured_from_true = math::matrix<double, 3, 3>::identity();
+            if (misaligned) {
+                const bool inverted = math::invert(math::matrix<double, 3, 3>(math::matrix<double, 3, 3>::identity() + generation_options.intrinsics.gyroscope), measured_from_true);
+                ASSERT(inverted, "The gyroscope's matrix must leave its axes independent.");
+                static_cast<void>(inverted);
+            }
             for (long long int timestamp = generation_options.start; timestamp <= generation_options.end; timestamp += period) {
                 const double time = 1.0e-9 * static_cast<double>(timestamp);
                 sensor::imu::sample measurement;
                 measurement.timestamp = timestamp;
                 measurement.angular_velocity = trajectory.angular_velocity(time) + current.gyroscope;
+                if (misaligned) {
+                    measurement.angular_velocity = measured_from_true * measurement.angular_velocity;
+                }
                 measurement.linear_acceleration = trajectory.specific_force(time) + current.accelerometer;
                 if (generation_options.noise) {
                     for (size_t axis = 0; axis < 3; ++axis) {

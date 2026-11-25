@@ -153,5 +153,34 @@ int main(int argc, char* argv[]) {
         REQUIRE(std::abs(accelerometer_walk / parameters.accelerometer_walk_variance(10.0) - 1.0) < 0.15);
     }
 
+    // A gyroscope whose axes are scaled and misaligned measures the angular velocity that its matrix corrects to the true one
+    // plus the bias, (I + M) * w_measured = w + b_g, and leaves the accelerometer alone; a zero matrix changes no sample.
+    {
+        sensor::imu::parameters parameters;
+        simulation::imu_sensor::options options;
+        options.noise = false;
+        options.random_walk = false;
+        options.initial_bias.gyroscope = { { 0.01, -0.02, 0.03 } };
+        options.end = 2000000000ll;
+        const simulation::imu_sensor::recording ideal = simulation::imu_sensor::generate(trajectory, parameters, options);
+        const simulation::imu_sensor::recording unchanged = simulation::imu_sensor::generate(trajectory, parameters, options);
+        options.intrinsics.gyroscope = { { { 0.011, -0.006, 0.004 }, { 0.007, -0.009, -0.005 }, { -0.003, 0.008, 0.012 } } };
+        const simulation::imu_sensor::recording misaligned = simulation::imu_sensor::generate(trajectory, parameters, options);
+        REQUIRE(misaligned.samples.size() == ideal.samples.size());
+        double largest_change = 0.0;
+        for (size_t k = 0; k < ideal.samples.size(); ++k) {
+            REQUIRE(unchanged.samples[k].angular_velocity == ideal.samples[k].angular_velocity);
+            REQUIRE(misaligned.samples[k].timestamp == ideal.samples[k].timestamp);
+            REQUIRE(misaligned.samples[k].linear_acceleration == ideal.samples[k].linear_acceleration);
+            const math::matrix<double, 3, 1> measured = misaligned.samples[k].angular_velocity;
+            const math::matrix<double, 3, 1> corrected = measured + (options.intrinsics.gyroscope * measured);
+            REQUIRE((corrected - ideal.samples[k].angular_velocity).get_length_squared() < 1e-28);
+            largest_change = std::fmax(largest_change, std::sqrt((measured - ideal.samples[k].angular_velocity).get_length_squared()));
+        }
+        // A percent of an angular velocity of the order of a radian a second.
+        REQUIRE(largest_change > 1e-3);
+        REQUIRE(largest_change < 5e-2);
+    }
+
     return 0;
 }

@@ -16,6 +16,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "mapping/inertial.hpp"
 
+#include "core/logger.hpp"
 #include "math/math.hpp"
 #include "optimisation/edge.hpp"
 #include "optimisation/edges/bias_random_walk.hpp"
@@ -94,8 +95,16 @@ namespace mapping {
         return true;
     }
 
+    mapping::gyroscope_intrinsics& inertial::gyroscope() {
+        return this->gyroscope_;
+    }
+
+    const mapping::gyroscope_intrinsics& inertial::gyroscope() const {
+        return this->gyroscope_;
+    }
+
     bool inertial::preintegrate(const long long start, const long long end, const sensor::imu::bias& linearisation, sensor::imu::preintegration& result) const {
-        result = sensor::imu::preintegration(this->noise_, linearisation);
+        result = sensor::imu::preintegration(this->noise_, linearisation, this->gyroscope_.estimate());
         if (this->samples_.empty() || (end < start)) {
             return false;
         }
@@ -299,13 +308,27 @@ namespace mapping {
         return false;
     }
 
-    inertial::factors inertial::add_factors(optimisation::factor_graph& graph, const std::unordered_map<int, optimisation::vertex*>& poses, const std::unordered_map<int, mapping::frame>& frames, const mapping::rig& rig, const bool hold_extrinsic) const {
+    inertial::factors inertial::add_factors(optimisation::factor_graph& graph, const std::unordered_map<int, optimisation::vertex*>& poses, const std::unordered_map<int, mapping::frame>& frames, const mapping::rig& rig, const bool hold_extrinsic, const bool whole_map) const {
         factors held;
         size_t imu_index = 0;
         if (!this->gravity_known_ || !this->index_in(rig, imu_index)) {
             return held;
         }
         const math::se3<double> reference_from_imu = rig.reference_from_sensor(imu_index);
+        // The gyroscope's matrix is free where the measurements of the whole map turn enough to show it.
+        const bool gyroscope_taken = this->gyroscope_.active();
+        bool gyroscope_free = false;
+        if (gyroscope_taken && whole_map && !hold_extrinsic) {
+            mapping::gyroscope_intrinsics::excitation turned;
+            for (const auto& [id, state] : this->keyframes_) {
+                static_cast<void>(id);
+                if (state.linked && state.estimated && this->chain_initialised(state.chain)) {
+                    turned.add(state.from_previous);
+                }
+            }
+            gyroscope_free = this->gyroscope_.frees(whole_map, hold_extrinsic, turned);
+            core::logger::log(core::logger::level::debug, "Gyroscope matrix %s: %zu inertial edges turn %.4f rad^2 about the least turned axis%s.", gyroscope_free ? "free" : "held", turned.count(), turned.weakest(), this->gyroscope_.settled() ? "" : ", the initialisation not settled");
+        }
         std::unordered_map<int, optimisation::vertex*> velocities;
         std::unordered_map<int, optimisation::vertex*> biases;
         std::unordered_map<int, optimisation::vertex*> extra_poses;
@@ -369,14 +392,24 @@ namespace mapping {
             if ((held.extrinsic == nullptr) && rig.refines(imu_index) && !hold_extrinsic) {
                 held.extrinsic = graph.add_vertex(rig.extrinsic_vertex(imu_index));
             }
+            if ((held.gyroscope == nullptr) && gyroscope_taken) {
+                held.gyroscope = graph.add_vertex(this->gyroscope_.vertex(gyroscope_free));
+                if (gyroscope_free) {
+                    this->gyroscope_.add_prior(graph, held.gyroscope);
+                }
+            }
             optimisation::vertex* previous_velocity = nullptr;
             optimisation::vertex* previous_bias = nullptr;
             optimisation::vertex* current_velocity = nullptr;
             optimisation::vertex* current_bias = nullptr;
-            state_vertices(previous_id, previous, previous_pose->is_fixed(), previous_velocity, previous_bias);
-            state_vertices(id, state, current_pose->second->is_fixed(), current_velocity, current_bias);
-            optimisation::edge factor{ optimisation::edges::inertial(this->gravity_, reference_from_imu, held.extrinsic != nullptr) };
-            factor.set_observation(optimisation::edges::inertial::observation(state.from_previous));
+            // A keyframe whose pose is held holds its velocity and bias too, but not where the gyroscope's matrix is free. The bias
+            // the first keyframe holds is what the initialisation made of the gyroscope taken as it was, off by the matrix's share
+            // of the mean angular velocity, and held it would hold the matrix to that through the random walk of the biases after
+            // it: in the simulated run of the slam test the matrix came out within 0.0017 with it free and 0.0025 with it held.
+            state_vertices(previous_id, previous, previous_pose->is_fixed() && !gyroscope_free, previous_velocity, previous_bias);
+            state_vertices(id, state, current_pose->second->is_fixed() && !gyroscope_free, current_velocity, current_bias);
+            optimisation::edge factor{ optimisation::edges::inertial(this->gravity_, reference_from_imu, held.extrinsic != nullptr, held.gyroscope != nullptr) };
+            factor.set_observation(optimisation::edges::inertial::observation(state.from_previous, held.gyroscope != nullptr));
             factor.set_information(information);
             static_cast<void>(factor.add_vertex(previous_pose));
             static_cast<void>(factor.add_vertex(previous_velocity));
@@ -385,6 +418,9 @@ namespace mapping {
             static_cast<void>(factor.add_vertex(current_velocity));
             if (held.extrinsic != nullptr) {
                 static_cast<void>(factor.add_vertex(held.extrinsic));
+            }
+            if (held.gyroscope != nullptr) {
+                static_cast<void>(factor.add_vertex(held.gyroscope));
             }
             static_cast<void>(graph.add_edge(static_cast<optimisation::edge&&>(factor)));
             optimisation::edge walk{ optimisation::edges::bias_random_walk() };
@@ -417,13 +453,18 @@ namespace mapping {
         if ((held.extrinsic != nullptr) && this->index_in(rig, imu_index)) {
             rig.read_extrinsic_vertex(imu_index, *held.extrinsic);
         }
-        // Each edge takes the bias of the keyframe before it, at which its measurements are integrated again once it has moved.
+        if ((held.gyroscope != nullptr) && !held.gyroscope->is_fixed()) {
+            this->gyroscope_.read(*held.gyroscope);
+        }
+        // Each edge takes the bias of the keyframe before it, at which its measurements are integrated again once it has moved,
+        // or once the gyroscope's matrix has.
+        const sensor::imu::intrinsics& intrinsics = this->gyroscope_.estimate();
         std::map<size_t, const keyframe_state*> last_of_chain;
         for (auto& [id, state] : this->keyframes_) {
             static_cast<void>(id);
             const std::map<size_t, const keyframe_state*>::const_iterator previous = last_of_chain.find(state.chain);
-            if ((previous != last_of_chain.end()) && state.linked && state.from_previous.requires_reintegration(previous->second->bias)) {
-                state.from_previous.reintegrate(previous->second->bias);
+            if ((previous != last_of_chain.end()) && state.linked && (state.from_previous.requires_reintegration(previous->second->bias) || state.from_previous.requires_reintegration(intrinsics))) {
+                state.from_previous.reintegrate(previous->second->bias, intrinsics);
             }
             last_of_chain[state.chain] = &state;
         }
