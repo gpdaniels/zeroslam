@@ -417,5 +417,218 @@ int main(int argc, char* argv[]) {
         REQUIRE(first.get_parameters().gyroscope_noise_density == parameters.gyroscope_noise_density);
     }
 
+    // The gyroscope's matrix. A gyroscope whose axes are scaled and misaligned, integrated at the matrix that corrects it, gives
+    // the deltas of the ideal gyroscope, and a zero matrix changes nothing to the last bit.
+    sensor::imu::intrinsics intrinsics;
+    intrinsics.gyroscope = { { { 0.011, -0.006, 0.004 }, { 0.007, -0.009, -0.005 }, { -0.003, 0.008, 0.012 } } };
+    {
+        simulation::imu_sensor::options sensor_options;
+        sensor_options.noise = false;
+        sensor_options.random_walk = false;
+        sensor_options.initial_bias.gyroscope = { { 0.01, -0.02, 0.015 } };
+        sensor_options.initial_bias.accelerometer = { { 0.1, 0.05, -0.08 } };
+        const simulation::imu_sensor::recording ideal = simulation::imu_sensor::generate(trajectory, parameters, sensor_options);
+        sensor_options.intrinsics = intrinsics;
+        const simulation::imu_sensor::recording misaligned = simulation::imu_sensor::generate(trajectory, parameters, sensor_options);
+        const long long int start = 3002500000ll;
+        const long long int end = 4507500000ll;
+        sensor::imu::preintegration reference(parameters, sensor_options.initial_bias);
+        REQUIRE(reference.integrate(ideal.samples, start, end));
+        REQUIRE(reference.get_linearisation_intrinsics().gyroscope == (math::matrix<double, 3, 3>::zero()));
+        sensor::imu::preintegration corrected(parameters, sensor_options.initial_bias, intrinsics);
+        REQUIRE(corrected.integrate(misaligned.samples, start, end));
+        REQUIRE(corrected.get_linearisation_intrinsics().gyroscope == intrinsics.gyroscope);
+        REQUIRE(rotation_distance(corrected.get_delta_rotation(), reference.get_delta_rotation()) < 1e-12);
+        REQUIRE(norm(corrected.get_delta_velocity() - reference.get_delta_velocity()) < 1e-12);
+        REQUIRE(norm(corrected.get_delta_position() - reference.get_delta_position()) < 1e-12);
+        sensor::imu::preintegration uncorrected(parameters, sensor_options.initial_bias);
+        REQUIRE(uncorrected.integrate(misaligned.samples, start, end));
+        REQUIRE(rotation_distance(uncorrected.get_delta_rotation(), reference.get_delta_rotation()) > 1e-3);
+
+        sensor::imu::preintegration plain(parameters, sensor_options.initial_bias, sensor::imu::intrinsics());
+        REQUIRE(plain.integrate(ideal.samples, start, end));
+        REQUIRE(plain.get_delta_rotation().get_quaternion() == reference.get_delta_rotation().get_quaternion());
+        REQUIRE(plain.get_delta_velocity() == reference.get_delta_velocity());
+        REQUIRE(plain.get_delta_position() == reference.get_delta_position());
+        REQUIRE(plain.get_covariance() == reference.get_covariance());
+        REQUIRE(plain.get_rotation_gyroscope_jacobian() == reference.get_rotation_gyroscope_jacobian());
+        REQUIRE(plain.get_position_gyroscope_jacobian() == reference.get_position_gyroscope_jacobian());
+        // Corrected for the matrix it was integrated at, a delta is corrected for the bias alone.
+        sensor::imu::bias moved = sensor_options.initial_bias;
+        moved.gyroscope[1] += 0.004;
+        moved.accelerometer[0] -= 0.03;
+        REQUIRE(rotation_distance(corrected.get_delta_rotation(moved, intrinsics), corrected.get_delta_rotation(moved)) < 1e-15);
+        REQUIRE(norm(corrected.get_delta_velocity(moved, intrinsics) - corrected.get_delta_velocity(moved)) < 1e-15);
+        REQUIRE(norm(corrected.get_delta_position(moved, intrinsics) - corrected.get_delta_position(moved)) < 1e-15);
+    }
+
+    // The jacobians by the nine entries of the gyroscope's matrix against integrating again, by central differences of the
+    // integration, and the first order correction of a finite change, whose error is of second order in the change.
+    {
+        simulation::imu_sensor::options sensor_options;
+        sensor_options.random_walk = false;
+        sensor_options.intrinsics = intrinsics;
+        const simulation::imu_sensor::recording recording = simulation::imu_sensor::generate(trajectory, parameters, sensor_options);
+        const long long int start = 4000000000ll;
+        const long long int end = 5500000000ll;
+        sensor::imu::bias linearisation;
+        linearisation.gyroscope = { { 0.002, -0.001, 0.003 } };
+        linearisation.accelerometer = { { -0.05, 0.02, 0.04 } };
+        sensor::imu::intrinsics linearisation_intrinsics;
+        linearisation_intrinsics.gyroscope = { { { 0.004, 0.001, -0.002 }, { -0.001, 0.003, 0.002 }, { 0.002, -0.003, -0.004 } } };
+        sensor::imu::preintegration preintegration(parameters, linearisation, linearisation_intrinsics);
+        REQUIRE(preintegration.integrate(recording.samples, start, end));
+
+        const double step = 1e-6;
+        double largest_rotation = 0.0;
+        double largest_velocity = 0.0;
+        double largest_position = 0.0;
+        for (size_t parameter = 0; parameter < 9; ++parameter) {
+            sensor::imu::intrinsics plus = linearisation_intrinsics;
+            sensor::imu::intrinsics minus = linearisation_intrinsics;
+            plus.gyroscope.data()[parameter] += step;
+            minus.gyroscope.data()[parameter] -= step;
+            sensor::imu::preintegration forward = preintegration;
+            forward.reintegrate(linearisation, plus);
+            sensor::imu::preintegration backward = preintegration;
+            backward.reintegrate(linearisation, minus);
+            REQUIRE(forward.get_linearisation_intrinsics().gyroscope == plus.gyroscope);
+            REQUIRE(forward.get_linearisation().gyroscope == linearisation.gyroscope);
+            const math::matrix<double, 3, 1> rotation_column = (1.0 / (2.0 * step)) * (backward.get_delta_rotation().inverse() * forward.get_delta_rotation()).normalised().log();
+            const math::matrix<double, 3, 1> velocity_column = (1.0 / (2.0 * step)) * (forward.get_delta_velocity() - backward.get_delta_velocity());
+            const math::matrix<double, 3, 1> position_column = (1.0 / (2.0 * step)) * (forward.get_delta_position() - backward.get_delta_position());
+            for (size_t row = 0; row < 3; ++row) {
+                REQUIRE(std::abs(rotation_column[row] - preintegration.get_rotation_gyroscope_matrix_jacobian()[row][parameter]) < 1e-6);
+                REQUIRE(std::abs(velocity_column[row] - preintegration.get_velocity_gyroscope_matrix_jacobian()[row][parameter]) < 1e-6);
+                REQUIRE(std::abs(position_column[row] - preintegration.get_position_gyroscope_matrix_jacobian()[row][parameter]) < 1e-6);
+                largest_rotation = std::fmax(largest_rotation, std::abs(preintegration.get_rotation_gyroscope_matrix_jacobian()[row][parameter]));
+                largest_velocity = std::fmax(largest_velocity, std::abs(preintegration.get_velocity_gyroscope_matrix_jacobian()[row][parameter]));
+                largest_position = std::fmax(largest_position, std::abs(preintegration.get_position_gyroscope_matrix_jacobian()[row][parameter]));
+            }
+        }
+        // The jacobians are not small beside the tolerance they are held to.
+        REQUIRE(largest_rotation > 0.1);
+        REQUIRE(largest_velocity > 0.1);
+        REQUIRE(largest_position > 0.05);
+
+        const sensor::imu::preintegration::state origin{ trajectory.rotation(4.0), trajectory.position(4.0), trajectory.velocity(4.0) };
+        double previous_errors[3] = { 0.0, 0.0, 0.0 };
+        for (const double scale : { 1.0, 0.5 }) {
+            sensor::imu::bias moved_bias = linearisation;
+            moved_bias.gyroscope = moved_bias.gyroscope + scale * math::matrix<double, 3, 1>({ { 0.02, -0.03, 0.01 } });
+            moved_bias.accelerometer = moved_bias.accelerometer + scale * math::matrix<double, 3, 1>({ { 0.2, 0.1, -0.15 } });
+            sensor::imu::intrinsics moved = linearisation_intrinsics;
+            moved.gyroscope = moved.gyroscope + scale * math::matrix<double, 3, 3>({ { { 0.02, -0.01, 0.015 }, { 0.01, -0.02, -0.01 }, { -0.015, 0.02, 0.01 } } });
+            sensor::imu::preintegration reintegrated = preintegration;
+            reintegrated.reintegrate(moved_bias, moved);
+            REQUIRE(reintegrated.get_steps().size() == preintegration.get_steps().size());
+            const double errors[3] = {
+                rotation_distance(preintegration.get_delta_rotation(moved_bias, moved), reintegrated.get_delta_rotation()),
+                norm(preintegration.get_delta_velocity(moved_bias, moved) - reintegrated.get_delta_velocity()),
+                norm(preintegration.get_delta_position(moved_bias, moved) - reintegrated.get_delta_position())
+            };
+            const double uncorrected[3] = {
+                rotation_distance(preintegration.get_delta_rotation(), reintegrated.get_delta_rotation()),
+                norm(preintegration.get_delta_velocity() - reintegrated.get_delta_velocity()),
+                norm(preintegration.get_delta_position() - reintegrated.get_delta_position())
+            };
+            // The correction for the bias alone leaves what the matrix moved.
+            const double bias_only[3] = {
+                rotation_distance(preintegration.get_delta_rotation(moved_bias), reintegrated.get_delta_rotation()),
+                norm(preintegration.get_delta_velocity(moved_bias) - reintegrated.get_delta_velocity()),
+                norm(preintegration.get_delta_position(moved_bias) - reintegrated.get_delta_position())
+            };
+            for (size_t i = 0; i < 3; ++i) {
+                REQUIRE(errors[i] < 0.05 * uncorrected[i]);
+                REQUIRE(errors[i] < 0.5 * bias_only[i]);
+                if (previous_errors[i] > 0.0) {
+                    const double ratio = previous_errors[i] / errors[i];
+                    REQUIRE((ratio > 3.0) && (ratio < 5.0));
+                }
+                previous_errors[i] = errors[i];
+            }
+            // The prediction takes the corrected deltas.
+            const sensor::imu::preintegration::state predicted = preintegration.predict(origin, moved_bias, moved, gravity);
+            const sensor::imu::preintegration::state expected = reintegrated.predict(origin, moved_bias, gravity);
+            REQUIRE(rotation_distance(predicted.rotation, expected.rotation) < 1.01 * errors[0]);
+            REQUIRE(norm(predicted.velocity - expected.velocity) < 1.01 * errors[1]);
+            REQUIRE(norm(predicted.position - expected.position) < 1.01 * errors[2]);
+        }
+
+        // Integrating again at a bias keeps the matrix, and so does a reset to a bias; a reset to a matrix takes it.
+        sensor::imu::bias other = linearisation;
+        other.gyroscope[0] += 0.01;
+        sensor::imu::preintegration kept = preintegration;
+        kept.reintegrate(other);
+        REQUIRE(kept.get_linearisation_intrinsics().gyroscope == linearisation_intrinsics.gyroscope);
+        sensor::imu::preintegration again = preintegration;
+        again.reintegrate(other, linearisation_intrinsics);
+        REQUIRE(kept.get_delta_velocity() == again.get_delta_velocity());
+        kept.reset(linearisation);
+        REQUIRE(kept.get_steps().empty());
+        REQUIRE(kept.get_linearisation_intrinsics().gyroscope == linearisation_intrinsics.gyroscope);
+        kept.reset(linearisation, intrinsics);
+        REQUIRE(kept.get_linearisation_intrinsics().gyroscope == intrinsics.gyroscope);
+
+        // The matrix has moved too far once the root of the sum of its entries' squared changes passes the threshold.
+        REQUIRE(!preintegration.requires_reintegration(linearisation_intrinsics));
+        sensor::imu::intrinsics within = linearisation_intrinsics;
+        within.gyroscope[0][1] += 0.5 * sensor::imu::preintegration::default_gyroscope_matrix_threshold;
+        within.gyroscope[2][2] -= 0.5 * sensor::imu::preintegration::default_gyroscope_matrix_threshold;
+        REQUIRE(!preintegration.requires_reintegration(within));
+        sensor::imu::intrinsics beyond = within;
+        beyond.gyroscope[1][0] += 0.8 * sensor::imu::preintegration::default_gyroscope_matrix_threshold;
+        REQUIRE(preintegration.requires_reintegration(beyond));
+        REQUIRE(!preintegration.requires_reintegration(beyond, 0.1));
+        const math::matrix<double, 9, 1> change = preintegration.get_gyroscope_matrix_change(beyond);
+        REQUIRE(std::abs(change[1] - (0.5 * sensor::imu::preintegration::default_gyroscope_matrix_threshold)) < 1e-15);
+        REQUIRE(std::abs(change[3] - (0.8 * sensor::imu::preintegration::default_gyroscope_matrix_threshold)) < 1e-15);
+        REQUIRE(std::abs(change[8] + (0.5 * sensor::imu::preintegration::default_gyroscope_matrix_threshold)) < 1e-15);
+    }
+
+    // Merging keeps the jacobians by the gyroscope's matrix: in closed form with the same matrix, and by integrating the second
+    // again at the first's with another.
+    {
+        simulation::imu_sensor::options sensor_options;
+        sensor_options.intrinsics = intrinsics;
+        const simulation::imu_sensor::recording recording = simulation::imu_sensor::generate(trajectory, parameters, sensor_options);
+        const long long int start = 1000000000ll;
+        const long long int middle = 1800000000ll;
+        const long long int end = 2600000000ll;
+        sensor::imu::bias linearisation;
+        linearisation.gyroscope = { { -0.003, 0.002, 0.001 } };
+        linearisation.accelerometer = { { 0.04, -0.03, 0.02 } };
+        sensor::imu::preintegration whole(parameters, linearisation, intrinsics);
+        REQUIRE(whole.integrate(recording.samples, start, end));
+        const auto largest_wide_difference = [](const math::matrix<double, 3, 9>& lhs, const math::matrix<double, 3, 9>& rhs) {
+            double result = 0.0;
+            for (size_t i = 0; i < 27; ++i) {
+                result = std::fmax(result, std::abs(lhs.data()[i] - rhs.data()[i]));
+            }
+            return result;
+        };
+        const math::matrix<double, 3, 9> none = math::matrix<double, 3, 9>::zero();
+        for (const bool same : { true, false }) {
+            sensor::imu::preintegration first(parameters, linearisation, intrinsics);
+            REQUIRE(first.integrate(recording.samples, start, middle));
+            sensor::imu::intrinsics other = intrinsics;
+            if (!same) {
+                other.gyroscope[0][2] += 0.02;
+                other.gyroscope[1][1] -= 0.01;
+            }
+            sensor::imu::preintegration second(parameters, linearisation, other);
+            REQUIRE(second.integrate(recording.samples, middle, end));
+            first.merge(second);
+            REQUIRE(first.get_steps().size() == whole.get_steps().size());
+            REQUIRE(first.get_linearisation_intrinsics().gyroscope == intrinsics.gyroscope);
+            REQUIRE(rotation_distance(first.get_delta_rotation(), whole.get_delta_rotation()) < 1e-12);
+            REQUIRE(norm(first.get_delta_velocity() - whole.get_delta_velocity()) < 1e-12);
+            REQUIRE(norm(first.get_delta_position() - whole.get_delta_position()) < 1e-12);
+            REQUIRE(largest_wide_difference(first.get_rotation_gyroscope_matrix_jacobian(), whole.get_rotation_gyroscope_matrix_jacobian()) < 1e-12 * largest_wide_difference(whole.get_rotation_gyroscope_matrix_jacobian(), none));
+            REQUIRE(largest_wide_difference(first.get_velocity_gyroscope_matrix_jacobian(), whole.get_velocity_gyroscope_matrix_jacobian()) < 1e-12 * largest_wide_difference(whole.get_velocity_gyroscope_matrix_jacobian(), none));
+            REQUIRE(largest_wide_difference(first.get_position_gyroscope_matrix_jacobian(), whole.get_position_gyroscope_matrix_jacobian()) < 1e-12 * largest_wide_difference(whole.get_position_gyroscope_matrix_jacobian(), none));
+        }
+    }
+
     return 0;
 }

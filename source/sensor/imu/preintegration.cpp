@@ -41,9 +41,11 @@ namespace sensor::imu {
         : preintegration(parameters(), bias()) {
     }
 
-    preintegration::preintegration(const parameters& noise_parameters, const bias& linearisation_point)
+    preintegration::preintegration(const parameters& noise_parameters, const bias& linearisation_point, const intrinsics& linearisation_intrinsics)
         : noise(noise_parameters)
         , linearisation(linearisation_point)
+        , calibration(linearisation_intrinsics)
+        , gyroscope_corrected(linearisation_intrinsics.gyroscope != (math::matrix<double, 3, 3>::zero()))
         , steps()
         , delta_time(0.0)
         , delta_rotation(math::so3<double>::identity())
@@ -54,11 +56,18 @@ namespace sensor::imu {
         , velocity_gyroscope(math::matrix<double, 3, 3>::zero())
         , velocity_accelerometer(math::matrix<double, 3, 3>::zero())
         , position_gyroscope(math::matrix<double, 3, 3>::zero())
-        , position_accelerometer(math::matrix<double, 3, 3>::zero()) {
+        , position_accelerometer(math::matrix<double, 3, 3>::zero())
+        , rotation_gyroscope_matrix(math::matrix<double, 3, 9>::zero())
+        , velocity_gyroscope_matrix(math::matrix<double, 3, 9>::zero())
+        , position_gyroscope_matrix(math::matrix<double, 3, 9>::zero()) {
     }
 
     void preintegration::reset(const bias& linearisation_point) {
-        *this = preintegration(this->noise, linearisation_point);
+        *this = preintegration(this->noise, linearisation_point, this->calibration);
+    }
+
+    void preintegration::reset(const bias& linearisation_point, const intrinsics& linearisation_intrinsics) {
+        *this = preintegration(this->noise, linearisation_point, linearisation_intrinsics);
     }
 
     void preintegration::integrate(const math::matrix<double, 3, 1>& angular_velocity, const math::matrix<double, 3, 1>& linear_acceleration, const double duration) {
@@ -120,28 +129,42 @@ namespace sensor::imu {
         }
     }
 
+    void preintegration::reintegrate(const bias& linearisation_point, const intrinsics& linearisation_intrinsics) {
+        const std::vector<step> measurements = static_cast<std::vector<step>&&>(this->steps);
+        this->reset(linearisation_point, linearisation_intrinsics);
+        this->steps = measurements;
+        for (const step& measurement : this->steps) {
+            this->integrate_step(measurement);
+        }
+    }
+
     bool preintegration::requires_reintegration(const bias& estimate, const double gyroscope_threshold, const double accelerometer_threshold) const {
         const double gyroscope_change = (estimate.gyroscope - this->linearisation.gyroscope).get_length_squared();
         const double accelerometer_change = (estimate.accelerometer - this->linearisation.accelerometer).get_length_squared();
         return (gyroscope_change > (gyroscope_threshold * gyroscope_threshold)) || (accelerometer_change > (accelerometer_threshold * accelerometer_threshold));
     }
 
+    bool preintegration::requires_reintegration(const intrinsics& estimate, const double gyroscope_matrix_threshold) const {
+        const double gyroscope_matrix_change = (estimate.gyroscope - this->calibration.gyroscope).get_length_squared();
+        return gyroscope_matrix_change > (gyroscope_matrix_threshold * gyroscope_matrix_threshold);
+    }
+
     void preintegration::merge(const preintegration& next) {
         if (next.steps.empty()) {
             return;
         }
-        const bool same_linearisation = (next.linearisation.gyroscope == this->linearisation.gyroscope) && (next.linearisation.accelerometer == this->linearisation.accelerometer);
+        const bool same_linearisation = (next.linearisation.gyroscope == this->linearisation.gyroscope) && (next.linearisation.accelerometer == this->linearisation.accelerometer) && (next.calibration.gyroscope == this->calibration.gyroscope);
         if (!same_linearisation) {
             preintegration aligned = next;
             aligned.noise = this->noise;
-            aligned.reintegrate(this->linearisation);
+            aligned.reintegrate(this->linearisation, this->calibration);
             this->merge(aligned);
             return;
         }
 
         // The errors of the merged deltas from those of the two parts, dphi_ik = dR_jk^T dphi_ij + dphi_jk,
         // dv_ik = dv_ij - dR_ij [dv_jk]x dphi_ij + dR_ij dv_jk and dp_ik = dp_ij + dt_jk dv_ij - dR_ij [dp_jk]x dphi_ij + dR_ij dp_jk,
-        // and the bias jacobians compose the same way.
+        // and the jacobians, by the biases and by the gyroscope's matrix, compose the same way.
         const math::matrix<double, 3, 3> first_rotation = this->delta_rotation.get_matrix();
         const math::matrix<double, 3, 3> second_rotation_transpose = math::transpose(next.delta_rotation.get_matrix());
         const math::matrix<double, 3, 3> identity = math::matrix<double, 3, 3>::identity();
@@ -167,6 +190,9 @@ namespace sensor::imu {
         this->velocity_gyroscope = this->velocity_gyroscope + (velocity_rotation * this->rotation_gyroscope) + (first_rotation * next.velocity_gyroscope);
         this->velocity_accelerometer = this->velocity_accelerometer + (first_rotation * next.velocity_accelerometer);
         this->rotation_gyroscope = (second_rotation_transpose * this->rotation_gyroscope) + next.rotation_gyroscope;
+        this->position_gyroscope_matrix = this->position_gyroscope_matrix + (second_time * this->velocity_gyroscope_matrix) + (position_rotation * this->rotation_gyroscope_matrix) + (first_rotation * next.position_gyroscope_matrix);
+        this->velocity_gyroscope_matrix = this->velocity_gyroscope_matrix + (velocity_rotation * this->rotation_gyroscope_matrix) + (first_rotation * next.velocity_gyroscope_matrix);
+        this->rotation_gyroscope_matrix = (second_rotation_transpose * this->rotation_gyroscope_matrix) + next.rotation_gyroscope_matrix;
 
         this->delta_position = this->delta_position + (second_time * this->delta_velocity) + (first_rotation * next.delta_position);
         this->delta_velocity = this->delta_velocity + (first_rotation * next.delta_velocity);
@@ -185,12 +211,26 @@ namespace sensor::imu {
         return result;
     }
 
+    preintegration::state preintegration::predict(const state& start, const bias& estimate, const intrinsics& calibration_estimate, const math::matrix<double, 3, 1>& gravity) const {
+        const double duration = this->delta_time;
+        const math::matrix<double, 3, 3> rotation = start.rotation.get_matrix();
+        state result;
+        result.rotation = (start.rotation * this->get_delta_rotation(estimate, calibration_estimate)).normalised();
+        result.velocity = start.velocity + (duration * gravity) + (rotation * this->get_delta_velocity(estimate, calibration_estimate));
+        result.position = start.position + (duration * start.velocity) + ((0.5 * duration * duration) * gravity) + (rotation * this->get_delta_position(estimate, calibration_estimate));
+        return result;
+    }
+
     const parameters& preintegration::get_parameters() const {
         return this->noise;
     }
 
     const bias& preintegration::get_linearisation() const {
         return this->linearisation;
+    }
+
+    const intrinsics& preintegration::get_linearisation_intrinsics() const {
+        return this->calibration;
     }
 
     const std::vector<preintegration::step>& preintegration::get_steps() const {
@@ -254,12 +294,49 @@ namespace sensor::imu {
         return this->delta_position + (this->position_gyroscope * gyroscope_change) + (this->position_accelerometer * accelerometer_change);
     }
 
+    const math::matrix<double, 3, 9>& preintegration::get_rotation_gyroscope_matrix_jacobian() const {
+        return this->rotation_gyroscope_matrix;
+    }
+
+    const math::matrix<double, 3, 9>& preintegration::get_velocity_gyroscope_matrix_jacobian() const {
+        return this->velocity_gyroscope_matrix;
+    }
+
+    const math::matrix<double, 3, 9>& preintegration::get_position_gyroscope_matrix_jacobian() const {
+        return this->position_gyroscope_matrix;
+    }
+
+    math::so3<double> preintegration::get_delta_rotation(const bias& estimate, const intrinsics& calibration_estimate) const {
+        const math::matrix<double, 3, 1> gyroscope_change = estimate.gyroscope - this->linearisation.gyroscope;
+        const math::matrix<double, 9, 1> gyroscope_matrix_change = this->get_gyroscope_matrix_change(calibration_estimate);
+        return (this->delta_rotation * math::so3<double>::exp((this->rotation_gyroscope * gyroscope_change) + (this->rotation_gyroscope_matrix * gyroscope_matrix_change))).normalised();
+    }
+
+    math::matrix<double, 3, 1> preintegration::get_delta_velocity(const bias& estimate, const intrinsics& calibration_estimate) const {
+        return this->get_delta_velocity(estimate) + (this->velocity_gyroscope_matrix * this->get_gyroscope_matrix_change(calibration_estimate));
+    }
+
+    math::matrix<double, 3, 1> preintegration::get_delta_position(const bias& estimate, const intrinsics& calibration_estimate) const {
+        return this->get_delta_position(estimate) + (this->position_gyroscope_matrix * this->get_gyroscope_matrix_change(calibration_estimate));
+    }
+
+    math::matrix<double, 9, 1> preintegration::get_gyroscope_matrix_change(const intrinsics& calibration_estimate) const {
+        const math::matrix<double, 3, 3> change = calibration_estimate.gyroscope - this->calibration.gyroscope;
+        math::matrix<double, 9, 1> result;
+        for (size_t i = 0; i < 9; ++i) {
+            result[i] = change.data()[i];
+        }
+        return result;
+    }
+
     void preintegration::integrate_step(const step& measurement) {
         const double duration = measurement.duration;
         const double half_duration = 0.5 * duration;
         const double half_duration_squared = 0.5 * duration * duration;
         const math::matrix<double, 3, 1> acceleration = measurement.linear_acceleration - this->linearisation.accelerometer;
-        const math::matrix<double, 3, 1> rotation_vector = duration * (measurement.angular_velocity - this->linearisation.gyroscope);
+        // A gyroscope with no correction is integrated as it is measured, to the last bit what it was before there was one.
+        const math::matrix<double, 3, 1> angular_velocity = this->gyroscope_corrected ? math::matrix<double, 3, 1>(measurement.angular_velocity + (this->calibration.gyroscope * measurement.angular_velocity)) : measurement.angular_velocity;
+        const math::matrix<double, 3, 1> rotation_vector = duration * (angular_velocity - this->linearisation.gyroscope);
         const math::matrix<double, 3, 3> rotation = this->delta_rotation.get_matrix();
         const math::so3<double> step_rotation = math::so3<double>::exp(rotation_vector);
         const math::matrix<double, 3, 3> step_rotation_transpose = math::transpose(step_rotation.get_matrix());
@@ -308,6 +385,20 @@ namespace sensor::imu {
         this->velocity_accelerometer = this->velocity_accelerometer - (duration * middle_rotation);
         this->velocity_gyroscope = this->velocity_gyroscope - (duration * (middle_skew * middle_rotation_gyroscope));
         this->rotation_gyroscope = (step_rotation_transpose * this->rotation_gyroscope) - (duration * step_right_jacobian);
+
+        // The jacobians by the gyroscope's matrix go through the recursion of the gyroscope bias's (Van Meter and Paul, "SLAM
+        // Dunk", 2026): the corrected angular velocity changes by -I with the bias and by kron(I, w^T) with the matrix taken row by
+        // row, w being the measurement, so each term the step takes from the bias's is added to the matrix's, times that.
+        math::matrix<double, 3, 9> measured = math::matrix<double, 3, 9>::zero();
+        for (size_t row = 0; row < 3; ++row) {
+            for (size_t column = 0; column < 3; ++column) {
+                measured[row][(3 * row) + column] = measurement.angular_velocity[column];
+            }
+        }
+        const math::matrix<double, 3, 9> middle_rotation_gyroscope_matrix = (math::transpose(half_rotation) * this->rotation_gyroscope_matrix) + (half_duration * (half_right_jacobian * measured));
+        this->position_gyroscope_matrix = this->position_gyroscope_matrix + (duration * this->velocity_gyroscope_matrix) - (half_duration_squared * (middle_skew * middle_rotation_gyroscope_matrix));
+        this->velocity_gyroscope_matrix = this->velocity_gyroscope_matrix - (duration * (middle_skew * middle_rotation_gyroscope_matrix));
+        this->rotation_gyroscope_matrix = (step_rotation_transpose * this->rotation_gyroscope_matrix) + (duration * (step_right_jacobian * measured));
 
         // The deltas.
         this->delta_position = this->delta_position + (duration * this->delta_velocity) + (half_duration_squared * middle_acceleration);
