@@ -1094,6 +1094,16 @@ int main(int argc, char* argv[]) {
         zeroslam_odometry_calibration_struct calibration{};
         REQUIRE(zeroslam_get_odometry_calibration(system, &calibration) == zeroslam_return_success);
         REQUIRE((calibration.sensor_id == 4) && (math::abs(calibration.pose[2] - 0.25) < 1.0e-12));
+        // A refused call changes none of them: the imu's and the odometer's entries are not taken before the camera's is refused.
+        zeroslam_sensor_extrinsics_struct refused[3] = { extrinsics[1], extrinsics[2], extrinsics[0] };
+        refused[0].pose[1] = 0.5;
+        refused[1].pose[2] = 0.5;
+        refused[2].refinement = 7;
+        REQUIRE(zeroslam_set_sensor_extrinsics(system, &refused[0], 3) == zeroslam_return_failure_invalid_rig_sensor);
+        REQUIRE(zeroslam_get_sensor_extrinsics(system, &reported[0], &reported_length) == zeroslam_return_success);
+        REQUIRE((reported[1].sensor_id == 3) && (math::abs(reported[1].pose[1] - 0.25) < 1.0e-12));
+        REQUIRE(zeroslam_get_odometry_calibration(system, &calibration) == zeroslam_return_success);
+        REQUIRE(math::abs(calibration.pose[2] - 0.25) < 1.0e-12);
 
         // The odometer's samples are checked whole with a batch, as the imu's are: none of a batch is taken when one is refused.
         zeroslam_sensor_measurement_imu_struct still{};

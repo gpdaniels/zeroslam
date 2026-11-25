@@ -1096,15 +1096,20 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_extrinsics(zeroslam_s
         sensor_ids.push_back(camera.sensor_id);
     }
     // The imu and the odometer take their own entries out, and the cameras' extrinsics are set from the rest when there are any:
-    // an odometer's extrinsic may come in a call of its own, after the cameras'.
+    // an odometer's extrinsic may come in a call of its own, after the cameras'. The imu and the odometer take theirs into copies,
+    // kept only once the cameras' are taken too, so that a refused call changes nothing.
     std::vector<zeroslam_sensor_extrinsics_struct> other_extrinsics;
     std::vector<zeroslam_sensor_extrinsics_struct> camera_extrinsics;
-    if (system->any_data || sensor_ids.empty() || !system->imu.take_extrinsic(extrinsics, length, other_extrinsics) || !system->odometry.take_extrinsics(other_extrinsics.data(), static_cast<int>(other_extrinsics.size()), camera_extrinsics)) {
+    api_imu imu = system->imu;
+    api_odometry odometry = system->odometry;
+    if (system->any_data || sensor_ids.empty() || !imu.take_extrinsic(extrinsics, length, other_extrinsics) || !odometry.take_extrinsics(other_extrinsics.data(), static_cast<int>(other_extrinsics.size()), camera_extrinsics)) {
         return zeroslam_return_failure_invalid_rig_sensor;
     }
     if (!camera_extrinsics.empty() && !system->rig.set_extrinsics(camera_extrinsics.data(), static_cast<int>(camera_extrinsics.size()), sensor_ids)) {
         return zeroslam_return_failure_invalid_rig_sensor;
     }
+    system->imu = imu;
+    system->odometry = odometry;
     return zeroslam_return_success;
 }
 
