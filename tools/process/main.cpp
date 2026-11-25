@@ -464,6 +464,15 @@ int main(int argc, char* argv[]) {
     const mcap::channel_type* image_channel = nullptr;
     const mcap::channel_type* info_channel = nullptr;
     dataset::find_camera_channels(reader, image_channel, info_channel);
+    // A single camera named with --cameras runs alone, as the scene's primary camera does without it.
+    if (camera_names.size() == 1) {
+        std::vector<process_rig::selected_camera> named;
+        if (!process_rig::find_cameras(reader, camera_names, named)) {
+            return EXIT_FAILURE;
+        }
+        image_channel = named[0].image;
+        info_channel = named[0].info;
+    }
     if (image_channel == nullptr) {
         std::fprintf(stderr, "The scene has no raw image channel.\n");
         return EXIT_FAILURE;
