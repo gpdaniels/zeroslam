@@ -1319,12 +1319,22 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
         }
         cameras[static_cast<size_t>(i)] = camera;
     }
-    // A camera frame pairs with a depth frame given with it, whichever comes first in the batch.
-    for (int i = 0; i < length; ++i) {
-        if (depths[static_cast<size_t>(i)] != nullptr) {
-            system->depths.hold(*depths[static_cast<size_t>(i)], data[i].timestamp, cameras[static_cast<size_t>(i)]->width, cameras[static_cast<size_t>(i)]->height, data[i].measurement_data);
+    // A camera frame pairs with a depth frame given with it, whichever comes first in the batch. The depth frames are held in
+    // their order as the camera frames reach their times, each once it could pair with the frame processed next, so that a batch
+    // holds no more of them unpaired at once than a call for each frame would (api_depth::pending_maximum).
+    int next_depth = 0;
+    const auto hold_depths = [&](const bool all, const long long int until) {
+        for (; next_depth < length; ++next_depth) {
+            const api_depth::sensor* const depth = depths[static_cast<size_t>(next_depth)];
+            if (depth == nullptr) {
+                continue;
+            }
+            if (!all && ((data[next_depth].timestamp - depth->parameters.pairing_tolerance) > until)) {
+                break;
+            }
+            system->depths.hold(*depth, data[next_depth].timestamp, cameras[static_cast<size_t>(next_depth)]->width, cameras[static_cast<size_t>(next_depth)]->height, data[next_depth].measurement_data);
         }
-    }
+    };
     for (int i = 0; i < length; ++i) {
         if (depths[static_cast<size_t>(i)] != nullptr) {
             continue;
@@ -1332,6 +1342,7 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
         const zeroslam_sensor_data_struct& entry = data[i];
         const zeroslam_system::camera_entry* const camera = cameras[static_cast<size_t>(i)];
         const image::image frame_image(static_cast<size_t>(camera->height), static_cast<size_t>(camera->width), static_cast<unsigned char*>(entry.measurement_data));
+        hold_depths(false, entry.timestamp);
         system->slam_instance.set_frame_depth(system->depths.take(camera->sensor_id, entry.timestamp));
         system->slam_instance.set_frame_timestamp(entry.timestamp);
         system->odometry.note_frame(system->slam_instance, entry.timestamp);
@@ -1341,6 +1352,8 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
         system->any_data = true;
         system->any_frame = true;
     }
+    // The rest wait for the camera frames of later calls.
+    hold_depths(true, 0);
     return zeroslam_return_success;
 }
 }

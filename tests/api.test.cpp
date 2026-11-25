@@ -1033,6 +1033,24 @@ int main(int argc, char* argv[]) {
         REQUIRE(math::abs(pose.pose[0] - travelled) < 0.02);
 
         REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
+
+        // The same frames in one batch, every depth frame ahead of every camera frame, more of them than are held unpaired at
+        // once: each camera frame still takes its own, and the map starts metric from the first.
+        REQUIRE(zeroslam_create(&system) == zeroslam_return_success);
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig[0], 2) == zeroslam_return_success);
+        std::vector<std::vector<unsigned char>> images(static_cast<size_t>(frame_count), std::vector<unsigned char>(static_cast<size_t>(width * height)));
+        std::vector<zeroslam_sensor_data_struct> batch(static_cast<size_t>(2 * frame_count));
+        for (int frame = 0; frame < frame_count; ++frame) {
+            render_corridor(0.05 * static_cast<double>(frame), width, height, camera_parameters, images[static_cast<size_t>(frame)].data());
+            batch[static_cast<size_t>(frame)] = { 1000ll * (frame + 1), 4, width * height * static_cast<int>(sizeof(unsigned short)), values.data() };
+            batch[static_cast<size_t>(frame_count + frame)] = { 1000ll * (frame + 1), 3, width * height, images[static_cast<size_t>(frame)].data() };
+        }
+        REQUIRE(zeroslam_set_sensor_data(system, batch.data(), static_cast<int>(batch.size())) == zeroslam_return_success);
+        for (int frame = 0; frame < frame_count; ++frame) {
+            REQUIRE(zeroslam_get_pose_at_timestamp(system, &pose, 1000ll * (frame + 1)) == zeroslam_return_success);
+            REQUIRE(math::abs(pose.pose[0] - (0.05 * static_cast<double>(frame))) < 0.02);
+        }
+        REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
     }
 
     {
