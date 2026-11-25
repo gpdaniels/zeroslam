@@ -1258,9 +1258,12 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
             }
             return system->rig.make_rig(sensor_ids);
         };
-        // With an imu the rig, the odometer and the imu in it, was declared at the first data (set_inertial_sensor_data), and the
-        // odometer does not declare a single camera's rig again, which would leave the imu out of it.
-        return system->odometry.set_sensor_data(system->slam_instance, data, length, (system->cameras.size() == 1) && !system->imu.declared(), camera_runs, camera_rig);
+        // The odometer's first samples are data, which declare the rig as a first frame does, and hold it and the extrinsics from
+        // then on. With an imu the rig, the odometer and the imu in it, was declared at the first data (set_inertial_sensor_data),
+        // and the odometer does not declare it again, which would leave the imu out of it.
+        const zeroslam_return_enum result = system->odometry.set_sensor_data(system->slam_instance, data, length, !system->imu.declared(), camera_runs, camera_rig);
+        system->any_data = system->any_data || system->odometry.is_started();
+        return result;
     }
     if (system->cameras.size() > 1) {
         return set_rig_sensor_data(system, data, length);

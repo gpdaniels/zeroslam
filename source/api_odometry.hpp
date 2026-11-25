@@ -79,11 +79,13 @@ public:
     bool accepts(const zeroslam_sensor_data_struct* const data, const int length) const;
 
     // Data with the odometer's samples among it: the samples to the map's odometry, the runs of images between them through
-    // camera_runs in order. The first time, the map's odometry is configured, and a single camera's system given the rig of its
-    // camera_rig and the odometer.
+    // camera_runs in order. The first time, the map's odometry is configured, and, when declare_rig, the system given the rig of
+    // its camera_rig and the odometer.
     template <typename camera_runs_type, typename camera_rig_type>
-    zeroslam_return_enum set_sensor_data(slam& system, const zeroslam_sensor_data_struct* const data, const int length, const bool single_camera, const camera_runs_type& camera_runs, const camera_rig_type& camera_rig);
+    zeroslam_return_enum set_sensor_data(slam& system, const zeroslam_sensor_data_struct* const data, const int length, const bool declare_rig, const camera_runs_type& camera_runs, const camera_rig_type& camera_rig);
     bool is_dispatching() const;
+    // Whether the first data has come, and the odometry been configured.
+    bool is_started() const;
 
     // Records the time of the frame the system processes next.
     void note_frame(slam& system, const long long timestamp) const;
@@ -92,11 +94,11 @@ public:
     bool fill_calibration(const mapping::map& map, zeroslam_odometry_calibration_struct* const calibration) const;
 
 private:
-    void start(slam& system, const bool single_camera, const mapping::rig& cameras);
+    void start(slam& system, const bool declare_rig, const mapping::rig& cameras);
 };
 
 template <typename camera_runs_type, typename camera_rig_type>
-zeroslam_return_enum api_odometry::set_sensor_data(slam& system, const zeroslam_sensor_data_struct* const data, const int length, const bool single_camera, const camera_runs_type& camera_runs, const camera_rig_type& camera_rig) {
+zeroslam_return_enum api_odometry::set_sensor_data(slam& system, const zeroslam_sensor_data_struct* const data, const int length, const bool declare_rig, const camera_runs_type& camera_runs, const camera_rig_type& camera_rig) {
     if (!this->accepts(data, length)) {
         return zeroslam_return_failure_invalid_sensor_data;
     }
@@ -108,7 +110,7 @@ zeroslam_return_enum api_odometry::set_sensor_data(slam& system, const zeroslam_
             ++end;
         }
         if (!this->started) {
-            this->start(system, single_camera, camera_rig());
+            this->start(system, declare_rig, camera_rig());
         }
         if (samples) {
             for (int i = begin; i < end; ++i) {

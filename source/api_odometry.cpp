@@ -185,15 +185,19 @@ bool api_odometry::is_dispatching() const {
     return this->dispatching;
 }
 
-void api_odometry::start(slam& system, const bool single_camera, const mapping::rig& cameras) {
+bool api_odometry::is_started() const {
+    return this->started;
+}
+
+void api_odometry::start(slam& system, const bool declare_rig, const mapping::rig& cameras) {
     this->started = true;
     mapping::odometry::settings settings;
     if (!api_odometry::settings_of(this->parameters, this->sensor_id, settings)) {
         return;
     }
     static_cast<void>(system.reconstruction.wheel_odometry.configure(settings));
-    // A rig of several cameras is set with the odometer when its first frame comes; one camera needs its rig set here.
-    if (single_camera) {
+    // The first data declares the rig, the odometer among its sensors, unless another sensor's declares it.
+    if (declare_rig) {
         system.set_rig(this->with_odometer(cameras));
     }
 }

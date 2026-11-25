@@ -189,6 +189,27 @@ namespace {
         values[2] = std::nan("");
         samples[0].timestamp = 3000;
         REQUIRE(zeroslam_set_sensor_data(system, &samples[0], 1) == zeroslam_return_failure_invalid_sensor_data);
+        // The samples taken are data, which declared the rig: it and the extrinsics are held from then on, as after a frame.
+        REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[1], 1) == zeroslam_return_failure_invalid_rig_sensor);
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig[0], 2) == zeroslam_return_failure_invalid_rig_sensor);
+        REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
+
+        // A rig of two cameras with the odometer takes the odometer's samples before its first frame, and its frames after.
+        const zeroslam_sensor_rig_struct cameras[3] = {
+            { zeroslam_sensor_camera, 1, static_cast<int>(sizeof(camera)), &camera },
+            { zeroslam_sensor_camera, 2, static_cast<int>(sizeof(camera)), &camera },
+            { zeroslam_sensor_wheel_odometry, 3, static_cast<int>(sizeof(odometer)), &odometer }
+        };
+        REQUIRE(zeroslam_create(&system) == zeroslam_return_success);
+        REQUIRE(zeroslam_set_sensor_rig(system, &cameras[0], 3) == zeroslam_return_success);
+        values[2] = 0.0;
+        const zeroslam_sensor_data_struct sample = { 1000, 3, static_cast<int>(sizeof(values)), &values[0] };
+        REQUIRE(zeroslam_set_sensor_data(system, &sample, 1) == zeroslam_return_success);
+        std::vector<unsigned char> pixels(static_cast<size_t>(width * height), 128);
+        for (long long int time = 2000; time < 6000; time += 1000) {
+            const zeroslam_sensor_data_struct frame[2] = { { time, 1, width * height, pixels.data() }, { time, 2, width * height, pixels.data() } };
+            REQUIRE(zeroslam_set_sensor_data(system, &frame[0], 2) == zeroslam_return_success);
+        }
         REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
     }
 
