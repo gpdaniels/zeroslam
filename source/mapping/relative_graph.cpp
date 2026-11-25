@@ -583,6 +583,7 @@ namespace mapping {
             std::unordered_map<int, int> camera_of_frame;
             std::unordered_set<int> static_set;
             size_t scale_links = 0;
+            size_t depth_observations = 0;
             for (size_t group = 0; group < by_base.size();) {
                 const int base = by_base[group].first;
                 size_t group_end = group;
@@ -624,6 +625,7 @@ namespace mapping {
                         measured.sigma = mapping::map::observation_sigma(frame, obs);
                         if (reconstruction.metric_scale && (obs.depth > 0.0)) {
                             mapping::depth_factor::relative_observation(frame, obs.depth, measured);
+                            ++depth_observations;
                         }
                         for (const step_type& taken : steps) {
                             const std::unordered_map<int, int>::const_iterator transform_it = transform_of_link.find(taken.transform);
@@ -666,8 +668,9 @@ namespace mapping {
             std::sort(static_frames.begin(), static_frames.end());
 
             // Without two static frames seeing enough of the active points the scale of the region is free, so the length of
-            // the transform joining its oldest frame to the map, or failing that the first it solves for, is held.
-            if (!reconstruction.metric_scale && (scale_links < relative_graph::scale_links_minimum)) {
+            // the transform joining its oldest frame to the map, or failing that the first it solves for, is held. The depths hold
+            // it where the region has them; a map metric by a rig's baseline or an odometer has nothing here that measures it.
+            if ((depth_observations == 0) && (scale_links < relative_graph::scale_links_minimum)) {
                 int held = -1;
                 int oldest = active_frames.front();
                 for (const int frame_id : active_frames) {

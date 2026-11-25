@@ -236,9 +236,12 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // An adjustment from the newest frame repairs the transforms and points around it, which the embedding writes back.
-    {
+    // An adjustment from the newest frame repairs the transforms and points around it, which the embedding writes back; the
+    // same with the map metric, as a stereo rig or a wheel odometer leaves it, whose scale nothing in the relative problem
+    // measures without depths.
+    for (const bool metric : { false, true }) {
         scene setup = make_scene(6);
+        setup.reconstruction.metric_scale = metric;
         for (std::pair<int, size_t>& keyframe : setup.keyframes) {
             keyframe.second = 0;
         }
