@@ -41,6 +41,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "image/image.hpp"
 #include "image/remap.hpp"
 #include "mapping/calibration.hpp"
+#include "mapping/calibration_drift.hpp"
 #include "mapping/covisibility.hpp"
 #include "mapping/depth_factor.hpp"
 #include "mapping/frame.hpp"
@@ -168,6 +169,11 @@ public:
     // The calibration of a camera of the rig, the reference camera's for 0, or for a camera the rig does not hold.
     const mapping::calibration& calibration(const size_t camera) const {
         return ((camera > 0) && (camera <= this->view_calibrations_.size())) ? this->view_calibrations_[camera - 1] : this->calibration_;
+    }
+
+    // The calibration as it is followed over time, chunk by chunk, when the configuration asks for it.
+    const mapping::calibration_drift& calibration_drift() const {
+        return this->calibration_drift_;
     }
 
     // The voxel map of the current map component's landmarks, as of the newest keyframe.
@@ -682,9 +688,19 @@ private:
 
     mapping::calibration calibration_;
 
+    // The calibration followed over time (slam_calibration_drift.hpp): a frame that comes with a time takes the calibration
+    // of its chunk of time, and the adjustments of the whole map solve the chunks in place of one constant calibration.
+    mapping::calibration_drift calibration_drift_;
+    bool calibration_drift_held_warned_ = false;
+    void follow_calibration_drift(mapping::frame& frame);
+    bool optimise_following_calibration_drift(const int rounds);
+
     // An adjustment of the whole map, which refines the camera when the configuration asks for it and the map can support
     // it (see mapping::calibration); the frames then hold the refined camera, and the loop closure's keyframes take it too.
     void optimise_globally(const int rounds) {
+        if (this->optimise_following_calibration_drift(rounds)) {
+            return;
+        }
         mapping::calibration::refinement request;
         const bool refining = mapping::intrinsics_refinement::make_request(this->calibration_, this->reconstruction.frames, this->keyframe_ids_, request);
         std::vector<mapping::calibration::refinement> view_requests = this->view_refinement_requests();
@@ -3829,6 +3845,7 @@ private:
         }
 
         this->add_views(frame, view_cameras, view_images, view_count);
+        this->follow_calibration_drift(frame);
 
         // Move the frame into the reconstruction, pyramids and all, and work on the stored copy from here.
         const int frame_id = frame.id;
@@ -4780,6 +4797,7 @@ private:
     }
 };
 
+#include "slam_calibration_drift.hpp"
 #include "slam_depth.hpp"
 #include "slam_inertial.hpp"
 #include "slam_rig.hpp"

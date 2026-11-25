@@ -229,6 +229,10 @@ namespace mapping {
         // many it changed.
         size_t replace_camera(const sensor::model& camera_from, const sensor::model& camera_to);
 
+        // Gives one held keyframe its camera, where each keyframe has a camera of its own time (see
+        // mapping::calibration_drift). False when the keyframe is not held.
+        bool set_camera(const int keyframe_id, const sensor::model& camera);
+
         size_t num_keyframes() const;
 
         void set_hamming_scale(const float scale);

@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ZEROSLAM_MAPPING_MAP_HPP
 
 #include "core/logger.hpp"
+#include "mapping/calibration_drift_refinement.hpp"
 #include "mapping/depth_factor.hpp"
 #include "mapping/frame.hpp"
 #include "mapping/inertial.hpp"
@@ -111,6 +112,10 @@ namespace mapping {
         // The calibration requests of the rig's other cameras for an adjustment of the whole map, camera c's at [c - 1], each
         // refining that camera's intrinsics through slot 3 of its rig_reprojection edges; null for none (see slam_rig.hpp).
         std::vector<calibration::refinement>* view_refinements = nullptr;
+
+        // The request to follow the calibration over time in an adjustment of the whole map (see mapping::calibration_drift),
+        // null for none: the frames' calibration is then held where their chunks of time have it.
+        calibration_drift::request* drift_request = nullptr;
 
         int next_frame_id = 0;
         int next_landmark_id = 0;
@@ -339,7 +344,7 @@ namespace mapping {
                     if ((map::view_of(frame, obs.camera) == nullptr) || (static_cast<size_t>(obs.camera) >= this->sensor_rig.camera_count())) {
                         continue;
                     }
-                    optimisation::vertex extrinsic_vertex = this->sensor_rig.extrinsic_vertex(this->sensor_rig.camera(static_cast<size_t>(obs.camera)));
+                    optimisation::vertex extrinsic_vertex = mapping::calibration_drift_refinement::extrinsic_vertex(this->sensor_rig, frame, obs.camera);
                     std::vector<optimisation::vertex*> extrinsics(static_cast<size_t>(obs.camera) + 1, nullptr);
                     extrinsics[static_cast<size_t>(obs.camera)] = &extrinsic_vertex;
                     if (!map::add_observation_vertices(factor, &pose_vertex, &point_vertex, extrinsics, obs.camera)) {
@@ -387,14 +392,15 @@ namespace mapping {
             return ((camera > 0) && (static_cast<size_t>(camera - 1) < frame.views.size())) ? &frame.views[static_cast<size_t>(camera - 1)] : nullptr;
         }
 
-        // The world to camera pose of a camera of the rig, from the world to reference pose of a frame.
-        void camera_pose(const int camera, const math::matrix<double, 3, 3>& rotation, const math::matrix<double, 3, 1>& translation, math::matrix<double, 3, 3>& camera_rotation, math::matrix<double, 3, 1>& camera_translation) const {
+        // The world to camera pose of a camera of the rig, from the world to reference pose of a frame. Given the frame, the
+        // camera is where that frame has it on the rig, its own where the calibration is followed over time.
+        void camera_pose(const int camera, const math::matrix<double, 3, 3>& rotation, const math::matrix<double, 3, 1>& translation, math::matrix<double, 3, 3>& camera_rotation, math::matrix<double, 3, 1>& camera_translation, const mapping::frame* const frame = nullptr) const {
             if ((camera == 0) || (static_cast<size_t>(camera) >= this->sensor_rig.camera_count())) {
                 camera_rotation = rotation;
                 camera_translation = translation;
                 return;
             }
-            const math::se3<double> camera_from_reference = this->sensor_rig.reference_from_sensor(this->sensor_rig.camera(static_cast<size_t>(camera))).inverse();
+            const math::se3<double> camera_from_reference = mapping::calibration_drift_refinement::reference_from_camera(this->sensor_rig, frame, camera).inverse();
             const math::matrix<double, 3, 3> rotation_cr = camera_from_reference.rotation().get_matrix();
             camera_rotation = rotation_cr * rotation;
             camera_translation = (rotation_cr * translation) + camera_from_reference.translation();
@@ -411,7 +417,7 @@ namespace mapping {
             }
             math::matrix<double, 3, 3> camera_rotation;
             math::matrix<double, 3, 1> camera_translation;
-            this->camera_pose(obs.camera, rotation, translation, camera_rotation, camera_translation);
+            this->camera_pose(obs.camera, rotation, translation, camera_rotation, camera_translation, &frame);
             return map::project_landmark(view->camera, camera_rotation, camera_translation, landmark, pixel);
         }
 
@@ -425,7 +431,7 @@ namespace mapping {
 
         // A view of the frame posed as its camera is, for the code that projects into one camera.
         void pose_view(const mapping::frame& frame, mapping::frame& view, const int camera) const {
-            this->camera_pose(camera, frame.rotation, frame.translation, view.rotation, view.translation);
+            this->camera_pose(camera, frame.rotation, frame.translation, view.rotation, view.translation, &frame);
         }
 
         // Poses every view of the frame from the frame's pose.
@@ -535,7 +541,7 @@ namespace mapping {
                     extrinsics.resize(camera + 1, nullptr);
                 }
                 if (extrinsics[camera] == nullptr) {
-                    optimisation::vertex extrinsic_vertex = this->sensor_rig.extrinsic_vertex(this->sensor_rig.camera(camera));
+                    optimisation::vertex extrinsic_vertex = mapping::calibration_drift_refinement::extrinsic_vertex(this->sensor_rig, frame, entry.second->camera);
                     extrinsic_vertex.set_fixed(true);
                     extrinsics[camera] = solver.add_vertex(static_cast<optimisation::vertex&&>(extrinsic_vertex));
                 }
@@ -586,6 +592,8 @@ namespace mapping {
             for (size_t camera = 1; (this->view_refinements != nullptr) && (camera <= this->view_refinements->size()); ++camera) {
                 view_intrinsics.emplace_back(&(*this->view_refinements)[camera - 1], ba, !fix_landmarks, static_cast<int>(camera));
             }
+            // The calibration of the frames whose calibration is followed over time, solved when the slam asks for it.
+            mapping::calibration_drift_refinement drift(this->drift_request, ba, this->frames, !fix_landmarks);
             // Add frames.
             const int local_window_below = this->next_frame_id - 1 - local_window;
             const int local_window_fixed_below = local_window_below + 1;
@@ -866,12 +874,16 @@ namespace mapping {
                     const double sigma = map::observation_sigma(this->frames.at(frame_id), obs);
                     // The reference camera's observations take the camera's intrinsics when the calibration refines them.
                     mapping::intrinsics_refinement* const camera_intrinsics = (obs.camera == 0) ? &intrinsics : (((obs.camera > 0) && (static_cast<size_t>(obs.camera) <= view_intrinsics.size())) ? &view_intrinsics[static_cast<size_t>(obs.camera - 1)] : nullptr);
-                    const bool takes_intrinsics = (camera_intrinsics != nullptr) && camera_intrinsics->takes(frame_id);
+                    const bool follows_drift = drift.takes(frame_id, obs.camera);
+                    const bool takes_intrinsics = follows_drift || ((camera_intrinsics != nullptr) && camera_intrinsics->takes(frame_id));
                     optimisation::edge m = (takes_intrinsics && (obs.camera == 0)) ? map::make_point_edge(this->frames.at(frame_id).camera, landmark_record, obs, lossfunction, sigma, true) : this->make_observation_edge(this->frames.at(frame_id), landmark_record, obs, lossfunction, sigma, takes_intrinsics);
-                    if (!map::add_observation_vertices(m, camera_vertexes[frame_id], landmark_vertexes[landmark_id], extrinsic_vertexes, obs.camera)) {
+                    if (!map::add_observation_vertices(m, camera_vertexes[frame_id], landmark_vertexes[landmark_id], drift.extrinsics(frame_id, obs.camera, extrinsic_vertexes), obs.camera)) {
                         continue;
                     }
-                    if (takes_intrinsics) {
+                    if (follows_drift) {
+                        drift.attach(m, frame_id, obs.camera);
+                    }
+                    else if (takes_intrinsics) {
                         camera_intrinsics->attach(m);
                     }
                     if (fix_landmarks && (landmark_record.uncertainty == mapping::point::uncertainty_kind::unbounded)) {
@@ -934,7 +946,8 @@ namespace mapping {
                     if (!map::line_observation_usable(landmark_record.plucker_line.transformed(observing_frame.rotation, observing_frame.translation), (observing_frame.rotation * landmark_record.locations[0]) + observing_frame.translation, (observing_frame.rotation * landmark_record.locations[1]) + observing_frame.translation, this->line_ray_angle_degrees)) {
                         continue;
                     }
-                    optimisation::edges::line_reprojection factor{ sensor::camera::model<double>(observing_frame.camera), intrinsics.takes(obs.frame_id) };
+                    const bool line_follows_drift = drift.takes(obs.frame_id, 0);
+                    optimisation::edges::line_reprojection factor{ sensor::camera::model<double>(observing_frame.camera), line_follows_drift || intrinsics.takes(obs.frame_id) };
                     if (!factor.set_measured_segment(obs.x1, obs.y1, obs.x2, obs.y2)) {
                         continue;
                     }
@@ -951,7 +964,10 @@ namespace mapping {
                     optimisation::edge m{ factor };
                     m.add_vertex(camera_vertexes[obs.frame_id]);
                     m.add_vertex(line_vertexes[landmark_id]);
-                    if (intrinsics.takes(obs.frame_id)) {
+                    if (line_follows_drift) {
+                        drift.attach(m, obs.frame_id, 0);
+                    }
+                    else if (intrinsics.takes(obs.frame_id)) {
                         intrinsics.attach(m);
                     }
                     m.set_information(math::matrix<double, 0, 0>::identity(2, 2) * map::line_information);
@@ -1111,6 +1127,7 @@ namespace mapping {
             for (mapping::intrinsics_refinement& view : view_intrinsics) {
                 view.add_priors();
             }
+            drift.add_ties();
             // The odometry measures metres, and holds a map whose scale is the gauge's only once the map is metric.
             const mapping::odometry::graph_vertices odometry_vertices = (fix_landmarks || !this->metric_scale) ? mapping::odometry::graph_vertices() : this->wheel_odometry.add_to_graph(ba, camera_vertexes, this->sensor_rig);
             // Remove vertexes not attached to any edges.
@@ -1238,6 +1255,7 @@ namespace mapping {
             for (mapping::intrinsics_refinement& view : view_intrinsics) {
                 view.apply(this->frames);
             }
+            drift.apply();
             // Apply optimised vertices to frames and landmarks.
             for (const auto& [frame_id, vertex] : camera_vertexes) {
                 mapping::frame& frame = frames.at(frame_id);
@@ -1330,7 +1348,7 @@ namespace mapping {
                         math::matrix<double, 2, 1> reprojected;
                         const double sigma = map::observation_sigma(frame_it->second, obs);
                         const double sigma_squared = sigma * sigma;
-                        inliers_before_by_frame[obs.frame_id] += ((obs.camera == 0) ? map::project_landmark(intrinsics.camera_before(obs.frame_id, frame_it->second), frame_before_it->second.rotation, frame_before_it->second.translation, before_it->second, reprojected) : this->project_observation_at(frame_it->second, obs, before_it->second, frame_before_it->second.rotation, frame_before_it->second.translation, reprojected)) && ((reprojected - obs.point).get_length_squared() <= map::inlier_bound_squared * sigma_squared);
+                        inliers_before_by_frame[obs.frame_id] += ((obs.camera == 0) ? map::project_landmark(drift.camera_before(obs.frame_id, intrinsics.camera_before(obs.frame_id, frame_it->second)), frame_before_it->second.rotation, frame_before_it->second.translation, before_it->second, reprojected) : this->project_observation_at(frame_it->second, obs, before_it->second, frame_before_it->second.rotation, frame_before_it->second.translation, reprojected)) && ((reprojected - obs.point).get_length_squared() <= map::inlier_bound_squared * sigma_squared);
                         std::pair<size_t, size_t>& after = gross_after_by_frame[obs.frame_id];
                         ++after.second;
                         after.first += !this->project_observation(frame_it->second, obs, landmark_it->second, reprojected) || ((reprojected - obs.point).get_length_squared() > map::gross_error_squared * sigma_squared);
@@ -1365,6 +1383,7 @@ namespace mapping {
                     for (mapping::intrinsics_refinement& view : view_intrinsics) {
                         view.restore(this->frames);
                     }
+                    drift.restore();
                     this->sensor_rig = rig_before;
                     this->wheel_odometry.restore(odometry_vertices);
                     return;
@@ -1416,6 +1435,7 @@ namespace mapping {
                     for (mapping::intrinsics_refinement& view : view_intrinsics) {
                         view.restore(this->frames);
                     }
+                    drift.restore();
                     this->sensor_rig = rig_before;
                     this->wheel_odometry.restore(odometry_vertices);
                     return;
