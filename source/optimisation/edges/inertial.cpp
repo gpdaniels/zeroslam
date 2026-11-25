@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "core/assert.hpp"
 #include "optimisation/vertices/extrinsic.hpp"
+#include "optimisation/vertices/gyroscope_intrinsics.hpp"
 
 namespace {
     math::matrix<double, 3, 3> skew(const math::matrix<double, 3, 1>& vector) {
@@ -47,11 +48,23 @@ namespace {
             observation[offset + i][0] = value.data()[i];
         }
     }
+
+    void read_wide_matrix(const math::matrix<double, 0, 0>& observation, const size_t offset, math::matrix<double, 3, 9>& value) {
+        for (size_t i = 0; i < 27; ++i) {
+            value.data()[i] = observation[offset + i][0];
+        }
+    }
+
+    void write_wide_matrix(math::matrix<double, 0, 0>& observation, const size_t offset, const math::matrix<double, 3, 9>& value) {
+        for (size_t i = 0; i < 27; ++i) {
+            observation[offset + i][0] = value.data()[i];
+        }
+    }
 }
 
 namespace optimisation::edges {
     inertial::measurement inertial::measurement::from_observation(const math::matrix<double, 0, 0>& observation) {
-        ASSERT(observation.rows() == static_cast<size_t>(inertial::observation_count), "An inertial edge's observation holds the preintegrated measurement.");
+        ASSERT((observation.rows() == static_cast<size_t>(inertial::observation_count)) || (observation.rows() == static_cast<size_t>(inertial::gyroscope_observation_count)), "An inertial edge's observation holds the preintegrated measurement.");
         measurement result;
         result.delta_rotation = math::so3<double>(observation[3][0], observation[0][0], observation[1][0], observation[2][0]);
         result.delta_velocity = { { observation[4][0], observation[5][0], observation[6][0] } };
@@ -64,21 +77,28 @@ namespace optimisation::edges {
         read_matrix(observation, 35, result.velocity_accelerometer);
         read_matrix(observation, 44, result.position_gyroscope);
         read_matrix(observation, 53, result.position_accelerometer);
+        if (observation.rows() == static_cast<size_t>(inertial::gyroscope_observation_count)) {
+            read_matrix(observation, 62, result.linearisation_intrinsics.gyroscope);
+            read_wide_matrix(observation, 71, result.rotation_gyroscope_matrix);
+            read_wide_matrix(observation, 98, result.velocity_gyroscope_matrix);
+            read_wide_matrix(observation, 125, result.position_gyroscope_matrix);
+        }
         return result;
     }
 
-    inertial::inertial(const math::matrix<double, 3, 1>& gravity_world, const math::se3<double>& imu_on_body, const bool with_extrinsic_vertex)
+    inertial::inertial(const math::matrix<double, 3, 1>& gravity_world, const math::se3<double>& imu_on_body, const bool with_extrinsic_vertex, const bool with_gyroscope_vertex)
         : gravity(gravity_world)
         , body_from_imu(imu_on_body)
-        , extrinsic_vertex(with_extrinsic_vertex) {
+        , extrinsic_vertex(with_extrinsic_vertex)
+        , gyroscope_vertex(with_gyroscope_vertex) {
     }
 
     int inertial::get_vertex_count() const {
-        return this->extrinsic_vertex ? (inertial::vertex_count + 1) : inertial::vertex_count;
+        return inertial::vertex_count + (this->extrinsic_vertex ? 1 : 0) + (this->gyroscope_vertex ? 1 : 0);
     }
 
-    math::matrix<double, 0, 0> inertial::observation(const sensor::imu::preintegration& preintegration) {
-        math::matrix<double, 0, 0> result = math::matrix<double, 0, 0>::zero(static_cast<size_t>(inertial::observation_count), 1);
+    math::matrix<double, 0, 0> inertial::observation(const sensor::imu::preintegration& preintegration, const bool with_gyroscope_matrix) {
+        math::matrix<double, 0, 0> result = math::matrix<double, 0, 0>::zero(static_cast<size_t>(with_gyroscope_matrix ? inertial::gyroscope_observation_count : inertial::observation_count), 1);
         const math::matrix<double, 4, 1> quaternion = preintegration.get_delta_rotation().get_quaternion();
         result[0][0] = quaternion[1];
         result[1][0] = quaternion[2];
@@ -96,6 +116,12 @@ namespace optimisation::edges {
         write_matrix(result, 35, preintegration.get_velocity_accelerometer_jacobian());
         write_matrix(result, 44, preintegration.get_position_gyroscope_jacobian());
         write_matrix(result, 53, preintegration.get_position_accelerometer_jacobian());
+        if (with_gyroscope_matrix) {
+            write_matrix(result, 62, preintegration.get_linearisation_intrinsics().gyroscope);
+            write_wide_matrix(result, 71, preintegration.get_rotation_gyroscope_matrix_jacobian());
+            write_wide_matrix(result, 98, preintegration.get_velocity_gyroscope_matrix_jacobian());
+            write_wide_matrix(result, 125, preintegration.get_position_gyroscope_matrix_jacobian());
+        }
         return result;
     }
 
@@ -120,14 +146,26 @@ namespace optimisation::edges {
         const sensor::imu::bias& estimate,
         const math::matrix<double, 3, 1>& gravity_world,
         double* const residual,
-        state_jacobians* const jacobians
+        state_jacobians* const jacobians,
+        const sensor::imu::intrinsics* const intrinsics_estimate
     ) {
         const math::matrix<double, 3, 1> gyroscope_change = estimate.gyroscope - preintegrated.linearisation.gyroscope;
         const math::matrix<double, 3, 1> accelerometer_change = estimate.accelerometer - preintegrated.linearisation.accelerometer;
-        const math::matrix<double, 3, 1> rotation_correction = preintegrated.rotation_gyroscope * gyroscope_change;
+        math::matrix<double, 3, 1> rotation_correction = preintegrated.rotation_gyroscope * gyroscope_change;
+        math::matrix<double, 3, 1> delta_velocity = preintegrated.delta_velocity + (preintegrated.velocity_gyroscope * gyroscope_change) + (preintegrated.velocity_accelerometer * accelerometer_change);
+        math::matrix<double, 3, 1> delta_position = preintegrated.delta_position + (preintegrated.position_gyroscope * gyroscope_change) + (preintegrated.position_accelerometer * accelerometer_change);
+        if (intrinsics_estimate != nullptr) {
+            // The gyroscope's matrix corrects the deltas as the gyroscope bias does, through the jacobians by its entries.
+            const math::matrix<double, 3, 3> matrix_change = intrinsics_estimate->gyroscope - preintegrated.linearisation_intrinsics.gyroscope;
+            math::matrix<double, 9, 1> gyroscope_matrix_change;
+            for (size_t i = 0; i < 9; ++i) {
+                gyroscope_matrix_change[i] = matrix_change.data()[i];
+            }
+            rotation_correction = rotation_correction + (preintegrated.rotation_gyroscope_matrix * gyroscope_matrix_change);
+            delta_velocity = delta_velocity + (preintegrated.velocity_gyroscope_matrix * gyroscope_matrix_change);
+            delta_position = delta_position + (preintegrated.position_gyroscope_matrix * gyroscope_matrix_change);
+        }
         const math::so3<double> delta_rotation = (preintegrated.delta_rotation * math::so3<double>::exp(rotation_correction)).normalised();
-        const math::matrix<double, 3, 1> delta_velocity = preintegrated.delta_velocity + (preintegrated.velocity_gyroscope * gyroscope_change) + (preintegrated.velocity_accelerometer * accelerometer_change);
-        const math::matrix<double, 3, 1> delta_position = preintegrated.delta_position + (preintegrated.position_gyroscope * gyroscope_change) + (preintegrated.position_accelerometer * accelerometer_change);
         const double duration = preintegrated.delta_time;
 
         const math::matrix<double, 3, 3> first_rotation_transpose = math::transpose(first.rotation.get_matrix());
@@ -159,6 +197,7 @@ namespace optimisation::edges {
         jacobians->position_j = math::matrix<double, 9, 3>::zero();
         jacobians->velocity_j = math::matrix<double, 9, 3>::zero();
         jacobians->gravity = math::matrix<double, 9, 3>::zero();
+        jacobians->gyroscope_matrix = math::matrix<double, 9, 9>::zero();
 
         put(jacobians->rotation_i, 0, 0, -1.0 * (right_jacobian_inverse * math::transpose(second.rotation.get_matrix()) * first.rotation.get_matrix()));
         put(jacobians->rotation_i, 3, 0, skew(velocity_term));
@@ -181,6 +220,12 @@ namespace optimisation::edges {
 
         put(jacobians->gravity, 3, 0, -duration * first_rotation_transpose);
         put(jacobians->gravity, 6, 0, (-0.5 * duration * duration) * first_rotation_transpose);
+
+        if (intrinsics_estimate != nullptr) {
+            math::set_block<double, 3, 9>(jacobians->gyroscope_matrix, 0, 0, -1.0 * (right_jacobian_inverse * math::transpose(rotation_error.get_matrix()) * correction_right_jacobian * preintegrated.rotation_gyroscope_matrix));
+            math::set_block<double, 3, 9>(jacobians->gyroscope_matrix, 3, 0, -1.0 * preintegrated.velocity_gyroscope_matrix);
+            math::set_block<double, 3, 9>(jacobians->gyroscope_matrix, 6, 0, -1.0 * preintegrated.position_gyroscope_matrix);
+        }
     }
 
     sensor::imu::preintegration::state inertial::imu_state(const double* const pose, const double* const velocity, const math::se3<double>& imu_on_body, const double scale) {
@@ -236,7 +281,13 @@ namespace optimisation::edges {
         estimate.gyroscope = { { bias_parameters[0], bias_parameters[1], bias_parameters[2] } };
         estimate.accelerometer = { { bias_parameters[3], bias_parameters[4], bias_parameters[5] } };
         double values[9];
-        inertial::evaluate(preintegrated, first, second, estimate, this->gravity, &values[0], nullptr);
+        if (this->gyroscope_vertex) {
+            const sensor::imu::intrinsics intrinsics = optimisation::vertices::gyroscope_intrinsics::from_parameters(context.get_vertex(this->extrinsic_vertex ? 6 : 5)->get_parameters());
+            inertial::evaluate(preintegrated, first, second, estimate, this->gravity, &values[0], nullptr, &intrinsics);
+        }
+        else {
+            inertial::evaluate(preintegrated, first, second, estimate, this->gravity, &values[0], nullptr);
+        }
         for (size_t i = 0; i < 9; ++i) {
             residual[i][0] = values[i];
         }
@@ -255,7 +306,14 @@ namespace optimisation::edges {
         estimate.accelerometer = { { bias_parameters[3], bias_parameters[4], bias_parameters[5] } };
         double values[9];
         state_jacobians blocks;
-        inertial::evaluate(preintegrated, first, second, estimate, this->gravity, &values[0], &blocks);
+        const int gyroscope_index = this->extrinsic_vertex ? 6 : 5;
+        if (this->gyroscope_vertex) {
+            const sensor::imu::intrinsics intrinsics = optimisation::vertices::gyroscope_intrinsics::from_parameters(context.get_vertex(gyroscope_index)->get_parameters());
+            inertial::evaluate(preintegrated, first, second, estimate, this->gravity, &values[0], &blocks, &intrinsics);
+        }
+        else {
+            inertial::evaluate(preintegrated, first, second, estimate, this->gravity, &values[0], &blocks);
+        }
         const math::matrix<double, 9, 6> first_pose_jacobian = inertial::pose_jacobian(blocks.rotation_i, blocks.position_i, first_pose, imu_on_body);
         const math::matrix<double, 9, 6> second_pose_jacobian = inertial::pose_jacobian(blocks.rotation_j, blocks.position_j, second_pose, imu_on_body);
         edge::set_jacobian(jacobians[0], 9, 6, first_pose_jacobian.data());
@@ -266,6 +324,9 @@ namespace optimisation::edges {
         if (this->extrinsic_vertex) {
             const math::matrix<double, 9, 6> extrinsic = inertial::extrinsic_jacobian(blocks.rotation_i, blocks.position_i, first_pose, imu_on_body) + inertial::extrinsic_jacobian(blocks.rotation_j, blocks.position_j, second_pose, imu_on_body);
             edge::set_jacobian(jacobians[5], 9, 6, extrinsic.data());
+        }
+        if (this->gyroscope_vertex) {
+            edge::set_jacobian(jacobians[static_cast<size_t>(gyroscope_index)], 9, 9, blocks.gyroscope_matrix.data());
         }
     }
 }

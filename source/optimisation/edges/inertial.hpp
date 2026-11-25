@@ -56,12 +56,19 @@ namespace optimisation::edges {
     // The imu's place on the body is a fixed parameter, or, when the edge is made to take one, a sixth vertex: an extrinsic vertex
     // (optimisation::vertices::extrinsic, sensor to body, updated on the left) that an adjustment may refine, which the
     // parameter then only starts.
+    //
+    // The gyroscope's matrix M (sensor::imu::intrinsics, after Van Meter and Paul, "SLAM Dunk: A Recipe for Long-Horizon Egocentric
+    // SLAM in the Wild", 2026) is the one the measurement was integrated at, or, when the edge is made to take one, a last vertex:
+    // a gyroscope_intrinsics vertex shared by every inertial edge of a graph, by which the deltas are corrected to first order as
+    // they are for the bias. The observation then also holds the matrix integrated at and the jacobians by it, observation(
+    // preintegration, true) continuing the layout with [M0, J_R^M, J_v^M, J_p^M] row major, 152 values.
     class inertial final {
     public:
         constexpr static const char* name = "inertial";
         constexpr static const int residual_count = 9;
         constexpr static const int vertex_count = 5;
         constexpr static const int observation_count = 62;
+        constexpr static const int gyroscope_observation_count = 152;
 
         // The measurement read back from an edge's observation.
         class measurement final {
@@ -76,13 +83,19 @@ namespace optimisation::edges {
             math::matrix<double, 3, 3> velocity_accelerometer = math::matrix<double, 3, 3>::zero();
             math::matrix<double, 3, 3> position_gyroscope = math::matrix<double, 3, 3>::zero();
             math::matrix<double, 3, 3> position_accelerometer = math::matrix<double, 3, 3>::zero();
+            // The gyroscope's matrix integrated at and the jacobians by it, zero when the observation holds none.
+            sensor::imu::intrinsics linearisation_intrinsics;
+            math::matrix<double, 3, 9> rotation_gyroscope_matrix = math::matrix<double, 3, 9>::zero();
+            math::matrix<double, 3, 9> velocity_gyroscope_matrix = math::matrix<double, 3, 9>::zero();
+            math::matrix<double, 3, 9> position_gyroscope_matrix = math::matrix<double, 3, 9>::zero();
 
         public:
             static measurement from_observation(const math::matrix<double, 0, 0>& observation);
         };
 
         // The jacobians of the residual with respect to the imu's states: a right perturbation of each rotation, R * Exp(dphi), a
-        // perturbation of each position and velocity in the world, the bias (gyroscope then accelerometer) and gravity.
+        // perturbation of each position and velocity in the world, the bias (gyroscope then accelerometer) and gravity, and the
+        // gyroscope's matrix, row by row, when the residual is evaluated at one.
         class state_jacobians final {
         public:
             math::matrix<double, 9, 3> rotation_i;
@@ -93,25 +106,29 @@ namespace optimisation::edges {
             math::matrix<double, 9, 3> position_j;
             math::matrix<double, 9, 3> velocity_j;
             math::matrix<double, 9, 3> gravity;
+            math::matrix<double, 9, 9> gyroscope_matrix;
         };
 
     private:
         math::matrix<double, 3, 1> gravity;
         math::se3<double> body_from_imu;
         bool extrinsic_vertex;
+        bool gyroscope_vertex;
 
     public:
-        explicit inertial(const math::matrix<double, 3, 1>& gravity_world, const math::se3<double>& imu_on_body = math::se3<double>::identity(), const bool with_extrinsic_vertex = false);
+        explicit inertial(const math::matrix<double, 3, 1>& gravity_world, const math::se3<double>& imu_on_body = math::se3<double>::identity(), const bool with_extrinsic_vertex = false, const bool with_gyroscope_vertex = false);
 
-        // Five vertices, or six with the extrinsic vertex.
+        // Five vertices, then the extrinsic vertex and the gyroscope's when the edge takes them, in that order.
         int get_vertex_count() const;
 
     public:
-        // The observation of a preintegration, and its information, the inverse of its covariance (false when it cannot be inverted).
-        static math::matrix<double, 0, 0> observation(const sensor::imu::preintegration& preintegration);
+        // The observation of a preintegration, with what a gyroscope vertex needs when asked for, and its information, the inverse
+        // of its covariance (false when it cannot be inverted).
+        static math::matrix<double, 0, 0> observation(const sensor::imu::preintegration& preintegration, const bool with_gyroscope_matrix = false);
         static bool information(const sensor::imu::preintegration& preintegration, math::matrix<double, 0, 0>& information_matrix);
 
-        // The residual of a measurement between two imu states, and optionally its jacobians.
+        // The residual of a measurement between two imu states, and optionally its jacobians; at the gyroscope's matrix the
+        // measurement was integrated at, or at the one given.
         static void evaluate(
             const measurement& preintegrated,
             const sensor::imu::preintegration::state& first,
@@ -119,7 +136,8 @@ namespace optimisation::edges {
             const sensor::imu::bias& estimate,
             const math::matrix<double, 3, 1>& gravity_world,
             double* const residual,
-            state_jacobians* const jacobians
+            state_jacobians* const jacobians,
+            const sensor::imu::intrinsics* const intrinsics_estimate = nullptr
         );
 
         // The imu's state from the parameters of a body pose vertex (world to body) and a velocity vertex, with the body's position

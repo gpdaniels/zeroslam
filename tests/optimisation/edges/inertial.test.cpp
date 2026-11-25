@@ -24,6 +24,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "optimisation/factor_graph.hpp"
 #include "optimisation/vertex.hpp"
 #include "optimisation/vertices/extrinsic.hpp"
+#include "optimisation/vertices/gyroscope_intrinsics.hpp"
 #include "optimisation/vertices/imu_bias.hpp"
 #include "optimisation/vertices/point.hpp"
 #include "optimisation/vertices/pose.hpp"
@@ -262,6 +263,177 @@ int main(int argc, char* argv[]) {
                     }
                 }
             }
+        }
+
+        // With the gyroscope's matrix a vertex, of a gyroscope whose axes are scaled and misaligned: the observation carries the
+        // matrix integrated at and the jacobians by it, the residual at that matrix is the residual without the vertex, and the
+        // jacobians, the matrix's among them, agree with central differences with the matrix moved off, with and without an
+        // extrinsic vertex before it.
+        {
+            sensor::imu::intrinsics true_intrinsics;
+            true_intrinsics.gyroscope = { { { 0.011, -0.006, 0.004 }, { 0.007, -0.009, -0.005 }, { -0.003, 0.008, 0.012 } } };
+            simulation::imu_sensor::options misaligned_options = sensor_options;
+            misaligned_options.intrinsics = true_intrinsics;
+            const simulation::imu_sensor::recording misaligned = simulation::imu_sensor::generate(trajectory, parameters, misaligned_options);
+            sensor::imu::intrinsics linearisation_intrinsics;
+            linearisation_intrinsics.gyroscope = { { { 0.009, -0.004, 0.003 }, { 0.006, -0.007, -0.006 }, { -0.002, 0.006, 0.01 } } };
+            sensor::imu::preintegration corrected(parameters, true_bias, linearisation_intrinsics);
+            REQUIRE(corrected.integrate(misaligned.samples, 2000000000ll, 2600000000ll));
+
+            const math::matrix<double, 0, 0> observation = optimisation::edges::inertial::observation(corrected, true);
+            REQUIRE(observation.rows() == static_cast<size_t>(optimisation::edges::inertial::gyroscope_observation_count));
+            const math::matrix<double, 0, 0> plain_observation = optimisation::edges::inertial::observation(corrected);
+            REQUIRE(plain_observation.rows() == static_cast<size_t>(optimisation::edges::inertial::observation_count));
+            for (size_t i = 0; i < plain_observation.rows(); ++i) {
+                REQUIRE(observation[i][0] == plain_observation[i][0]);
+            }
+            const optimisation::edges::inertial::measurement read = optimisation::edges::inertial::measurement::from_observation(observation);
+            REQUIRE(read.delta_position == corrected.get_delta_position());
+            REQUIRE(read.position_accelerometer == corrected.get_position_accelerometer_jacobian());
+            REQUIRE(read.linearisation_intrinsics.gyroscope == linearisation_intrinsics.gyroscope);
+            REQUIRE(read.rotation_gyroscope_matrix == corrected.get_rotation_gyroscope_matrix_jacobian());
+            REQUIRE(read.velocity_gyroscope_matrix == corrected.get_velocity_gyroscope_matrix_jacobian());
+            REQUIRE(read.position_gyroscope_matrix == corrected.get_position_gyroscope_matrix_jacobian());
+            const optimisation::edges::inertial::measurement plain_read = optimisation::edges::inertial::measurement::from_observation(plain_observation);
+            REQUIRE(plain_read.linearisation_intrinsics.gyroscope == (math::matrix<double, 3, 3>::zero()));
+            REQUIRE(plain_read.rotation_gyroscope_matrix == (math::matrix<double, 3, 9>::zero()));
+
+            const auto make_gyroscope = [](const sensor::imu::intrinsics& intrinsics) {
+                optimisation::vertex vertex{ optimisation::vertices::gyroscope_intrinsics() };
+                double values[optimisation::vertices::gyroscope_intrinsics::parameter_count];
+                optimisation::vertices::gyroscope_intrinsics::to_parameters(intrinsics, values);
+                REQUIRE(vertex.set_parameters(&values[0], optimisation::vertices::gyroscope_intrinsics::parameter_count));
+                return vertex;
+            };
+            optimisation::edge without{ optimisation::edges::inertial(gravity, body_from_imu) };
+            without.set_observation(plain_observation);
+            optimisation::vertex* const states[5] = { &first_pose, &first_velocity, &bias, &second_pose, &second_velocity };
+            for (optimisation::vertex* const node : states) {
+                REQUIRE(without.add_vertex(node));
+            }
+            without.compute_residual();
+
+            optimisation::vertex gyroscope = make_gyroscope(linearisation_intrinsics);
+            optimisation::edge with_gyroscope{ optimisation::edges::inertial(gravity, body_from_imu, false, true) };
+            REQUIRE(with_gyroscope.required_vertices() == 6);
+            with_gyroscope.set_observation(observation);
+            for (optimisation::vertex* const node : states) {
+                REQUIRE(with_gyroscope.add_vertex(node));
+            }
+            REQUIRE(with_gyroscope.add_vertex(&gyroscope));
+            REQUIRE(!with_gyroscope.add_vertex(&gyroscope));
+            with_gyroscope.compute_residual();
+            for (size_t i = 0; i < 9; ++i) {
+                REQUIRE(std::abs(with_gyroscope.get_residual()[i][0] - without.get_residual()[i][0]) < 1e-15);
+            }
+
+            // Moved to another matrix, the residual is that of the measurement integrated at it, to second order in the move.
+            const double gyroscope_moved[9] = { 0.002, -0.003, 0.001, 0.0015, -0.002, 0.003, -0.001, 0.002, 0.0025 };
+            gyroscope.plus(&gyroscope_moved[0]);
+            const sensor::imu::intrinsics moved_intrinsics = optimisation::vertices::gyroscope_intrinsics::from_parameters(gyroscope.get_parameters());
+            REQUIRE(std::abs(moved_intrinsics.gyroscope[1][2] - (linearisation_intrinsics.gyroscope[1][2] + gyroscope_moved[5])) < 1e-15);
+            with_gyroscope.compute_residual();
+            with_gyroscope.compute_jacobians();
+            sensor::imu::preintegration reintegrated = corrected;
+            reintegrated.reintegrate(true_bias, moved_intrinsics);
+            optimisation::edge at_moved{ optimisation::edges::inertial(gravity, body_from_imu) };
+            at_moved.set_observation(optimisation::edges::inertial::observation(reintegrated));
+            for (optimisation::vertex* const node : states) {
+                REQUIRE(at_moved.add_vertex(node));
+            }
+            at_moved.compute_residual();
+            double corrected_difference = 0.0;
+            double uncorrected_difference = 0.0;
+            for (size_t i = 0; i < 9; ++i) {
+                corrected_difference = std::fmax(corrected_difference, std::abs(with_gyroscope.get_residual()[i][0] - at_moved.get_residual()[i][0]));
+                uncorrected_difference = std::fmax(uncorrected_difference, std::abs(without.get_residual()[i][0] - at_moved.get_residual()[i][0]));
+            }
+            REQUIRE(uncorrected_difference > 1e-4);
+            REQUIRE(corrected_difference < 0.02 * uncorrected_difference);
+
+            REQUIRE(with_gyroscope.get_jacobians().size() == 6);
+            double largest_entry = 0.0;
+            for (int slot = 0; slot < 6; ++slot) {
+                const math::matrix<double, 0, 0>& analytic = with_gyroscope.get_jacobians()[static_cast<size_t>(slot)];
+                const math::matrix<double, 0, 0> numeric = numeric_jacobian(with_gyroscope, slot);
+                REQUIRE(analytic.rows() == 9);
+                REQUIRE(analytic.cols() == numeric.cols());
+                REQUIRE(analytic.cols() == ((slot == 5) ? 9u : columns[slot]));
+                for (size_t r = 0; r < 9; ++r) {
+                    for (size_t c = 0; c < analytic.cols(); ++c) {
+                        REQUIRE(std::abs(analytic[r][c] - numeric[r][c]) < 1e-6 * (1.0 + std::abs(numeric[r][c])));
+                        largest_entry = (slot == 5) ? std::fmax(largest_entry, std::abs(analytic[r][c])) : largest_entry;
+                    }
+                }
+            }
+            REQUIRE(largest_entry > 0.1);
+
+            // After an extrinsic vertex, the matrix's is the seventh.
+            optimisation::vertex extrinsic{ optimisation::vertices::extrinsic() };
+            double extrinsic_parameters[optimisation::vertices::extrinsic::parameter_count];
+            optimisation::vertices::extrinsic::to_parameters(body_from_imu, extrinsic_parameters);
+            REQUIRE(extrinsic.set_parameters(&extrinsic_parameters[0], optimisation::vertices::extrinsic::parameter_count));
+            optimisation::edge with_both{ optimisation::edges::inertial(gravity, math::se3<double>::identity(), true, true) };
+            REQUIRE(with_both.required_vertices() == 7);
+            with_both.set_observation(observation);
+            for (optimisation::vertex* const node : states) {
+                REQUIRE(with_both.add_vertex(node));
+            }
+            REQUIRE(with_both.add_vertex(&extrinsic));
+            REQUIRE(with_both.add_vertex(&gyroscope));
+            with_both.compute_residual();
+            for (size_t i = 0; i < 9; ++i) {
+                REQUIRE(std::abs(with_both.get_residual()[i][0] - with_gyroscope.get_residual()[i][0]) < 1e-12);
+            }
+            const double extrinsic_moved[6] = { 0.02, -0.03, 0.01, 0.01, 0.02, -0.015 };
+            extrinsic.plus(&extrinsic_moved[0]);
+            with_both.compute_residual();
+            with_both.compute_jacobians();
+            REQUIRE(with_both.get_jacobians().size() == 7);
+            for (int slot = 0; slot < 7; ++slot) {
+                const math::matrix<double, 0, 0>& analytic = with_both.get_jacobians()[static_cast<size_t>(slot)];
+                const math::matrix<double, 0, 0> numeric = numeric_jacobian(with_both, slot);
+                REQUIRE(analytic.cols() == numeric.cols());
+                for (size_t r = 0; r < 9; ++r) {
+                    for (size_t c = 0; c < analytic.cols(); ++c) {
+                        REQUIRE(std::abs(analytic[r][c] - numeric[r][c]) < 1e-6 * (1.0 + std::abs(numeric[r][c])));
+                    }
+                }
+            }
+
+            // At the true states the true matrix leaves the residual of the integration alone, where no matrix leaves the
+            // gyroscope's error in it.
+            optimisation::vertex true_first_pose = make_pose(body_pose(first_time));
+            optimisation::vertex true_first_velocity = make_velocity(trajectory.velocity(first_time));
+            optimisation::vertex true_bias_vertex = make_bias(true_bias);
+            optimisation::vertex true_second_pose = make_pose(body_pose(second_time));
+            optimisation::vertex true_second_velocity = make_velocity(trajectory.velocity(second_time));
+            optimisation::vertex true_gyroscope = make_gyroscope(true_intrinsics);
+            optimisation::vertex* const true_states[5] = { &true_first_pose, &true_first_velocity, &true_bias_vertex, &true_second_pose, &true_second_velocity };
+            optimisation::edge at_truth{ optimisation::edges::inertial(gravity, body_from_imu, false, true) };
+            at_truth.set_observation(observation);
+            sensor::imu::preintegration uncorrected(parameters, true_bias);
+            REQUIRE(uncorrected.integrate(misaligned.samples, 2000000000ll, 2600000000ll));
+            optimisation::edge at_none{ optimisation::edges::inertial(gravity, body_from_imu) };
+            at_none.set_observation(optimisation::edges::inertial::observation(uncorrected));
+            for (optimisation::vertex* const node : true_states) {
+                REQUIRE(at_truth.add_vertex(node));
+                REQUIRE(at_none.add_vertex(node));
+            }
+            REQUIRE(at_truth.add_vertex(&true_gyroscope));
+            at_truth.compute_residual();
+            at_none.compute_residual();
+            double rotation_with = 0.0;
+            double rotation_without = 0.0;
+            for (size_t i = 0; i < 3; ++i) {
+                REQUIRE(std::abs(at_truth.get_residual()[i][0]) < 2e-5);
+                REQUIRE(std::abs(at_truth.get_residual()[3 + i][0]) < 2e-4);
+                REQUIRE(std::abs(at_truth.get_residual()[6 + i][0]) < 2e-4);
+                rotation_with = std::fmax(rotation_with, std::abs(at_truth.get_residual()[i][0]));
+                rotation_without = std::fmax(rotation_without, std::abs(at_none.get_residual()[i][0]));
+            }
+            REQUIRE(rotation_without > 1e-3);
+            REQUIRE(rotation_with < 0.02 * rotation_without);
         }
 
         // The state jacobians of the evaluation, gravity among them, by central differences too.
