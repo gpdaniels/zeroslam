@@ -1117,5 +1117,38 @@ int main(int argc, char* argv[]) {
         REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
     }
 
+    {
+        // An imu's samples before the first camera frame do not make the frame follow anything: a camera, or a rig of two, takes
+        // a first frame at timestamp zero with an imu as it does without one.
+        const int width = 64;
+        const int height = 48;
+        zeroslam_sensor_parameters_camera_struct camera{};
+        camera.width = width;
+        camera.height = height;
+        camera.focal_x = 50.0;
+        camera.focal_y = 50.0;
+        camera.centre_x = 32.0;
+        camera.centre_y = 24.0;
+        zeroslam_sensor_parameters_imu_struct imu{ 1.6968e-04, 2.0e-03, 1.9393e-05, 3.0e-03, 200.0, 0.0, 0.0 };
+        zeroslam_sensor_measurement_imu_struct still{};
+        still.linear_acceleration[1] = -9.81;
+        std::vector<unsigned char> pixels(static_cast<size_t>(width * height), 128);
+        for (int cameras = 1; cameras <= 2; ++cameras) {
+            const zeroslam_sensor_rig_struct rig[3] = {
+                { zeroslam_sensor_imu, 3, static_cast<int>(sizeof(imu)), &imu },
+                { zeroslam_sensor_camera, 1, static_cast<int>(sizeof(camera)), &camera },
+                { zeroslam_sensor_camera, 2, static_cast<int>(sizeof(camera)), &camera }
+            };
+            zeroslam_system* system = nullptr;
+            REQUIRE(zeroslam_create(&system) == zeroslam_return_success);
+            REQUIRE(zeroslam_set_sensor_rig(system, &rig[0], 1 + cameras) == zeroslam_return_success);
+            const zeroslam_sensor_data_struct sample = { -5000000, 3, static_cast<int>(sizeof(still)), &still };
+            REQUIRE(zeroslam_set_sensor_data(system, &sample, 1) == zeroslam_return_success);
+            const zeroslam_sensor_data_struct frame[2] = { { 0, 1, width * height, pixels.data() }, { 0, 2, width * height, pixels.data() } };
+            REQUIRE(zeroslam_set_sensor_data(system, &frame[0], cameras) == zeroslam_return_success);
+            REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
+        }
+    }
+
     return EXIT_SUCCESS;
 }

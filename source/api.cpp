@@ -81,6 +81,8 @@ struct zeroslam_system final {
     std::vector<frame_record> frames;
     long long int latest_timestamp = 0;
     bool any_data = false;
+    // Whether a camera's image has come, which the next frame's timestamp must then follow: an imu's samples are data before it.
+    bool any_frame = false;
 };
 
 namespace {
@@ -1162,7 +1164,7 @@ namespace {
             }
             timestamps[static_cast<size_t>(i)] = entry.timestamp;
         }
-        if (!system->rig.accepts(timestamps.data(), cameras.data(), cameras.size(), camera_count, system->any_data, system->latest_timestamp)) {
+        if (!system->rig.accepts(timestamps.data(), cameras.data(), cameras.size(), camera_count, system->any_frame, system->latest_timestamp)) {
             return zeroslam_return_failure_invalid_sensor_data;
         }
         if (!system->any_data) {
@@ -1173,6 +1175,7 @@ namespace {
             system->slam_instance.set_rig(system->odometry.with_odometer(system->rig.make_rig(sensor_ids)));
         }
         system->any_data = true;
+        system->any_frame = true;
         for (int i = 0; i < length; ++i) {
             if (!system->rig.take(data[i].timestamp, cameras[static_cast<size_t>(i)], static_cast<const unsigned char*>(data[i].measurement_data), static_cast<size_t>(data[i].measurement_length), camera_count)) {
                 continue;
@@ -1287,7 +1290,7 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
             cameras[static_cast<size_t>(i)] = camera;
             continue;
         }
-        const bool follows_previous = (previous_camera >= 0) ? (entry.timestamp > data[previous_camera].timestamp) : (!system->any_data || (entry.timestamp > system->latest_timestamp));
+        const bool follows_previous = (previous_camera >= 0) ? (entry.timestamp > data[previous_camera].timestamp) : (!system->any_frame || (entry.timestamp > system->latest_timestamp));
         previous_camera = i;
         if (!follows_previous) {
             return zeroslam_return_failure_invalid_sensor_data;
@@ -1328,6 +1331,7 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_set_sensor_data(zeroslam_system*
         system->frames.push_back({ entry.timestamp, system->slam_instance.reconstruction.next_frame_id - 1 });
         system->latest_timestamp = entry.timestamp;
         system->any_data = true;
+        system->any_frame = true;
     }
     return zeroslam_return_success;
 }
