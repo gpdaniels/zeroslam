@@ -448,6 +448,17 @@ int main(int argc, char* argv[]) {
     REQUIRE(!closure.detect(42, identity, test_camera(), unconnected, nullptr, 0).found);
 
     {
+        // One held keyframe given a camera of its own: it alone then has it, and a keyframe that is not held takes none.
+        const double other_parameters[sensor::camera::pinhole_radial_tangential<double>::parameter_count] = { 526.0, 526.0, 320.0, 240.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        const sensor::model other(sensor::camera::pinhole_radial_tangential<double>(&other_parameters[0], sensor::camera::pinhole_radial_tangential<double>::parameter_count));
+        REQUIRE(closure.replace_camera(other, test_camera()) == 0);
+        REQUIRE(closure.set_camera(1, other));
+        REQUIRE(!closure.set_camera(1000, other));
+        REQUIRE(closure.replace_camera(other, test_camera()) == 1);
+        REQUIRE(closure.replace_camera(other, test_camera()) == 0);
+    }
+
+    {
         std::vector<feature::descriptor::stored> descriptors;
         for (const mapping::loop_closure::record& record : first) {
             descriptors.push_back(record.descriptor);

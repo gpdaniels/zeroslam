@@ -1111,6 +1111,15 @@ namespace mapping {
         return replaced;
     }
 
+    bool loop_closure::set_camera(const int keyframe_id, const sensor::model& camera) {
+        const std::unordered_map<int, keyframe>::iterator found = this->keyframes.find(keyframe_id);
+        if (found == this->keyframes.end()) {
+            return false;
+        }
+        found->second.camera = camera;
+        return true;
+    }
+
     size_t loop_closure::num_keyframes() const {
         return this->recognition.num_keyframes();
     }

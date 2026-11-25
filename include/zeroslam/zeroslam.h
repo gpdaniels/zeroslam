@@ -226,6 +226,22 @@ typedef struct zeroslam_sensor_parameters_camera_model_struct {
 } zeroslam_sensor_parameters_camera_model_struct;
 ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_sensor_parameters_camera_model_struct) == 272, "For ABI compatibility the sizeof(zeroslam_sensor_parameters_camera_model_struct) must be 272 bytes.")
 
+// The calibration of one camera of the rig over one chunk of time, where the configuration's calibration_drift key has the
+// calibration followed over time (see README.md "Calibration drift"): when the chunk starts and how long it is, in
+// nanoseconds, the camera, its focal lengths in the chunk (the rest of its parameters are the rig's), its extrinsic there as
+// zeroslam_sensor_extrinsics_struct gives one, and how many observations held the chunk in the last adjustment that followed
+// the calibration: with none it is where the drift between the chunks around it leaves it, or still as it started.
+typedef struct zeroslam_calibration_chunk_struct {
+    long long int timestamp;
+    long long int duration;
+    int sensor_id;
+    int observations;
+    double focal_x;
+    double focal_y;
+    double pose[7];
+} zeroslam_calibration_chunk_struct;
+ZEROSLAM_API_STATIC_ASSERT(sizeof(zeroslam_calibration_chunk_struct) == 96, "For ABI compatibility the sizeof(zeroslam_calibration_chunk_struct) must be 96 bytes.")
+
 // How a depth image's pixels are stored: 16 bit unsigned values of scale metres each (zero is no measurement), or 32 bit floats
 // of metres (zero or not finite is no measurement).
 typedef enum zeroslam_depth_encoding_enum {
@@ -488,6 +504,10 @@ ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_finalise
 // The calibration of a camera of the rig as the system holds it now, of whichever model the rig gave: the rig's, refined by
 // the adjustments when the configuration's calibration key asks for it (see README.md "Calibrating the camera").
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_camera_calibration(zeroslam_system* system, int sensor_id, zeroslam_sensor_parameters_camera_model_struct* calibration);
+
+// The calibration over time as the system holds it, one entry per chunk of time and camera, by time and then in the rig's
+// order of cameras; none while the calibration is not followed (the calibration_drift key, and frames with timestamps).
+ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_calibration_drift(zeroslam_system* system, zeroslam_calibration_chunk_struct* chunks, int* length);
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_pose(zeroslam_system* system, zeroslam_pose_struct* pose);
 
 ZEROSLAM_API_VISIBILITY zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_pose_at_timestamp(zeroslam_system* system, zeroslam_pose_struct* pose, long long int timestamp);

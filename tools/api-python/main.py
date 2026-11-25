@@ -138,6 +138,13 @@ def main():
         require(calibration.parameters[0] == camera_parameters.focal_x, "the calibration is the rig's")
         require(system.get_camera_calibration(sensor_id + 1, calibration) == zeroslam.zeroslam_return_enum.zeroslam_return_failure_invalid_argument, "get_camera_calibration rejects an unknown sensor")
 
+        # The calibration over time: no chunks, as the calibration_drift key is off.
+        chunks_length = ctypes.c_int(-1)
+        result = system.get_calibration_drift(None, chunks_length)
+        print("get_calibration_drift: {} ({} chunks)".format(result.name, chunks_length.value))
+        require(result == success, "get_calibration_drift")
+        require(chunks_length.value == 0, "the calibration is not followed over time")
+
         pose = zeroslam.zeroslam_pose_struct()
         result = system.get_pose(pose)
         print("get_pose: {}".format(result.name))

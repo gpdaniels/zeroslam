@@ -26,6 +26,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "image/image.hpp"
 #include "image/pyramid.hpp"
 #include "mapping/calibration.hpp"
+#include "mapping/calibration_drift.hpp"
+#include "math/lie.hpp"
 #include "math/matrix.hpp"
 #include "optimisation/factor_graph.hpp"
 #include "sensor/camera.hpp"
@@ -139,6 +141,8 @@ namespace mapping {
             int global_adjustment_keyframes = 10;
             // Which of the camera's parameters the adjustments refine (see mapping::calibration).
             mapping::calibration::level calibration = mapping::calibration::level::off;
+            // Whether the calibration is followed over time, and how fast it may drift (see mapping::calibration_drift).
+            mapping::calibration_drift::settings calibration_drift;
             // How the map is adjusted as keyframes arrive: absolute, a window of world poses with periodic global adjustments
             // and a pose graph at each loop, or relative, an adaptive region of a graph of relative transforms (see
             // mapping::relative_graph) where a loop is one more transform.
@@ -204,6 +208,12 @@ namespace mapping {
         // The depth image registered to the frame's camera, empty when the frame came without one. A keyframe keeps it, as the
         // observations added to it later sample their depths from it; any other frame lets it go once it is processed.
         sensor::depth depth;
+
+        // The chunk of time the frame is in where the calibration is followed over time (see mapping::calibration_drift), -1
+        // for none: its camera is then that chunk's, and so are its views' cameras and their poses on the reference camera,
+        // which each view holds here (reference from camera) and the map takes in place of the rig's.
+        long long calibration_chunk = -1;
+        math::se3<double> reference_from_camera = math::se3<double>::identity();
 
     public:
         float to_level0_x(const float level_x, const size_t level) const {

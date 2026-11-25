@@ -14,6 +14,7 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "calibration_drift.hpp"
 #include "cdr.hpp"
 #include "dataset.hpp"
 #include "depth.hpp"
@@ -747,6 +748,9 @@ int main(int argc, char* argv[]) {
     }
     if (!odometer_feed.write_calibration(slam, "odometry.txt")) {
         std::fprintf(stderr, "Failed to write the odometry calibration.\n");
+    }
+    if (!process_calibration_drift::write(slam, "calibration_drift.txt")) {
+        std::fprintf(stderr, "Failed to write the calibration drift.\n");
     }
     log(4, "Saving map and camera trajectory...");
 
