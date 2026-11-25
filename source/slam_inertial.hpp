@@ -25,7 +25,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 // (optimisation::inertial_initialisation), the map is made metric, and every adjustment holds consecutive keyframes with
 // inertial and bias random walk edges, refined twice more as the window grows. The imu predicts each frame's pose where the
 // tracks do not give it and carries the frames through a short loss of the tracks, and a loop on an inertial map keeps every
-// keyframe's roll and pitch. Without an imu none of this is reached.
+// keyframe's roll and pitch. When the configuration asks for it, the adjustments of the whole map after those refinements also
+// refine the matrix of the gyroscope's scale and misalignment (mapping::gyroscope_intrinsics). Without an imu none of this is
+// reached.
 
 #include "optimisation/edges/gravity_alignment.hpp"
 #include "optimisation/inertial_initialisation.hpp"
@@ -104,6 +106,7 @@ inline void slam::inertial_keyframes_added() {
     if (!state.declared() || this->relative_adjustment()) {
         return;
     }
+    state.gyroscope().set_refined(this->frontend.imu_calibration == mapping::frame::settings::imu_calibration_kind::gyroscope);
     std::vector<int> fresh;
     for (const int id : this->keyframe_ids_) {
         if ((state.keyframes().count(id) == 0) && (this->reconstruction.frames.count(id) != 0)) {
@@ -195,7 +198,9 @@ inline bool slam::inertial_estimate(const std::vector<int>& window, const bool f
         const mapping::frame& frame = this->reconstruction.frames.at(window[k]);
         poses.push_back(math::se3<double>(math::so3<double>(frame.rotation), frame.translation));
         if (k > 0) {
+            // The initialisation takes the measurements as they are integrated, so at the gyroscope's matrix as it is held now.
             preintegrations.push_back(state.keyframes().at(window[k]).from_previous);
+            state.gyroscope().align(preintegrations.back());
         }
     }
     optimisation::inertial_initialisation::options settings;
@@ -269,6 +274,8 @@ inline void slam::inertial_after_keyframe(const mapping::frame& frame_current) {
         for (const double delay : slam::inertial_refinement_seconds) {
             this->inertial_refinements_.push_back(now + static_cast<long long>(delay * 1.0e9));
         }
+        // The gyroscope's matrix is held until those refinements are done (mapping::gyroscope_intrinsics).
+        state.gyroscope().set_settled(false);
         core::logger::log(core::logger::level::note, "Inertial initialisation at keyframe %d: the map is metric (scale %.4f), gravity [%.3f %.3f %.3f] in the map's world.", frame_current.id, result.scale, state.gravity()[0], state.gravity()[1], state.gravity()[2]);
     }
     else {
@@ -277,6 +284,7 @@ inline void slam::inertial_after_keyframe(const mapping::frame& frame_current) {
             return;
         }
         this->inertial_refinements_.erase(this->inertial_refinements_.begin());
+        state.gyroscope().set_settled(this->inertial_refinements_.empty());
         if (window.size() > slam::inertial_window_maximum) {
             window.erase(window.begin(), window.end() - static_cast<std::ptrdiff_t>(slam::inertial_window_maximum));
         }

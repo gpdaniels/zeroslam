@@ -516,6 +516,13 @@ int main(int argc, char* argv[]) {
         result = zeroslam_get_pose(system, &pose);
         REQUIRE(result == zeroslam_return_success);
         print_pose("newest pose (camera and imu)", &pose);
+        /* The imu's calibration: the matrix of its gyroscope's scale and misalignment, zero until an adjustment refines it, which
+           the configuration's imu_calibration key asks for. */
+        zeroslam_imu_calibration_struct imu_calibration;
+        memset(&imu_calibration, 0, sizeof(imu_calibration));
+        result = zeroslam_get_imu_calibration(system, &imu_calibration);
+        printf("get_imu_calibration: %s (sensor %d, gyroscope refined %d times, diagonal %.4f %.4f %.4f)\n", zeroslam_return_enum_to_string(result), imu_calibration.sensor_id, imu_calibration.refinements, imu_calibration.gyroscope[0], imu_calibration.gyroscope[4], imu_calibration.gyroscope[8]);
+        REQUIRE(result == zeroslam_return_success);
         result = zeroslam_destroy(&system);
         REQUIRE(result == zeroslam_return_success);
     }

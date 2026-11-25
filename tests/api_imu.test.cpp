@@ -16,6 +16,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "api_imu.hpp"
 
+#include "mapping/inertial.hpp"
 #include "math/lie.hpp"
 #include "sensor/imu/measurement.hpp"
 #include "zeroslam/zeroslam.h"
@@ -27,6 +28,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -141,6 +143,29 @@ int main(int argc, char* argv[]) {
         REQUIRE(!declared.take_extrinsic(&extrinsics[0], 2, rest));
         imu.gravity = 0.0;
         REQUIRE(declared.noise().gravity == 9.80665);
+
+        // Its calibration is the gyroscope's matrix as the map holds it, row by row, and how often it was refined; an imu that
+        // is not declared has none.
+        mapping::inertial held;
+        zeroslam_imu_calibration_struct calibration{};
+        calibration.refinements = 7;
+        REQUIRE(declared.fill_calibration(held, &calibration));
+        REQUIRE(calibration.sensor_id == 5);
+        REQUIRE(calibration.refinements == 0);
+        for (const double entry_value : calibration.gyroscope) {
+            REQUIRE(entry_value == 0.0);
+        }
+        sensor::imu::intrinsics intrinsics;
+        intrinsics.gyroscope = { { { 0.011, -0.006, 0.004 }, { 0.007, -0.009, -0.005 }, { -0.003, 0.008, 0.012 } } };
+        held.gyroscope().set_estimate(intrinsics);
+        REQUIRE(declared.fill_calibration(held, &calibration));
+        REQUIRE(calibration.gyroscope[0] == 0.011);
+        REQUIRE(calibration.gyroscope[1] == -0.006);
+        REQUIRE(calibration.gyroscope[3] == 0.007);
+        REQUIRE(calibration.gyroscope[5] == -0.005);
+        REQUIRE(calibration.gyroscope[8] == 0.012);
+        REQUIRE(!declared.fill_calibration(held, nullptr));
+        REQUIRE(!api_imu().fill_calibration(held, &calibration));
     }
 
     // Through the api: a camera and an imu declared together, the imu's extrinsic with the cameras', and its samples between the
@@ -159,6 +184,33 @@ int main(int argc, char* argv[]) {
         rig[1].parameters_data = &imu;
         rig[2] = rig[1];
         rig[2].sensor_id = 3;
+        // Without an imu there is no imu calibration.
+        zeroslam_imu_calibration_struct calibration{};
+        REQUIRE(zeroslam_get_imu_calibration(nullptr, &calibration) == zeroslam_return_failure_invalid_system);
+        REQUIRE(zeroslam_get_imu_calibration(system, nullptr) == zeroslam_return_failure_invalid_argument);
+        REQUIRE(zeroslam_get_imu_calibration(system, &calibration) == zeroslam_return_failure_invalid_rig_sensor);
+        // Refining the gyroscope is off unless the configuration asks for it, and an unknown value is refused.
+        {
+            int length = 0;
+            REQUIRE(zeroslam_get_configuration(system, nullptr, &length) == zeroslam_return_failure_insufficient_data_length);
+            std::vector<char> buffer(static_cast<size_t>(length) + 16u, '\0');
+            int capacity = static_cast<int>(buffer.size());
+            REQUIRE(zeroslam_get_configuration(system, buffer.data(), &capacity) == zeroslam_return_success);
+            REQUIRE(std::strstr(buffer.data(), "\nimu_calibration=off\n") != nullptr);
+            const char* const unknown = "imu_calibration=accelerometer\n";
+            REQUIRE(zeroslam_set_configuration(system, unknown, static_cast<int>(std::strlen(unknown))) == zeroslam_return_failure_invalid_configuration);
+            const char* const gyroscope = "imu_calibration=gyroscope\n";
+            REQUIRE(zeroslam_set_configuration(system, gyroscope, static_cast<int>(std::strlen(gyroscope))) == zeroslam_return_success);
+            capacity = static_cast<int>(buffer.size());
+            REQUIRE(zeroslam_get_configuration(system, buffer.data(), &capacity) == zeroslam_return_success);
+            REQUIRE(std::strstr(buffer.data(), "\nimu_calibration=gyroscope\n") != nullptr);
+            const char* const off = "imu_calibration=off\n";
+            REQUIRE(zeroslam_set_configuration(system, off, static_cast<int>(std::strlen(off))) == zeroslam_return_success);
+            capacity = static_cast<int>(buffer.size());
+            REQUIRE(zeroslam_get_configuration(system, buffer.data(), &capacity) == zeroslam_return_success);
+            REQUIRE(std::strstr(buffer.data(), "\nimu_calibration=off\n") != nullptr);
+            REQUIRE(zeroslam_set_configuration(system, gyroscope, static_cast<int>(std::strlen(gyroscope))) == zeroslam_return_success);
+        }
         REQUIRE(zeroslam_set_sensor_rig(system, &rig[1], 1) == zeroslam_return_failure_invalid_rig_sensor);
         REQUIRE(zeroslam_set_sensor_rig(system, &rig[0], 3) == zeroslam_return_failure_invalid_rig_sensor);
         rig[1].sensor_id = 1;
@@ -181,6 +233,14 @@ int main(int argc, char* argv[]) {
         REQUIRE((held[0].sensor_id == 1) && (held[1].sensor_id == 2));
         REQUIRE(held[1].pose[0] == 0.1);
         REQUIRE(held[1].refinement == zeroslam_extrinsic_fixed);
+        // The imu's calibration is there once it is declared, the gyroscope's matrix zero until an adjustment has refined it.
+        calibration.sensor_id = 0;
+        calibration.refinements = 7;
+        calibration.gyroscope[4] = 1.0;
+        REQUIRE(zeroslam_get_imu_calibration(system, &calibration) == zeroslam_return_success);
+        REQUIRE(calibration.sensor_id == 2);
+        REQUIRE(calibration.refinements == 0);
+        REQUIRE(calibration.gyroscope[4] == 0.0);
 
         zeroslam_sensor_measurement_imu_struct still{};
         still.linear_acceleration[1] = -9.81;
@@ -237,6 +297,13 @@ int main(int argc, char* argv[]) {
         zeroslam_pose_struct pose{};
         REQUIRE(zeroslam_get_pose(system, &pose) == zeroslam_return_success);
         REQUIRE(pose.timestamp > 1000000000ll);
+        // A second and a half without a turn refines nothing of the gyroscope, asked for or not.
+        REQUIRE(zeroslam_get_imu_calibration(system, &calibration) == zeroslam_return_success);
+        REQUIRE(calibration.sensor_id == 2);
+        REQUIRE(calibration.refinements == 0);
+        for (const double entry_value : calibration.gyroscope) {
+            REQUIRE(entry_value == 0.0);
+        }
         REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
     }
 

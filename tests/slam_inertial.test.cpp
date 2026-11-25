@@ -91,6 +91,90 @@ namespace {
     math::matrix<double, 3, 1> centre_of(const math::matrix<double, 3, 3>& rotation, const math::matrix<double, 3, 1>& translation) {
         return math::matrix<double, 3, 1>(-(math::transpose(rotation) * translation));
     }
+
+    // What a run with a gyroscope that is scaled and misaligned ends with: the gyroscope's matrix as the map holds it, and how far
+    // the frames are from the truth, each taken from the first posed frame so that no alignment is fitted.
+    struct misaligned_outcome final {
+        sensor::imu::intrinsics estimate;
+        size_t refinements = 0;
+        size_t posed = 0;
+        double rotation_error = 0.0;
+        double position_error = 0.0;
+    };
+
+    // Thirty seconds of the camera and imu of the test below at ten frames a second, the imu's gyroscope measuring through the
+    // inverse of the given matrix, with the matrix refined or held at zero.
+    misaligned_outcome run_misaligned(const sensor::imu::intrinsics& true_intrinsics, const bool refine) {
+        simulation::imu_trajectory::options motion;
+        motion.position_amplitude = 0.6;
+        motion.rotation_amplitude = 0.25;
+        motion.seed = 3;
+        const simulation::imu_trajectory trajectory = simulation::imu_trajectory::generate(motion);
+        const math::se3<double> camera_from_imu(math::so3<double>::exp({ { 0.05, -0.1, 0.02 } }), { { 0.03, -0.02, 0.05 } });
+        constexpr static const int frames = 300;
+        constexpr static const long long period = 100000000ll;
+        sensor::imu::parameters noise;
+        simulation::imu_sensor::options sensor_options;
+        sensor_options.initial_bias.gyroscope = { { 0.003, -0.002, 0.004 } };
+        sensor_options.initial_bias.accelerometer = { { 0.03, -0.02, 0.04 } };
+        sensor_options.end = 2000000000ll + (period * frames);
+        sensor_options.intrinsics = true_intrinsics;
+        const simulation::imu_sensor::recording recording = simulation::imu_sensor::generate(trajectory, noise, sensor_options);
+        const math::so3<double> optical = math::so3<double>(math::matrix<double, 3, 3>({ { { 0.0, -1.0, 0.0 }, { 0.0, 0.0, -1.0 }, { 1.0, 0.0, 0.0 } } }));
+        const math::se3<double> imu_from_camera = math::se3<double>(optical.inverse(), math::matrix<double, 3, 1>::zero()) * camera_from_imu.inverse();
+        const math::se3<double> body_from_imu = imu_from_camera.inverse();
+
+        mapping::rig rig;
+        rig.add(1, mapping::rig::sensor_kind::camera, math::se3<double>::identity(), false);
+        slam system;
+        if (refine) {
+            system.frontend.imu_calibration = mapping::frame::settings::imu_calibration_kind::gyroscope;
+        }
+        system.set_rig(rig);
+        system.set_imu(2, noise, body_from_imu, false);
+        const double parameters[4] = { focal, focal, 0.5 * width, 0.5 * height };
+        const std::vector<sensor::model> cameras(1, sensor::model(sensor::camera::pinhole<double>(&parameters[0], 4)));
+        std::vector<math::se3<double>> truth;
+        size_t next_sample = 0;
+        for (int i = 0; i < frames; ++i) {
+            const long long timestamp = 1000000000ll + (period * i);
+            while ((next_sample < recording.samples.size()) && (recording.samples[next_sample].timestamp <= timestamp)) {
+                REQUIRE(system.add_imu_sample(recording.samples[next_sample]));
+                ++next_sample;
+            }
+            truth.push_back(body_from_imu * trajectory.world_to_imu(1.0e-9 * static_cast<double>(timestamp)));
+            std::vector<image::image> images;
+            images.emplace_back(static_cast<size_t>(height), static_cast<size_t>(width));
+            render_room(truth.back(), images[0]);
+            system.set_frame_timestamp(timestamp);
+            system.process_rig_frame(cameras, images);
+        }
+        system.finalise();
+        REQUIRE(system.inertial_initialised());
+        REQUIRE(system.reconstruction.inertial_state.gyroscope().refined() == refine);
+
+        misaligned_outcome outcome;
+        outcome.estimate = system.reconstruction.inertial_state.gyroscope().estimate();
+        outcome.refinements = system.reconstruction.inertial_state.gyroscope().refinements();
+        int first_id = -1;
+        for (int i = 0; (i < frames) && (first_id < 0); ++i) {
+            first_id = (system.reconstruction.frames.count(i) != 0) ? i : -1;
+        }
+        REQUIRE(first_id >= 0);
+        const mapping::frame& first_frame = system.reconstruction.frames.at(first_id);
+        const math::se3<double> first_pose(math::so3<double>(first_frame.rotation), first_frame.translation);
+        for (const auto& [frame_id, frame] : system.reconstruction.frames) {
+            ++outcome.posed;
+            const math::se3<double> from_first = math::se3<double>(math::so3<double>(frame.rotation), frame.translation) * first_pose.inverse();
+            const math::se3<double> truth_from_first = truth[static_cast<size_t>(frame_id)] * truth[static_cast<size_t>(first_id)].inverse();
+            outcome.rotation_error += (from_first.rotation().inverse() * truth_from_first.rotation()).normalised().log().get_length_squared();
+            outcome.position_error += (centre_of(from_first.rotation().get_matrix(), from_first.translation()) - centre_of(truth_from_first.rotation().get_matrix(), truth_from_first.translation())).get_length_squared();
+        }
+        REQUIRE(outcome.posed > static_cast<size_t>(frames - 20));
+        outcome.rotation_error = std::sqrt(outcome.rotation_error / static_cast<double>(outcome.posed));
+        outcome.position_error = std::sqrt(outcome.position_error / static_cast<double>(outcome.posed));
+        return outcome;
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -185,5 +269,36 @@ int main(int argc, char* argv[]) {
     REQUIRE(posed > static_cast<size_t>(frames - 20));
     REQUIRE(std::abs(median - 1.0) < 0.05);
     REQUIRE(gravity_error < 2.0);
+    // The gyroscope was taken as it is: its matrix was not asked for, and stayed zero.
+    REQUIRE(!system.reconstruction.inertial_state.gyroscope().refined());
+    REQUIRE(system.reconstruction.inertial_state.gyroscope().refinements() == 0);
+    REQUIRE(system.reconstruction.inertial_state.gyroscope().estimate().gyroscope == (math::matrix<double, 3, 3>::zero()));
+
+    // The same camera and imu with a gyroscope whose axes are scaled by about a percent and misaligned by about half a degree,
+    // for thirty seconds. With the matrix refined (imu_calibration=gyroscope) the adjustments of the whole map after the
+    // initialisation's refinements find it, short of the truth by what its prior holds back (within 0.0017 of entries up to 0.012,
+    // after four of them), and the frames end nearer the truth than with the gyroscope taken as it is: 2.1 mrad and 7 mm from it
+    // for 4.9 mrad and 18 mm.
+    {
+        sensor::imu::intrinsics true_intrinsics;
+        true_intrinsics.gyroscope = { { { 0.010, 0.0087, -0.0052 }, { -0.0070, -0.012, 0.0061 }, { 0.0044, -0.0079, 0.008 } } };
+        const misaligned_outcome held = run_misaligned(true_intrinsics, false);
+        const misaligned_outcome refined = run_misaligned(true_intrinsics, true);
+        REQUIRE(held.refinements == 0);
+        REQUIRE(held.estimate.gyroscope == (math::matrix<double, 3, 3>::zero()));
+        REQUIRE(refined.refinements >= 1);
+        double largest = 0.0;
+        double largest_entry = 0.0;
+        for (size_t i = 0; i < 9; ++i) {
+            largest = std::max(largest, std::abs(refined.estimate.gyroscope.data()[i] - true_intrinsics.gyroscope.data()[i]));
+            largest_entry = std::max(largest_entry, std::abs(true_intrinsics.gyroscope.data()[i]));
+        }
+        const math::matrix<double, 3, 3>& m = refined.estimate.gyroscope;
+        std::printf("Gyroscope matrix after %zu refinements: [%.5f %.5f %.5f; %.5f %.5f %.5f; %.5f %.5f %.5f], within %.5f of the truth; %zu frames %.2f mrad and %.1f mm from the truth, %.2f mrad and %.1f mm with the matrix held at zero.\n", refined.refinements, m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2], largest, refined.posed, 1.0e3 * refined.rotation_error, 1.0e3 * refined.position_error, 1.0e3 * held.rotation_error, 1.0e3 * held.position_error);
+        std::fflush(stdout);
+        REQUIRE(largest < 0.4 * largest_entry);
+        REQUIRE(refined.rotation_error < 0.8 * held.rotation_error);
+        REQUIRE(refined.position_error < 0.9 * held.position_error);
+    }
     return EXIT_SUCCESS;
 }

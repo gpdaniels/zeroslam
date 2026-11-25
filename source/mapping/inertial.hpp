@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define ZEROSLAM_MAPPING_INERTIAL_HPP
 
 #include "mapping/frame.hpp"
+#include "mapping/gyroscope_intrinsics.hpp"
 #include "mapping/rig.hpp"
 #include "math/lie.hpp"
 #include "math/matrix.hpp"
@@ -53,6 +54,10 @@ namespace mapping {
     // a new chain, its first keyframe tied to nothing before it. A chain is initialised once the window of its keyframes has given
     // the direction of gravity, the scale where the map has none, the velocities and the biases; from then on its keyframes carry
     // a velocity and a bias and every adjustment of two consecutive ones holds them with an inertial edge and a random walk edge.
+    //
+    // The gyroscope's matrix of scale and misalignment is one for the whole map (mapping::gyroscope_intrinsics): when it is asked
+    // for, the inertial edges share its vertex, free in the adjustments of the whole map once the motion shows it, and the samples
+    // are preintegrated at it from then on.
     class inertial final {
     public:
         struct keyframe_state final {
@@ -72,6 +77,8 @@ namespace mapping {
             std::vector<std::pair<int, optimisation::vertex*>> velocities;
             std::vector<std::pair<int, optimisation::vertex*>> biases;
             optimisation::vertex* extrinsic = nullptr;
+            // The gyroscope's matrix, free or held, null when the edges take none.
+            optimisation::vertex* gyroscope = nullptr;
             size_t edges = 0;
         };
 
@@ -92,6 +99,7 @@ namespace mapping {
         size_t chain_ = 0;
         math::matrix<double, 3, 1> gravity_ = math::matrix<double, 3, 1>::zero();
         bool gravity_known_ = false;
+        mapping::gyroscope_intrinsics gyroscope_;
 
     public:
         void declare(const int sensor_id, const sensor::imu::parameters& noise);
@@ -109,7 +117,12 @@ namespace mapping {
         void set_frame_time(const int frame_id, const long long timestamp);
         bool frame_time(const int frame_id, long long& timestamp) const;
 
-        // Preintegrates the samples between two timestamps at a bias, holding the last sample a moment past it if need be.
+        // The gyroscope's matrix as the map holds it, and whether and when it is refined.
+        mapping::gyroscope_intrinsics& gyroscope();
+        const mapping::gyroscope_intrinsics& gyroscope() const;
+
+        // Preintegrates the samples between two timestamps at a bias and at the gyroscope's matrix as it is held, holding the last
+        // sample a moment past it if need be.
         bool preintegrate(const long long start, const long long end, const sensor::imu::bias& linearisation, sensor::imu::preintegration& result) const;
 
         // Adds a keyframe to the current chain, preintegrated from the one before it in the chain and, once the chain is
@@ -147,10 +160,13 @@ namespace mapping {
 
         // Adds the velocities, biases and inertial edges of the estimated keyframes among the posed ones, and of the keyframe
         // before each, held where its pose is held or not posed in the adjustment. The extrinsic is refined where the rig asks for
-        // it, unless held.
-        factors add_factors(optimisation::factor_graph& graph, const std::unordered_map<int, optimisation::vertex*>& poses, const std::unordered_map<int, mapping::frame>& frames, const mapping::rig& rig, const bool hold_extrinsic) const;
+        // it, unless held. The gyroscope's matrix, where it is asked for, is a vertex of every edge, free in an adjustment of the
+        // whole map that does not hold the extrinsic, once the measurements turn enough (mapping::gyroscope_intrinsics), with its
+        // prior, and held otherwise; where it is free the keyframes whose poses are held free their velocities and biases.
+        factors add_factors(optimisation::factor_graph& graph, const std::unordered_map<int, optimisation::vertex*>& poses, const std::unordered_map<int, mapping::frame>& frames, const mapping::rig& rig, const bool hold_extrinsic, const bool whole_map = false) const;
 
-        // Takes the velocities, biases and extrinsic an adjustment left, integrating again what the new biases move too far.
+        // Takes the velocities, biases, extrinsic and gyroscope's matrix an adjustment left, integrating again what the new biases
+        // or the new matrix move too far.
         void read_factors(const factors& held, mapping::rig& rig);
     };
 }

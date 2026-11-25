@@ -299,6 +299,12 @@ def main():
         pose = zeroslam.zeroslam_pose_struct()
         require(inertial.get_pose(pose) == success, "get_pose (camera and imu)")
         print("newest pose (camera and imu): timestamp {}, centre ({:.3f}, {:.3f}, {:.3f})".format(pose.timestamp, pose.pose[0], pose.pose[1], pose.pose[2]))
+        # The imu's calibration: the matrix of its gyroscope's scale and misalignment, zero until an adjustment refines it, which the
+        # configuration's imu_calibration key asks for.
+        imu_calibration = zeroslam.zeroslam_imu_calibration_struct()
+        result = inertial.get_imu_calibration(imu_calibration)
+        print("get_imu_calibration: {} (sensor {}, gyroscope refined {} times, diagonal {:.4f} {:.4f} {:.4f})".format(result.name, imu_calibration.sensor_id, imu_calibration.refinements, imu_calibration.gyroscope[0], imu_calibration.gyroscope[4], imu_calibration.gyroscope[8]))
+        require(result == success, "get_imu_calibration")
     return 0
 
 

@@ -190,6 +190,17 @@ namespace process_imu {
         selected.pending.clear();
         return true;
     }
+
+    // Writes the imu's calibration as the library holds it at the end of the run: the matrix of the gyroscope's scale and
+    // misalignment, zero unless the imu_calibration key had it refined.
+    inline void report_calibration(const zeroslam::system& slam) {
+        zeroslam_imu_calibration_struct calibration{};
+        if (slam.get_imu_calibration(&calibration) != zeroslam_return_success) {
+            return;
+        }
+        const double* const m = calibration.gyroscope;
+        std::printf("Gyroscope of sensor %d (refined %d times): [%.6f %.6f %.6f; %.6f %.6f %.6f; %.6f %.6f %.6f]\n", calibration.sensor_id, calibration.refinements, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]);
+    }
 }
 
 #endif // ZEROSLAM_TOOLS_PROCESS_IMU_HPP

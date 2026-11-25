@@ -156,6 +156,13 @@ namespace mapping {
                 refine
             };
             extrinsics_kind extrinsics = extrinsics_kind::declared;
+            // Which of an imu's own calibration the adjustments of the whole map refine: none, or the matrix of its gyroscope's
+            // scale and misalignment (mapping::gyroscope_intrinsics).
+            enum class imu_calibration_kind {
+                off,
+                gyroscope
+            };
+            imu_calibration_kind imu_calibration = imu_calibration_kind::off;
             bool inverse_depth = true;
             bool fixed_budget = false;
             int pose_outlier_limit = 0;

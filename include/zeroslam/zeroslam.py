@@ -194,6 +194,15 @@ class zeroslam_odometry_calibration_struct(_ctypes.Structure):
         ("pose", _ctypes.c_double * 7)
     ]
 
+class zeroslam_imu_calibration_struct(_ctypes.Structure):
+    """An imu's calibration as the system holds it: the gyroscope's matrix M, row by row, with (I + M) * measured - bias."""
+    _pack_ = 1
+    _fields_ = [
+        ("sensor_id", _ctypes.c_int),
+        ("refinements", _ctypes.c_int),
+        ("gyroscope", _ctypes.c_double * 9)
+    ]
+
 class zeroslam_sensor_data_struct(_ctypes.Structure):
     _pack_ = 1
     _fields_ = [
@@ -321,6 +330,7 @@ assert _ctypes.sizeof(zeroslam_sensor_measurement_imu_struct) == 48
 assert _ctypes.sizeof(zeroslam_sensor_extrinsics_struct) == 64
 assert _ctypes.sizeof(zeroslam_sensor_parameters_wheel_odometry_struct) == 248
 assert _ctypes.sizeof(zeroslam_odometry_calibration_struct) == 128
+assert _ctypes.sizeof(zeroslam_imu_calibration_struct) == 80
 assert _ctypes.sizeof(zeroslam_sensor_data_struct) == 16 + _ctypes.sizeof(_ctypes.c_void_p)
 assert _ctypes.sizeof(zeroslam_pose_struct) == 456
 assert _ctypes.sizeof(zeroslam_point_struct) == 32
@@ -415,6 +425,11 @@ zeroslam_get_sensor_extrinsics = _wrap("zeroslam_get_sensor_extrinsics", [
 zeroslam_get_odometry_calibration = _wrap("zeroslam_get_odometry_calibration", [
     _ctypes.POINTER(zeroslam_system),
     _ctypes.POINTER(zeroslam_odometry_calibration_struct)
+])
+
+zeroslam_get_imu_calibration = _wrap("zeroslam_get_imu_calibration", [
+    _ctypes.POINTER(zeroslam_system),
+    _ctypes.POINTER(zeroslam_imu_calibration_struct)
 ])
 
 zeroslam_set_sensor_data = _wrap("zeroslam_set_sensor_data", [
@@ -538,6 +553,9 @@ class system:
     def get_odometry_calibration(self, calibration):
         return zeroslam_return_enum(zeroslam_get_odometry_calibration(self._handle, _ctypes.byref(calibration)))
 
+    def get_imu_calibration(self, calibration):
+        return zeroslam_return_enum(zeroslam_get_imu_calibration(self._handle, _ctypes.byref(calibration)))
+
     def set_sensor_data(self, data, length):
         return zeroslam_return_enum(zeroslam_set_sensor_data(self._handle, data, length))
 
@@ -588,6 +606,7 @@ __all__ = [
     "zeroslam_odometry_model_enum",
     "zeroslam_sensor_parameters_wheel_odometry_struct",
     "zeroslam_odometry_calibration_struct",
+    "zeroslam_imu_calibration_struct",
     "zeroslam_sensor_data_struct",
     "zeroslam_pose_struct",
     "zeroslam_point_struct",
@@ -609,6 +628,7 @@ __all__ = [
     "zeroslam_set_sensor_extrinsics",
     "zeroslam_get_sensor_extrinsics",
     "zeroslam_get_odometry_calibration",
+    "zeroslam_get_imu_calibration",
     "zeroslam_set_sensor_data",
     "zeroslam_finalise",
     "zeroslam_get_camera_calibration",

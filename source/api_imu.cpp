@@ -108,6 +108,19 @@ void api_imu::fill_extrinsic(const mapping::rig& held, zeroslam_sensor_extrinsic
     value.pose[6] = quaternion[0];
 }
 
+bool api_imu::fill_calibration(const mapping::inertial& held, zeroslam_imu_calibration_struct* const calibration) const {
+    if (!this->declared_ || (calibration == nullptr)) {
+        return false;
+    }
+    const mapping::gyroscope_intrinsics& gyroscope = held.gyroscope();
+    calibration->sensor_id = this->sensor_id_;
+    calibration->refinements = static_cast<int>(gyroscope.refinements());
+    for (size_t i = 0; i < 9; ++i) {
+        calibration->gyroscope[i] = gyroscope.estimate().gyroscope.data()[i];
+    }
+    return true;
+}
+
 sensor::imu::parameters api_imu::noise() const {
     sensor::imu::parameters noise;
     noise.gyroscope_noise_density = this->parameters_.gyroscope_noise_density;

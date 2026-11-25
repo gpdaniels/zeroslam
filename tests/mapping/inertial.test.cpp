@@ -19,11 +19,15 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "mapping/frame.hpp"
 #include "mapping/rig.hpp"
 #include "math/lie.hpp"
+#include "optimisation/edge.hpp"
+#include "optimisation/edges/prior.hpp"
 #include "optimisation/factor_graph.hpp"
 #include "optimisation/vertex.hpp"
 #include "optimisation/vertices/pose.hpp"
 #include "sensor/imu/measurement.hpp"
+#include "sensor/imu/preintegration.hpp"
 #include "simulation/imu.hpp"
+#include "simulation/scene.hpp"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -229,5 +233,172 @@ int main(int argc, char* argv[]) {
     math::matrix<double, 3, 1> translation;
     math::matrix<double, 3, 1> velocity;
     REQUIRE(!state.predict(5300000000ll, frames, rig, rotation, translation, velocity));
+
+    // The gyroscope's matrix. An imu with the EuRoC imu's noise whose gyroscope is scaled by about a percent and misaligned by
+    // about half a degree, over thirty seconds of keyframes 0.4 s apart that vision poses to a milliradian and two millimetres: a
+    // prior on each pose at the truth with that noise stands for the landmarks. Asked for, the matrix is a vertex of every
+    // inertial edge, held in a window and until the initialisation has settled, and free in an adjustment of the whole map, where
+    // it comes out as the truth's and the keyframes nearer the truth than with the gyroscope taken as it is.
+    {
+        sensor::imu::intrinsics true_intrinsics;
+        true_intrinsics.gyroscope = { { { 0.010, 0.0087, -0.0052 }, { -0.0070, -0.012, 0.0061 }, { 0.0044, -0.0079, 0.008 } } };
+        simulation::imu_sensor::options misaligned_options;
+        misaligned_options.initial_bias.gyroscope = { { 0.003, -0.002, 0.004 } };
+        misaligned_options.initial_bias.accelerometer = { { 0.03, -0.02, 0.04 } };
+        misaligned_options.end = 32000000000ll;
+        misaligned_options.intrinsics = true_intrinsics;
+        const simulation::imu_sensor::recording misaligned = simulation::imu_sensor::generate(trajectory, noise, misaligned_options);
+        constexpr static const int keyframe_count = 76;
+        const auto keyframe_time = [](const int id) {
+            return 1000000000ll + (400000000ll * id);
+        };
+        // What vision makes of the keyframes: the truth, each off by a milliradian and two millimetres an axis.
+        std::unordered_map<int, mapping::frame> seen;
+        simulation::random_stream random(29);
+        for (int id = 0; id < keyframe_count; ++id) {
+            seen[id] = make_frame(id, 1.0e-9 * static_cast<double>(keyframe_time(id)));
+            if (id > 0) {
+                const math::se3<double> off = math::se3<double>::exp({ { 1.0e-3 * random.gaussian(), 1.0e-3 * random.gaussian(), 1.0e-3 * random.gaussian(), 2.0e-3 * random.gaussian(), 2.0e-3 * random.gaussian(), 2.0e-3 * random.gaussian() } });
+                const math::se3<double> pose = off * math::se3<double>(math::so3<double>(seen[id].rotation), seen[id].translation);
+                seen[id].rotation = pose.rotation().get_matrix();
+                seen[id].translation = pose.translation();
+            }
+        }
+        math::matrix<double, 0, 0> vision_information = math::matrix<double, 0, 0>::zero(6, 6);
+        for (size_t i = 0; i < 3; ++i) {
+            vision_information[i][i] = 1.0 / (1.0e-3 * 1.0e-3);
+            vision_information[3 + i][3 + i] = 1.0 / (2.0e-3 * 2.0e-3);
+        }
+
+        struct outcome final {
+            double rotation_error = 0.0;
+            double position_error = 0.0;
+            sensor::imu::intrinsics estimate;
+            size_t refinements = 0;
+        };
+
+        const auto run = [&](const bool refine) {
+            mapping::inertial imu;
+            imu.declare(7, noise);
+            for (const sensor::imu::sample& sample : misaligned.samples) {
+                REQUIRE(imu.add_sample(sample));
+            }
+            imu.set_gravity(trajectory.gravity());
+            imu.set_chain_initialised(imu.chain());
+            imu.gyroscope().set_refined(refine);
+            std::unordered_map<int, mapping::frame> posed = seen;
+            for (int id = 0; id < keyframe_count; ++id) {
+                imu.set_frame_time(id, keyframe_time(id));
+                imu.add_keyframe(id, posed, rig);
+                mapping::inertial::keyframe_state& keyframe = imu.keyframes().at(id);
+                keyframe.velocity = trajectory.velocity(1.0e-9 * static_cast<double>(keyframe.timestamp));
+                // The first keyframe is held with its bias, the one the initialisation would leave it, which the rest start from.
+                keyframe.bias = misaligned.biases.front();
+                keyframe.estimated = true;
+            }
+            // Whether the edges of an adjustment took the matrix's vertex, and whether it was free.
+            struct taken final {
+                bool vertex = false;
+                bool free = false;
+            };
+            const auto adjust = [&](const bool whole_map, const bool hold, const bool solve) {
+                optimisation::factor_graph graph;
+                std::unordered_map<int, optimisation::vertex*> poses;
+                for (int id = 0; id < keyframe_count; ++id) {
+                    const math::se3<double> pose(posed.at(id).rotation, posed.at(id).translation);
+                    optimisation::vertex node{ optimisation::vertices::pose() };
+                    const double parameters[7] = { pose.translation()[0], pose.translation()[1], pose.translation()[2], pose.rotation().get_quaternion()[1], pose.rotation().get_quaternion()[2], pose.rotation().get_quaternion()[3], pose.rotation().get_quaternion()[0] };
+                    REQUIRE(node.set_parameters(&parameters[0], 7));
+                    node.set_fixed(id == 0);
+                    poses[id] = graph.add_vertex(static_cast<optimisation::vertex&&>(node));
+                    if (id > 0) {
+                        const math::se3<double> prior(seen.at(id).rotation, seen.at(id).translation);
+                        const double prior_parameters[7] = { prior.translation()[0], prior.translation()[1], prior.translation()[2], prior.rotation().get_quaternion()[1], prior.rotation().get_quaternion()[2], prior.rotation().get_quaternion()[3], prior.rotation().get_quaternion()[0] };
+                        optimisation::edge vision{ optimisation::edges::pose_prior() };
+                        vision.set_observation(math::matrix<double, 0, 0>(7, 1, &prior_parameters[0]));
+                        vision.set_information(vision_information);
+                        REQUIRE(vision.add_vertex(poses[id]));
+                        REQUIRE(graph.add_edge(static_cast<optimisation::edge&&>(vision)) != nullptr);
+                    }
+                }
+                const mapping::inertial::factors factors = imu.add_factors(graph, poses, posed, rig, hold, whole_map);
+                REQUIRE(factors.edges == static_cast<size_t>(keyframe_count - 1));
+                taken result;
+                result.vertex = factors.gyroscope != nullptr;
+                result.free = result.vertex && !factors.gyroscope->is_fixed();
+                if (!solve) {
+                    return result;
+                }
+                REQUIRE(graph.solve(30, true) > 0);
+                for (const auto& [id, node] : poses) {
+                    const double* const p = node->get_parameters();
+                    const math::se3<double> pose(math::so3<double>(p[6], p[3], p[4], p[5]), { { p[0], p[1], p[2] } });
+                    posed.at(id).rotation = pose.rotation().get_matrix();
+                    posed.at(id).translation = pose.translation();
+                }
+                mapping::rig read = rig;
+                imu.read_factors(factors, read);
+                return result;
+            };
+            if (!refine) {
+                // Not asked for, the edges take no matrix.
+                REQUIRE(!adjust(true, false, false).vertex);
+            }
+            else {
+                // Held until the initialisation has settled, in a window, and where the calibrations are held.
+                taken matrix = adjust(true, false, false);
+                REQUIRE(matrix.vertex && !matrix.free);
+                imu.gyroscope().set_settled(true);
+                matrix = adjust(false, false, false);
+                REQUIRE(matrix.vertex && !matrix.free);
+                matrix = adjust(true, true, false);
+                REQUIRE(matrix.vertex && !matrix.free);
+                matrix = adjust(true, false, false);
+                REQUIRE(matrix.vertex && matrix.free);
+            }
+            // Three adjustments of the whole map, as they come while a map grows: the measurements are integrated again at the
+            // matrix and the biases the first one leaves.
+            for (int round = 0; round < 3; ++round) {
+                static_cast<void>(adjust(true, false, true));
+            }
+            outcome result;
+            result.estimate = imu.gyroscope().estimate();
+            result.refinements = imu.gyroscope().refinements();
+            for (int id = 1; id < keyframe_count; ++id) {
+                const mapping::frame truth = make_frame(id, 1.0e-9 * static_cast<double>(keyframe_time(id)));
+                const math::se3<double> error = math::se3<double>(math::so3<double>(posed.at(id).rotation), posed.at(id).translation) * math::se3<double>(math::so3<double>(truth.rotation), truth.translation).inverse();
+                result.rotation_error += error.rotation().log().get_length_squared();
+                result.position_error += error.translation().get_length_squared();
+            }
+            result.rotation_error = std::sqrt(result.rotation_error / (keyframe_count - 1));
+            result.position_error = std::sqrt(result.position_error / (keyframe_count - 1));
+            if (refine) {
+                // The measurements are integrated at the matrix from then on, the new ones and those it moved too far.
+                REQUIRE(imu.keyframes().at(keyframe_count - 1).from_previous.get_linearisation_intrinsics().gyroscope != (math::matrix<double, 3, 3>::zero()));
+                sensor::imu::preintegration fresh;
+                REQUIRE(imu.preintegrate(keyframe_time(keyframe_count - 2), keyframe_time(keyframe_count - 1), sensor::imu::bias(), fresh));
+                REQUIRE(fresh.get_linearisation_intrinsics().gyroscope == result.estimate.gyroscope);
+            }
+            return result;
+        };
+        const outcome held = run(false);
+        const outcome refined = run(true);
+        REQUIRE(held.refinements == 0);
+        REQUIRE(held.estimate.gyroscope == (math::matrix<double, 3, 3>::zero()));
+        REQUIRE(refined.refinements == 3);
+        double largest = 0.0;
+        for (size_t i = 0; i < 9; ++i) {
+            largest = std::fmax(largest, std::abs(refined.estimate.gyroscope.data()[i] - true_intrinsics.gyroscope.data()[i]));
+        }
+        const math::matrix<double, 3, 3>& m = refined.estimate.gyroscope;
+        std::printf("Gyroscope matrix: [%.5f %.5f %.5f; %.5f %.5f %.5f; %.5f %.5f %.5f], largest error %.5f; keyframes %.2f mrad and %.2f mm from the truth, %.2f mrad and %.2f mm with the matrix held at zero.\n", m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2], largest, 1.0e3 * refined.rotation_error, 1.0e3 * refined.position_error, 1.0e3 * held.rotation_error, 1.0e3 * held.position_error);
+        std::fflush(stdout);
+        // The entries are 0.004 to 0.012, and come out within 0.0008; the keyframes are 0.5 mrad and 1.3 mm from the truth, where
+        // the gyroscope taken as it is leaves them 6.6 mrad and 7.0 mm from it.
+        REQUIRE(largest < 1.0e-3);
+        REQUIRE(refined.rotation_error < 1.0e-3);
+        REQUIRE(refined.rotation_error < 0.2 * held.rotation_error);
+        REQUIRE(refined.position_error < 0.5 * held.position_error);
+    }
     return EXIT_SUCCESS;
 }
