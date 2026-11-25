@@ -53,7 +53,8 @@ private:
 public:
     static bool cameras_supported(const size_t count);
 
-    // Takes the extrinsics of sensors among the rig's, each once, with a rotation and a known refinement; nothing on failure.
+    // Takes the extrinsics of sensors among the rig's, each once, with a rotation and a known refinement, the others keeping
+    // theirs; nothing on failure.
     bool set_extrinsics(const zeroslam_sensor_extrinsics_struct* const values, const int length, const std::vector<int>& sensor_ids);
 
     void clear_extrinsics();

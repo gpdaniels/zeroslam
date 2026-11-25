@@ -48,6 +48,16 @@ bool api_rig::set_extrinsics(const zeroslam_sensor_extrinsics_struct* const valu
         }
         accepted.push_back(entry);
     }
+    // The sensors the call does not name keep the extrinsics given before.
+    for (const zeroslam_sensor_extrinsics_struct& previous : this->extrinsics) {
+        bool named = false;
+        for (const zeroslam_sensor_extrinsics_struct& entry : accepted) {
+            named = named || (entry.sensor_id == previous.sensor_id);
+        }
+        if (!named) {
+            accepted.push_back(previous);
+        }
+    }
     this->extrinsics.swap(accepted);
     return true;
 }

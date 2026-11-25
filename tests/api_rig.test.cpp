@@ -81,6 +81,17 @@ int main(int argc, char* argv[]) {
         REQUIRE(std::abs(made.reference_from_sensor(1).translation()[0] - 0.11) < 1e-12);
         REQUIRE(std::abs(made.reference_from_sensor(1).translation()[2] - 0.05) < 1e-12);
         REQUIRE(made.metric());
+        // A later call sets the sensors it names and leaves the others as they were; a refused one changes nothing.
+        extrinsics[1].sensor_id = 9;
+        extrinsics[1].pose[0] = -0.11;
+        REQUIRE(rig.set_extrinsics(&extrinsics[1], 1, ids));
+        extrinsics[1].refinement = 3;
+        REQUIRE(!rig.set_extrinsics(&extrinsics[1], 1, ids));
+        const mapping::rig remade = rig.make_rig(ids);
+        REQUIRE(remade.at(0).body_from_sensor.translation()[2] == -0.05);
+        REQUIRE(remade.refines(1) && remade.refines(2));
+        REQUIRE(std::abs(remade.reference_from_sensor(1).translation()[0] - 0.11) < 1e-12);
+        REQUIRE(std::abs(remade.reference_from_sensor(2).translation()[0] + 0.11) < 1e-12);
         rig.clear_extrinsics();
         REQUIRE(!rig.make_rig(ids).metric());
     }
