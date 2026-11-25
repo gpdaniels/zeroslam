@@ -57,6 +57,10 @@ def print_pose(label, pose):
 def main():
     success = zeroslam.zeroslam_return_enum.zeroslam_return_success
 
+    # Every public class the module defines is exported.
+    unexported = [name for name, value in vars(zeroslam).items() if isinstance(value, type) and (value.__module__ == zeroslam.__name__) and not name.startswith("_") and (name not in zeroslam.__all__)]
+    require(not unexported, "__all__ exports {}".format(", ".join(unexported)))
+
     with zeroslam.system() as system:
         print("create: {}".format("success" if system.is_valid() else "failure"))
         require(system.is_valid(), "system.is_valid()")

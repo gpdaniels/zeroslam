@@ -580,6 +580,8 @@ __all__ = [
     "zeroslam_depth_measure_enum",
     "zeroslam_depth_registration_enum",
     "zeroslam_sensor_parameters_depth_struct",
+    "zeroslam_sensor_parameters_imu_struct",
+    "zeroslam_sensor_measurement_imu_struct",
     "zeroslam_sensor_rig_struct",
     "zeroslam_extrinsic_enum",
     "zeroslam_sensor_extrinsics_struct",
