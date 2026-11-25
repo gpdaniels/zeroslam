@@ -158,6 +158,15 @@ int main(int argc, char* argv[]) {
     }
 
     {
+        // The calibration over time: no chunks, as the calibration_drift key is off.
+        int chunks_length = -1;
+        result = system.get_calibration_drift(nullptr, &chunks_length);
+        std::printf("get_calibration_drift: %s (%d chunks)\n", zeroslam_return_enum_to_string(result), chunks_length);
+        REQUIRE(result == zeroslam_return_success);
+        REQUIRE(chunks_length == 0);
+    }
+
+    {
         zeroslam_pose_struct pose{};
         result = system.get_pose(&pose);
         std::printf("get_pose: %s\n", zeroslam_return_enum_to_string(result));

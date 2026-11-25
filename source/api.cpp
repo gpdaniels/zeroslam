@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "api.hpp"
 
+#include "api_calibration_drift.hpp"
 #include "api_depth.hpp"
 #include "api_imu.hpp"
 #include "api_odometry.hpp"
@@ -893,6 +894,11 @@ namespace {
                     return false;
                 }
             }
+            else if (const api_calibration_drift::parsed drift = api_calibration_drift::parse(line, key_length, value, value_length, frontend.calibration_drift); drift != api_calibration_drift::parsed::unknown) {
+                if (drift == api_calibration_drift::parsed::invalid) {
+                    return false;
+                }
+            }
             else if (token_equals(line, key_length, configuration_key_adjustment)) {
                 if (token_equals(value, value_length, "absolute")) {
                     frontend.adjustment = mapping::frame::settings::adjustment_kind::absolute;
@@ -960,12 +966,14 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_configuration(zeroslam_syste
     if (length == nullptr) {
         return zeroslam_return_failure_invalid_argument;
     }
-    const int required = print_configuration(nullptr, 0, system->slam_instance.frontend);
+    // The keys of the calibration's drift follow the rest, printed by their own leaf (api_calibration_drift.hpp).
+    const int required = print_configuration(nullptr, 0, system->slam_instance.frontend) + api_calibration_drift::print(nullptr, 0, system->slam_instance.frontend.calibration_drift);
     if ((configuration == nullptr) || (*length < required + 1)) {
         *length = required + 1;
         return zeroslam_return_failure_insufficient_data_length;
     }
     *length = print_configuration(configuration, static_cast<size_t>(required + 1), system->slam_instance.frontend);
+    *length += api_calibration_drift::print(configuration + *length, static_cast<size_t>(required + 1 - *length), system->slam_instance.frontend.calibration_drift);
     return zeroslam_return_success;
 }
 
@@ -1408,7 +1416,10 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_camera_calibration(zeroslam_
     // The system's camera as refined while the frames come with the rig's camera, which it was given last; the rig's before
     // the first frame. Each camera of a rig has its own.
     const mapping::calibration& held = system->slam_instance.calibration(camera_index);
-    const sensor::model& intrinsics = (system->any_data && held.get_given_camera().is_equal(camera->intrinsics)) ? held.get_camera() : camera->intrinsics;
+    const sensor::model& constant = (system->any_data && held.get_given_camera().is_equal(camera->intrinsics)) ? held.get_camera() : camera->intrinsics;
+    // Where the calibration is followed over time, the camera now is the newest chunk's (see zeroslam_get_calibration_drift).
+    const mapping::calibration_drift::chunk* const newest = system->slam_instance.calibration_drift().newest();
+    const sensor::model& intrinsics = ((newest != nullptr) && (camera_index < newest->cameras.size())) ? newest->cameras[camera_index].camera : constant;
     const char* const names[9] = { sensor::camera::pinhole<double>::name, sensor::camera::pinhole_radial_tangential<double>::name, sensor::camera::pinhole_opencv<double>::name, sensor::camera::kannala_brandt<double>::name, sensor::camera::field_of_view<double>::name, sensor::camera::unified<double>::name, sensor::camera::extended_unified<double>::name, sensor::camera::double_sphere<double>::name, sensor::camera::fisheye_624<double>::name };
     const zeroslam_camera_model_enum models[9] = { zeroslam_camera_model_pinhole, zeroslam_camera_model_radial_tangential, zeroslam_camera_model_opencv, zeroslam_camera_model_kannala_brandt, zeroslam_camera_model_field_of_view, zeroslam_camera_model_unified, zeroslam_camera_model_extended_unified, zeroslam_camera_model_double_sphere, zeroslam_camera_model_fisheye_624 };
     zeroslam_camera_model_enum model = zeroslam_camera_model_invalid;
@@ -1426,6 +1437,30 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_camera_calibration(zeroslam_
     if ((model == zeroslam_camera_model_invalid) || (count > 32) || !intrinsics.get_parameters(&calibration->parameters[0], count)) {
         return zeroslam_return_failure_invalid_argument;
     }
+    return zeroslam_return_success;
+}
+
+zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_calibration_drift(zeroslam_system* system, zeroslam_calibration_chunk_struct* chunks, int* length) {
+    if (system == nullptr) {
+        return zeroslam_return_failure_invalid_system;
+    }
+    if (length == nullptr) {
+        return zeroslam_return_failure_invalid_argument;
+    }
+    const mapping::calibration_drift& drift = system->slam_instance.calibration_drift();
+    const int required = api_calibration_drift::count(drift);
+    if ((required > 0) && ((chunks == nullptr) || (*length < required))) {
+        *length = required;
+        return zeroslam_return_failure_insufficient_data_length;
+    }
+    std::vector<int> sensor_ids;
+    for (const zeroslam_system::camera_entry& camera : system->cameras) {
+        sensor_ids.push_back(camera.sensor_id);
+    }
+    // The system holds a rig of several cameras once their data has come; the api holds a single camera's extrinsic.
+    const mapping::rig& held = system->slam_instance.reconstruction.sensor_rig;
+    api_calibration_drift::fill(drift, (held.camera_count() == sensor_ids.size()) ? held : system->rig.make_rig(sensor_ids), sensor_ids, chunks);
+    *length = required;
     return zeroslam_return_success;
 }
 

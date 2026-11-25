@@ -111,6 +111,18 @@ class zeroslam_sensor_parameters_camera_model_struct(_ctypes.Structure):
         ("parameters", _ctypes.c_double * 32)
     ]
 
+class zeroslam_calibration_chunk_struct(_ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("timestamp", _ctypes.c_int64),
+        ("duration", _ctypes.c_int64),
+        ("sensor_id", _ctypes.c_int),
+        ("observations", _ctypes.c_int),
+        ("focal_x", _ctypes.c_double),
+        ("focal_y", _ctypes.c_double),
+        ("pose", _ctypes.c_double * 7)
+    ]
+
 class zeroslam_sensor_parameters_depth_struct(_ctypes.Structure):
     _pack_ = 1
     _fields_ = [
@@ -314,6 +326,7 @@ class zeroslam_map_edges_struct(_ctypes.Structure):
 
 assert _ctypes.sizeof(zeroslam_sensor_parameters_camera_struct) == 104
 assert _ctypes.sizeof(zeroslam_sensor_parameters_camera_model_struct) == 272
+assert _ctypes.sizeof(zeroslam_calibration_chunk_struct) == 96
 assert _ctypes.sizeof(zeroslam_sensor_parameters_depth_struct) == 72
 assert _ctypes.sizeof(zeroslam_sensor_rig_struct) == 12 + _ctypes.sizeof(_ctypes.c_void_p)
 assert _ctypes.sizeof(zeroslam_sensor_parameters_imu_struct) == 56
@@ -433,6 +446,12 @@ zeroslam_get_camera_calibration = _wrap("zeroslam_get_camera_calibration", [
     _ctypes.POINTER(zeroslam_sensor_parameters_camera_model_struct)
 ])
 
+zeroslam_get_calibration_drift = _wrap("zeroslam_get_calibration_drift", [
+    _ctypes.POINTER(zeroslam_system),
+    _ctypes.POINTER(zeroslam_calibration_chunk_struct),
+    _ctypes.POINTER(_ctypes.c_int)
+])
+
 zeroslam_get_pose = _wrap("zeroslam_get_pose", [
     _ctypes.POINTER(zeroslam_system),
     _ctypes.POINTER(zeroslam_pose_struct)
@@ -547,6 +566,9 @@ class system:
     def get_camera_calibration(self, sensor_id, calibration):
         return zeroslam_return_enum(zeroslam_get_camera_calibration(self._handle, sensor_id, _ctypes.byref(calibration)))
 
+    def get_calibration_drift(self, chunks, length):
+        return zeroslam_return_enum(zeroslam_get_calibration_drift(self._handle, chunks, _ctypes.byref(length)))
+
     def get_pose(self, pose):
         return zeroslam_return_enum(zeroslam_get_pose(self._handle, _ctypes.byref(pose)))
 
@@ -576,6 +598,7 @@ __all__ = [
     "zeroslam_camera_model_enum",
     "zeroslam_camera_model_parameter_count",
     "zeroslam_sensor_parameters_camera_model_struct",
+    "zeroslam_calibration_chunk_struct",
     "zeroslam_depth_encoding_enum",
     "zeroslam_depth_measure_enum",
     "zeroslam_depth_registration_enum",
@@ -612,6 +635,7 @@ __all__ = [
     "zeroslam_set_sensor_data",
     "zeroslam_finalise",
     "zeroslam_get_camera_calibration",
+    "zeroslam_get_calibration_drift",
     "zeroslam_get_pose",
     "zeroslam_get_pose_at_timestamp",
     "zeroslam_get_map_chunk",
