@@ -1395,17 +1395,19 @@ zeroslam_return_enum ZEROSLAM_API_CALL zeroslam_get_camera_calibration(zeroslam_
         return zeroslam_return_failure_invalid_argument;
     }
     const zeroslam_system::camera_entry* camera = nullptr;
-    for (const zeroslam_system::camera_entry& existing : system->cameras) {
-        if (existing.sensor_id == sensor_id) {
-            camera = &existing;
+    size_t camera_index = 0;
+    for (size_t index = 0; index < system->cameras.size(); ++index) {
+        if (system->cameras[index].sensor_id == sensor_id) {
+            camera = &system->cameras[index];
+            camera_index = index;
         }
     }
     if (camera == nullptr) {
         return zeroslam_return_failure_invalid_argument;
     }
     // The system's camera as refined while the frames come with the rig's camera, which it was given last; the rig's before
-    // the first frame.
-    const mapping::calibration& held = system->slam_instance.calibration();
+    // the first frame. Each camera of a rig has its own.
+    const mapping::calibration& held = system->slam_instance.calibration(camera_index);
     const sensor::model& intrinsics = (system->any_data && held.get_given_camera().is_equal(camera->intrinsics)) ? held.get_camera() : camera->intrinsics;
     const char* const names[9] = { sensor::camera::pinhole<double>::name, sensor::camera::pinhole_radial_tangential<double>::name, sensor::camera::pinhole_opencv<double>::name, sensor::camera::kannala_brandt<double>::name, sensor::camera::field_of_view<double>::name, sensor::camera::unified<double>::name, sensor::camera::extended_unified<double>::name, sensor::camera::double_sphere<double>::name, sensor::camera::fisheye_624<double>::name };
     const zeroslam_camera_model_enum models[9] = { zeroslam_camera_model_pinhole, zeroslam_camera_model_radial_tangential, zeroslam_camera_model_opencv, zeroslam_camera_model_kannala_brandt, zeroslam_camera_model_field_of_view, zeroslam_camera_model_unified, zeroslam_camera_model_extended_unified, zeroslam_camera_model_double_sphere, zeroslam_camera_model_fisheye_624 };

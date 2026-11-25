@@ -165,6 +165,11 @@ public:
         return this->calibration_;
     }
 
+    // The calibration of a camera of the rig, the reference camera's for 0, or for a camera the rig does not hold.
+    const mapping::calibration& calibration(const size_t camera) const {
+        return ((camera > 0) && (camera <= this->view_calibrations_.size())) ? this->view_calibrations_[camera - 1] : this->calibration_;
+    }
+
     // The voxel map of the current map component's landmarks, as of the newest keyframe.
     const mapping::voxel_map& voxels() const {
         return this->voxel_map_;

@@ -71,6 +71,46 @@ static void render_corridor_depth(const int width, const int height, const zeros
     }
 }
 
+// The inside of a box room, 16 m by 8 m by 16 m, each wall textured in hashed 25 cm cells, seen by a pinhole camera of focal
+// length 500 px at a centre, turned by a yaw about the room's y axis.
+static void render_room(const double yaw, const double (&centre)[3], const int width, const int height, unsigned char* const pixels) {
+    const double half[3] = { 8.0, 4.0, 8.0 };
+    const double cosine = math::cos(yaw);
+    const double sine = math::sin(yaw);
+    for (int row = 0; row < height; ++row) {
+        for (int column = 0; column < width; ++column) {
+            const double x = (static_cast<double>(column) + 0.5 - (0.5 * width)) / 500.0;
+            const double y = (static_cast<double>(row) + 0.5 - (0.5 * height)) / 500.0;
+            const double ray[3] = { (cosine * x) + sine, y, (cosine * 1.0) - (sine * x) };
+            double nearest = 1.0e30;
+            int axis = 0;
+            for (int a = 0; a < 3; ++a) {
+                if (math::abs(ray[a]) < 1.0e-12) {
+                    continue;
+                }
+                const double t = (((ray[a] > 0.0) ? half[a] : -half[a]) - centre[a]) / ray[a];
+                if ((t > 0.0) && (t < nearest)) {
+                    nearest = t;
+                    axis = a;
+                }
+            }
+            unsigned long long hash = static_cast<unsigned long long>(axis + 1) * 83492791ull;
+            for (int a = 0; a < 3; ++a) {
+                const double hit = centre[a] + (ray[a] * nearest);
+                if (a == axis) {
+                    hash ^= (hit > 0.0) ? 0x9e3779b9ull : 0x7f4a7c15ull;
+                    continue;
+                }
+                hash = (hash ^ static_cast<unsigned long long>(static_cast<long long>(math::floor(4.0 * hit)))) * 0x100000001b3ull;
+            }
+            hash ^= hash >> 13;
+            hash *= 0x5bd1e995ull;
+            hash ^= hash >> 15;
+            pixels[static_cast<size_t>((row * width) + column)] = static_cast<unsigned char>(40ull + (hash % 176ull));
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
     static_cast<void>(argc);
     static_cast<void>(argv);
@@ -1176,6 +1216,59 @@ int main(int argc, char* argv[]) {
             REQUIRE(zeroslam_set_sensor_data(system, &frame[0], cameras) == zeroslam_return_success);
             REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
         }
+    }
+
+    {
+        // Each camera of a stereo pair reports its own calibration as the system refines it (calibration=focal): both given
+        // focal lengths long, 4% on the first and 2.5% on the second, while the rig turns 51 degrees.
+        constexpr static const int width = 640;
+        constexpr static const int height = 480;
+        zeroslam_sensor_parameters_camera_struct cameras[2]{};
+        for (int index = 0; index < 2; ++index) {
+            cameras[index].width = width;
+            cameras[index].height = height;
+            cameras[index].focal_x = ((index == 0) ? 1.04 : 1.025) * 500.0;
+            cameras[index].focal_y = cameras[index].focal_x;
+            cameras[index].centre_x = 0.5 * width;
+            cameras[index].centre_y = 0.5 * height;
+        }
+        const zeroslam_sensor_rig_struct rig[2] = { { zeroslam_sensor_camera, 1, static_cast<int>(sizeof(cameras[0])), &cameras[0] }, { zeroslam_sensor_camera, 2, static_cast<int>(sizeof(cameras[1])), &cameras[1] } };
+        zeroslam_sensor_extrinsics_struct extrinsics[2]{};
+        extrinsics[0].sensor_id = 1;
+        extrinsics[0].pose[6] = 1.0;
+        extrinsics[1].sensor_id = 2;
+        extrinsics[1].pose[0] = 0.3;
+        extrinsics[1].pose[6] = 1.0;
+        zeroslam_system* system = nullptr;
+        REQUIRE(zeroslam_create(&system) == zeroslam_return_success);
+        REQUIRE(zeroslam_set_sensor_rig(system, &rig[0], 2) == zeroslam_return_success);
+        REQUIRE(zeroslam_set_sensor_extrinsics(system, &extrinsics[0], 2) == zeroslam_return_success);
+        const char* const focal = "calibration=focal\n";
+        REQUIRE(zeroslam_set_configuration(system, focal, static_cast<int>(std::strlen(focal))) == zeroslam_return_success);
+        std::vector<unsigned char> first(static_cast<size_t>(width * height));
+        std::vector<unsigned char> second(static_cast<size_t>(width * height));
+        for (int frame = 0; frame < 90; ++frame) {
+            const double yaw = 0.01 * static_cast<double>(frame);
+            const double centre[3] = { 0.04 * static_cast<double>(frame), 0.05 * math::sin(0.15 * static_cast<double>(frame)), 0.0 };
+            const double second_centre[3] = { centre[0] + (0.3 * math::cos(yaw)), centre[1], centre[2] - (0.3 * math::sin(yaw)) };
+            render_room(yaw, centre, width, height, first.data());
+            render_room(yaw, second_centre, width, height, second.data());
+            const long long int timestamp = 1000000000ll + (50000000ll * frame);
+            const zeroslam_sensor_data_struct data[2] = { { timestamp, 1, width * height, first.data() }, { timestamp, 2, width * height, second.data() } };
+            REQUIRE(zeroslam_set_sensor_data(system, &data[0], 2) == zeroslam_return_success);
+        }
+        REQUIRE(zeroslam_finalise(system) == zeroslam_return_success);
+        zeroslam_sensor_parameters_camera_model_struct calibrated[2]{};
+        REQUIRE(zeroslam_get_camera_calibration(system, 1, &calibrated[0]) == zeroslam_return_success);
+        REQUIRE(zeroslam_get_camera_calibration(system, 2, &calibrated[1]) == zeroslam_return_success);
+        std::printf("Rig calibration through the api: focal lengths %.2f and %.2f from %.1f and %.1f, the truth 500.\n", calibrated[0].parameters[0], calibrated[1].parameters[0], cameras[0].focal_x, cameras[1].focal_x);
+        std::fflush(stdout);
+        for (int index = 0; index < 2; ++index) {
+            REQUIRE(math::abs((calibrated[index].parameters[0] / 500.0) - 1.0) < 0.03);
+            REQUIRE(math::abs(calibrated[index].parameters[0] - cameras[index].focal_x) > 5.0);
+        }
+        REQUIRE(calibrated[0].parameters[0] != calibrated[1].parameters[0]);
+        REQUIRE(zeroslam_destroy(&system) == zeroslam_return_success);
     }
 
     return EXIT_SUCCESS;
