@@ -2027,6 +2027,44 @@ private:
         return (index == 0) ? 0 : this->submaps_[index - 1].component;
     }
 
+    // A map that an odometer did not scale when it was initialised, the odometry not spanning the two frames it started from (as
+    // when the vehicle stood still for longer than mapping::odometry::maximum_interval first), takes the odometry's scale once it
+    // spans consecutive keyframes of the part of the map the frame is in: the distances the odometry moved the camera between
+    // them over the distances the map has, about the gauge's camera, or the part's first keyframe, as the imu scales a map.
+    void odometry_scale_map(const mapping::frame& frame_current) {
+        if (this->reconstruction.metric_scale || !this->reconstruction.wheel_odometry.is_enabled()) {
+            return;
+        }
+        const size_t component = this->map_component(frame_current.id);
+        std::vector<int> keyframes;
+        for (const int keyframe_id : this->keyframe_ids_) {
+            if ((this->reconstruction.frames.count(keyframe_id) != 0) && (this->map_component(keyframe_id) == component)) {
+                keyframes.push_back(keyframe_id);
+            }
+        }
+        std::sort(keyframes.begin(), keyframes.end());
+        double odometry_distance = 0.0;
+        double map_distance = 0.0;
+        for (size_t index = 1; index < keyframes.size(); ++index) {
+            math::se3<double> moved;
+            if (!this->reconstruction.wheel_odometry.camera_motion(keyframes[index - 1], keyframes[index], this->reconstruction.sensor_rig, moved)) {
+                continue;
+            }
+            const mapping::frame& from = this->reconstruction.frames.at(keyframes[index - 1]);
+            const mapping::frame& to = this->reconstruction.frames.at(keyframes[index]);
+            odometry_distance += math::sqrt(moved.translation().get_length_squared());
+            map_distance += math::sqrt(((math::transpose(to.rotation) * to.translation) - (math::transpose(from.rotation) * from.translation)).get_length_squared());
+        }
+        if ((odometry_distance < mapping::odometry::minimum_initialisation_distance) || !(map_distance > 0.0)) {
+            return;
+        }
+        const mapping::frame& first = this->reconstruction.frames.at(keyframes.front());
+        const bool gauged = (this->reconstruction.frames.count(this->reconstruction.gauge_frame_id) != 0) && (this->map_component(this->reconstruction.gauge_frame_id) == component);
+        this->scale_component(component, gauged ? math::matrix<double, 3, 1>::zero() : math::matrix<double, 3, 1>(-(math::transpose(first.rotation) * first.translation)), odometry_distance / map_distance);
+        this->reconstruction.metric_scale = true;
+        core::logger::log(core::logger::level::note, "Odometry scales the map by %.4f at keyframe %d, over %.3f m between its keyframes.", odometry_distance / map_distance, frame_current.id, odometry_distance);
+    }
+
     void begin_submap(mapping::frame& frame_current) {
         this->submap_speed_ = this->recent_keyframe_speed();
         const std::unordered_map<int, mapping::frame>::const_iterator last = this->reconstruction.frames.find(this->last_tracked_frame_id_);
@@ -4613,6 +4651,7 @@ private:
         if (this->frontend.cull_keyframes) {
             this->cull_keyframes(frame_current.id, 2 * broad_ba_window);
         }
+        this->odometry_scale_map(frame_current);
         this->inertial_after_keyframe(frame_current);
 
         {

@@ -1111,7 +1111,8 @@ namespace mapping {
             for (mapping::intrinsics_refinement& view : view_intrinsics) {
                 view.add_priors();
             }
-            const mapping::odometry::graph_vertices odometry_vertices = fix_landmarks ? mapping::odometry::graph_vertices() : this->wheel_odometry.add_to_graph(ba, camera_vertexes, this->sensor_rig);
+            // The odometry measures metres, and holds a map whose scale is the gauge's only once the map is metric.
+            const mapping::odometry::graph_vertices odometry_vertices = (fix_landmarks || !this->metric_scale) ? mapping::odometry::graph_vertices() : this->wheel_odometry.add_to_graph(ba, camera_vertexes, this->sensor_rig);
             // Remove vertexes not attached to any edges.
             const auto remove_unconnected = [&ba](std::unordered_map<int, optimisation::vertex*>& vertexes, int& non_fixed) {
                 for (const int id : map::ordered(vertexes)) {

@@ -25,6 +25,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma warning(push, 0)
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -215,7 +216,7 @@ namespace {
 
     // A ground vehicle through the api, its wheel samples interleaved with the camera's frames in time: the map is metric and
     // the calibration refined.
-    void test_drive() {
+    void test_drive(const double still = 0.0) {
         simulation::ground_vehicle_options options;
         options.duration = 14.0;
         options.speed = 1.5;
@@ -247,21 +248,39 @@ namespace {
         std::vector<unsigned char> pixels;
         std::vector<double> values;
         std::vector<zeroslam_sensor_data_struct> batch;
-        for (long long int time = options.start_time; time <= vehicle.end_time(); time += frame_period) {
+        // A vehicle that stands still first, its wheels and steering as at the start, sampled at 100 Hz.
+        const long long int still_nanoseconds = static_cast<long long int>(still * 1.0e9);
+        long long int still_sample = options.start_time - still_nanoseconds;
+        std::vector<long long int> still_times;
+        size_t still_frames = 0;
+        for (long long int time = options.start_time - still_nanoseconds; time <= vehicle.end_time(); time += frame_period) {
             // The samples up to the frame, then the frame, in one batch.
             batch.clear();
             values.clear();
+            still_times.clear();
+            while ((still_sample < options.start_time) && (still_sample <= time)) {
+                values.push_back(vehicle.samples.front().rotation[0]);
+                values.push_back(vehicle.samples.front().rotation[1]);
+                values.push_back(vehicle.samples.front().steering);
+                still_times.push_back(still_sample);
+                still_sample += 10000000ll;
+            }
+            still_frames += (time < options.start_time) ? 1u : 0u;
             const size_t first_sample = next_sample;
+            const size_t first_value = values.size();
             while ((next_sample < vehicle.samples.size()) && (vehicle.samples[next_sample].timestamp <= time)) {
                 values.push_back(vehicle.samples[next_sample].rotation[0]);
                 values.push_back(vehicle.samples[next_sample].rotation[1]);
                 values.push_back(vehicle.samples[next_sample].steering);
                 ++next_sample;
             }
-            for (size_t i = first_sample; i < next_sample; ++i) {
-                batch.push_back({ vehicle.samples[i].timestamp, 7, static_cast<int>(3 * sizeof(double)), &values[3 * (i - first_sample)] });
+            for (size_t i = 0; i < still_times.size(); ++i) {
+                batch.push_back({ still_times[i], 7, static_cast<int>(3 * sizeof(double)), &values[3 * i] });
             }
-            truth.push_back((vehicle.pose_at(time) * odometry_from_camera()).inverse());
+            for (size_t i = first_sample; i < next_sample; ++i) {
+                batch.push_back({ vehicle.samples[i].timestamp, 7, static_cast<int>(3 * sizeof(double)), &values[first_value + (3 * (i - first_sample))] });
+            }
+            truth.push_back((vehicle.pose_at(std::max(time, options.start_time)) * odometry_from_camera()).inverse());
             times.push_back(time);
             render_yard(truth.back(), pixels);
             batch.push_back({ time, 1, width * height, pixels.data() });
@@ -278,7 +297,7 @@ namespace {
         while ((first_index < times.size()) && (zeroslam_get_pose_at_timestamp(system, &first, times[first_index]) != zeroslam_return_success)) {
             ++first_index;
         }
-        REQUIRE(first_index < times.size() / 4);
+        REQUIRE(first_index < (still_frames + ((times.size() - still_frames) / 4)));
         REQUIRE(zeroslam_get_pose_at_timestamp(system, &last, times.back()) == zeroslam_return_success);
         const double estimated = std::sqrt(((last.pose[0] - first.pose[0]) * (last.pose[0] - first.pose[0])) + ((last.pose[1] - first.pose[1]) * (last.pose[1] - first.pose[1])) + ((last.pose[2] - first.pose[2]) * (last.pose[2] - first.pose[2])));
         const math::matrix<double, 3, 1> first_truth = truth[first_index].inverse().translation();
@@ -301,6 +320,9 @@ int main(int argc, char* argv[]) {
     REQUIRE(!api_odometry::declares({ zeroslam_sensor_camera, 1, 0, nullptr }));
     test_declaration();
     test_drive();
+    // Standing still for longer than an interval of the odometry (mapping::odometry::maximum_interval) before it moves, the
+    // camera's map is initialised from the frame it stood at, too far back in time for the odometry to scale it.
+    test_drive(12.0);
 
     return EXIT_SUCCESS;
 }
