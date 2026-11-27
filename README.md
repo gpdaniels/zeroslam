@@ -236,9 +236,19 @@ cmake --build . --parallel 4
 
 # Process with other library settings (see "Configuration").
 ./runtime/Release/zeroslam process ../datasets/tum-rgbd/fr1_xyz.mcap --config descriptor=teblid --config lines=on
+
+# Process, and write the posed result out as a scene to fit a gaussian splat model to.
+./runtime/Release/zeroslam process ../datasets/tum-rgbd/fr1_xyz.mcap --export-scene fr1_xyz_posed.mcap
 ```
 
-The options are `--frames [count]` (the first frames only), `--skip [count]` (ignore the first frames), `--verbose [0-5]` (the log level, default `1`), `--truth [trajectory.txt]` (end with the absolute, relative and per metre errors against a TUM trajectory), `--live` (skip the final global adjustment, so the trajectory is the one tracked live) and `--config key=value` (repeatable).
+The options are `--frames [count]` (the first frames only), `--skip [count]` (ignore the first frames), `--verbose [0-5]` (the log level, default `1`), `--truth [trajectory.txt]` (end with the absolute, relative and per metre errors against a TUM trajectory), `--live` (skip the final global adjustment, so the trajectory is the one tracked live), `--export-scene [path]` (see "Exporting a posed scene") and `--config key=value` (repeatable).
+
+### Exporting a posed scene ###
+
+`--export-scene [path]` writes a second mcap holding the run's result in the "Scene format" above: the photographs and their `CameraInfo` copied through byte for byte, a `/tf` transform placing each one in the world the run built, and the finished map on `/map/points` as a `PointCloud2` of `x y z r g b` single precision fields, the colours from zero to one.
+It is the input a photogrammetry step wants, a gaussian splat trainer in particular, which needs the pictures, their intrinsics, a pose for each and a point cloud to start from.
+Only the frames the system found a pose for are written, so the export is shorter than the input whenever tracking was lost or a frame was dropped; the count is logged at `--verbose 4`.
+The transform is camera to world, from the world frame to the image's own frame, following "Coordinate conventions", so nothing needs turning on the way in or out.
 
 ## Evaluating a trajectory ##
 

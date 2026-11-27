@@ -81,6 +81,116 @@ namespace {
     };
 }
 
+// Write the finished reconstruction as a scene an external splatter can fit: the
+// photographs as they arrived, the intrinsics they arrived with, the pose this run
+// settled on for each of them, and the map it built.
+//
+// The images and the camera info are copied through byte for byte rather than decoded
+// and re-encoded, so whatever the input said about them is what comes out. Only the
+// poses and the cloud are new, and they are what this tool is for.
+inline bool save_scene_as_mcap(
+    const char* const path,
+    mcap& source,
+    const std::vector<std::size_t>& image_messages,
+    const std::vector<unsigned char>& camera_info_message,
+    const std::string& image_topic,
+    const std::string& world_frame,
+    const std::string& sensor_frame,
+    const std::vector<camera_pose>& poses,
+    const std::vector<zeroslam_point_struct>& landmarks
+) {
+    if (image_messages.empty() || camera_info_message.empty()) {
+        std::fprintf(stderr, "Nothing to export: no image or no camera info was read.\n");
+        return false;
+    }
+    // A pose is looked up by the timestamp of the image it belongs to, so the images
+    // without one are simply left out rather than exported unposed.
+    std::map<long long, const camera_pose*> pose_of_timestamp;
+    for (const camera_pose& pose : poses) {
+        pose_of_timestamp[pose.timestamp] = &pose;
+    }
+
+    mcap::writer writer;
+    if (!writer.begin(path, "ros2", "zeroslam", "lz4")) {
+        std::fprintf(stderr, "Failed to open '%s' for writing.\n", path);
+        return false;
+    }
+    const unsigned short image_schema = writer.add_schema("sensor_msgs/msg/Image", "ros2msg", cdr::image_schema());
+    const unsigned short info_schema = writer.add_schema("sensor_msgs/msg/CameraInfo", "ros2msg", cdr::camera_info_schema());
+    const unsigned short tf_schema = writer.add_schema("tf2_msgs/msg/TFMessage", "ros2msg", cdr::tf_message_schema());
+    const unsigned short cloud_schema = writer.add_schema("sensor_msgs/msg/PointCloud2", "ros2msg", cdr::point_cloud2_schema());
+    const unsigned short image_channel = writer.add_channel(image_schema, image_topic, "cdr");
+    const unsigned short info_channel = writer.add_channel(info_schema, image_topic + "/camera_info", "cdr");
+    const unsigned short tf_channel = writer.add_channel(tf_schema, "/tf", "cdr");
+    const unsigned short cloud_channel = writer.add_channel(cloud_schema, "/map/points", "cdr");
+
+    unsigned int sequence = 0;
+    unsigned long long first_time = 0;
+    unsigned long long last_time = 0;
+    unsigned long long written_frames = 0;
+    for (const std::size_t message_number : image_messages) {
+        mcap::message_type message;
+        if (!source.read_message(message_number, message)) {
+            std::fprintf(stderr, "Failed to re-read an image message for export: %s.\n", source.get_read_error().c_str());
+            return false;
+        }
+        const long long stamp = static_cast<long long>(message.log_time);
+        const std::map<long long, const camera_pose*>::const_iterator found = pose_of_timestamp.find(stamp);
+        if (found == pose_of_timestamp.end()) {
+            continue;
+        }
+        const camera_pose& pose = *found->second;
+        if (written_frames == 0) {
+            first_time = message.log_time;
+            // The intrinsics are published once, before the first frame that uses them.
+            writer.add_message(info_channel, sequence++, message.log_time, message.log_time, camera_info_message.data(), camera_info_message.size());
+        }
+        last_time = message.log_time;
+        writer.add_message(image_channel, sequence++, message.log_time, message.log_time, message.data, message.length);
+
+        // The transform carries the camera's own frame into the world, which is what a
+        // reader walks back up to place the photograph. The rotation is the one the
+        // library reports, in the order ros writes it.
+        cdr::time stamp_fields;
+        stamp_fields.sec = static_cast<int>(stamp / 1000000000LL);
+        stamp_fields.nanosec = static_cast<unsigned int>(stamp % 1000000000LL);
+        const std::vector<unsigned char> transform = cdr::write_tf_message(stamp_fields, world_frame, sensor_frame, pose.centre, pose.quaternion_xyzw);
+        writer.add_message(tf_channel, sequence++, message.log_time, message.log_time, transform.data(), transform.size());
+        ++written_frames;
+    }
+    if (written_frames == 0) {
+        std::fprintf(stderr, "Nothing to export: no frame had a pose.\n");
+        return false;
+    }
+
+    // One cloud, at the end, because the map is only finished once.
+    std::vector<cdr::cloud_point> points;
+    points.reserve(landmarks.size());
+    for (const zeroslam_point_struct& landmark : landmarks) {
+        cdr::cloud_point point;
+        point.x = landmark.x;
+        point.y = landmark.y;
+        point.z = landmark.z;
+        point.r = landmark.r;
+        point.g = landmark.g;
+        point.b = landmark.b;
+        points.push_back(point);
+    }
+    cdr::header cloud_header;
+    cloud_header.stamp.sec = static_cast<int>(static_cast<long long>(last_time) / 1000000000LL);
+    cloud_header.stamp.nanosec = static_cast<unsigned int>(static_cast<long long>(last_time) % 1000000000LL);
+    cloud_header.frame_id = world_frame;
+    const std::vector<unsigned char> cloud = cdr::write_point_cloud2(cloud_header, points);
+    writer.add_message(cloud_channel, sequence++, last_time, last_time, cloud.data(), cloud.size());
+
+    if (!writer.finish()) {
+        std::fprintf(stderr, "Failed to finish writing '%s'.\n", path);
+        return false;
+    }
+    log(4, "Exported %llu posed frames and %zu map points, spanning %.3f seconds", written_frames, landmarks.size(), static_cast<double>(last_time - first_time) * 1e-9);
+    return true;
+}
+
 inline bool print_evaluation(const char* const trajectory_path, const std::vector<camera_pose>& poses, const size_t frames_ingested) {
     std::vector<dataset::trajectory_pose> ground_truth;
     if (!dataset::load_trajectory(trajectory_path, ground_truth)) {
@@ -280,6 +390,7 @@ inline bool save_trajectory_and_map_as_ply(
 
 int main(int argc, char* argv[]) {
     const char* scene_path = nullptr;
+    const char* export_path = nullptr;
     size_t frame_limit = static_cast<size_t>(-1);
     size_t skip_count = 0;
     bool live = false;
@@ -336,6 +447,11 @@ int main(int argc, char* argv[]) {
                 return EXIT_FAILURE;
             }
         }
+        else if (matches("--export-scene")) {
+            if (!take_value(export_path)) {
+                return EXIT_FAILURE;
+            }
+        }
         else if (matches("--live")) {
             live = true;
         }
@@ -364,13 +480,14 @@ int main(int argc, char* argv[]) {
     }
 
     if (scene_path == nullptr) {
-        std::printf("Usage %s [scene] [--frames count] [--skip count] [--verbose level] [--truth trajectory.txt] [--live] [--config key=value]...\n", argv[0]);
+        std::printf("Usage %s [scene] [--frames count] [--skip count] [--verbose level] [--truth trajectory.txt] [--live] [--export-scene path] [--config key=value]...\n", argv[0]);
         std::printf("    scene     - Scene mcap file path.\n");
         std::printf("    --frames  - Optional limit, process only the first [count] frames.\n");
         std::printf("    --skip    - Optional offset, ignore the first [count] frames (camera info is still consumed).\n");
         std::printf("    --verbose - Optional log verbosity (0=silent, 1=errors, 2=warnings, 3=notes, 4=progress, 5=debug), default is 1.\n");
         std::printf("    --truth   - Optional ground truth trajectory (TUM format); the run ends with absolute, relative and scale drift figures against it.\n");
         std::printf("    --live    - Skip the final global adjustment: the trajectory is the one tracked live, as the viewer shows it.\n");
+        std::printf("    --export-scene - Optional output mcap holding the photographs, their intrinsics, the pose found for each and the map, for fitting a gaussian splat model to.\n");
         std::printf("    --config  - Optional slam configuration setting (repeatable), see the library's configuration keys.\n");
         return EXIT_SUCCESS;
     }
@@ -422,6 +539,11 @@ int main(int argc, char* argv[]) {
     log(4, "Processing frames...");
     size_t frames = 0;
     std::vector<long long> timestamps;
+    // Only filled when a scene is being exported: where each accepted frame's image sits
+    // in the input, the frame it was taken in, and the intrinsics exactly as they came.
+    std::vector<std::size_t> exported_images;
+    std::string exported_frame_id;
+    std::vector<unsigned char> exported_camera_info;
     constexpr static const int sensor_id = 1;
     zeroslam_sensor_parameters_camera_struct camera{};
     bool rig_set = false;
@@ -492,6 +614,12 @@ int main(int argc, char* argv[]) {
                 }
             }
             timestamps.push_back(static_cast<long long>(img_msg->log_time));
+            if (export_path != nullptr) {
+                exported_images.push_back(image_index);
+                if (exported_frame_id.empty()) {
+                    exported_frame_id = image.frame_header.frame_id;
+                }
+            }
             log(4, "Starting frame %zu", frames + 1);
             std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
             zeroslam_sensor_data_struct measurement{};
@@ -554,6 +682,9 @@ int main(int argc, char* argv[]) {
             mcap::message_type message;
             cdr::camera_info information;
             if (reader.read_message(message_number, message) && cdr::read_camera_info(message.data, message.length, information)) {
+                if ((export_path != nullptr) && exported_camera_info.empty()) {
+                    exported_camera_info.assign(message.data, message.data + message.length);
+                }
                 double parameters[12] = {};
                 bool distortion_model_recognised = true;
                 dataset::camera_info_to_parameters(information, &parameters[0], 12, distortion_model_recognised);
@@ -644,6 +775,18 @@ int main(int argc, char* argv[]) {
     // Note: This can be easily visualised using meshlab.
     if (!save_trajectory_and_map_as_ply("map.ply", camera, landmarks, poses)) {
         std::fprintf(stderr, "Failed to save map and camera trajectory to ply file.\n");
+    }
+
+    if (export_path != nullptr) {
+        log(4, "Exporting the scene...");
+        // The library reports its poses in the world it built, and an image's own frame
+        // is the optical one a reader expects, so neither needs turning here.
+        const std::string world_frame = "world";
+        const std::string sensor_frame = exported_frame_id.empty() ? std::string("sensor/image_01") : exported_frame_id;
+        if (!save_scene_as_mcap(export_path, reader, exported_images, exported_camera_info, image_channel->topic, world_frame, sensor_frame, poses, landmarks)) {
+            std::fprintf(stderr, "Failed to export the scene to '%s'.\n", export_path);
+            return EXIT_FAILURE;
+        }
     }
 
     if (truth_path != nullptr) {

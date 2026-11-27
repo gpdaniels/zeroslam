@@ -110,6 +110,35 @@ namespace cdr {
                header_schema_suffix;
     }
 
+    inline std::string point_cloud2_schema() {
+        return std::string(
+                   "std_msgs/Header header\n"
+                   "uint32 height\n"
+                   "uint32 width\n"
+                   "sensor_msgs/PointField[] fields\n"
+                   "bool is_bigendian\n"
+                   "uint32 point_step\n"
+                   "uint32 row_step\n"
+                   "uint8[] data\n"
+                   "bool is_dense\n"
+                   "================================================================================\n"
+                   "MSG: sensor_msgs/PointField\n"
+                   "uint8 INT8 = 1\n"
+                   "uint8 UINT8 = 2\n"
+                   "uint8 INT16 = 3\n"
+                   "uint8 UINT16 = 4\n"
+                   "uint8 INT32 = 5\n"
+                   "uint8 UINT32 = 6\n"
+                   "uint8 FLOAT32 = 7\n"
+                   "uint8 FLOAT64 = 8\n"
+                   "string name\n"
+                   "uint32 offset\n"
+                   "uint8 datatype\n"
+                   "uint32 count\n"
+               ) +
+               header_schema_suffix;
+    }
+
     inline std::string imu_schema() {
         return std::string(
                    "std_msgs/Header header\n"
@@ -587,6 +616,56 @@ namespace cdr {
         stream.write_u32(value.roi_height);
         stream.write_u32(value.roi_width);
         stream.write_u8(value.roi_do_rectify);
+        return stream.finish();
+    }
+
+    // One point of a cloud, in the layout write_point_cloud2 lays out below: three
+    // coordinates and a colour, all single precision, which is what every reader of these
+    // understands without being told anything else.
+    struct cloud_point {
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        // Zero to one, not zero to two hundred and fifty five.
+        float r = 0.0f;
+        float g = 0.0f;
+        float b = 0.0f;
+    };
+
+    inline std::vector<unsigned char> write_point_cloud2(const header& frame_header, const std::vector<cloud_point>& points) {
+        writer stream;
+        write_header(stream, frame_header);
+        // An unordered cloud is one row of however many points there are.
+        stream.write_u32(1);
+        stream.write_u32(static_cast<unsigned int>(points.size()));
+        constexpr const unsigned int float32_datatype = 7;
+        const char* const names[6] = { "x", "y", "z", "r", "g", "b" };
+        stream.write_u32(6);
+        for (unsigned int index = 0; index < 6; ++index) {
+            stream.write_string(names[index]);
+            stream.write_u32(index * 4u);
+            stream.write_u8(static_cast<unsigned char>(float32_datatype));
+            stream.write_u32(1);
+        }
+        stream.write_u8(0);
+        const unsigned int point_step = 6u * 4u;
+        stream.write_u32(point_step);
+        stream.write_u32(point_step * static_cast<unsigned int>(points.size()));
+        std::vector<unsigned char> payload(points.size() * point_step);
+        for (std::size_t index = 0; index < points.size(); ++index) {
+            const float values[6] = {
+                points[index].x,
+                points[index].y,
+                points[index].z,
+                points[index].r,
+                points[index].g,
+                points[index].b
+            };
+            std::memcpy(payload.data() + index * point_step, values, sizeof(values));
+        }
+        stream.write_bytes(payload.data(), payload.size());
+        // Nothing in a map is a hole, so every point is a point.
+        stream.write_u8(1);
         return stream.finish();
     }
 
